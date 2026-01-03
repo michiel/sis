@@ -237,6 +237,7 @@ fn run_scan(
     }
     if want_yara {
         let rules = ysnp_core::yara::render_rules(&report.yara_rules);
+        println!("YARA summary: {} rule(s)", report.yara_rules.len());
         if let Some(path) = yara_out {
             fs::write(path, rules)?;
         } else {
