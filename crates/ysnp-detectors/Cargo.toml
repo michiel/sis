@@ -1,0 +1,9 @@
+[package]
+name = "ysnp-detectors"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+ysnp-core = { path = "../ysnp-core" }
+ysnp-pdf = { path = "../ysnp-pdf" }
