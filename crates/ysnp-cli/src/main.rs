@@ -64,6 +64,8 @@ enum Command {
         config: Option<PathBuf>,
         #[arg(long)]
         profile: Option<String>,
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
     },
     Explain {
         pdf: String,
@@ -135,6 +137,7 @@ fn main() -> Result<()> {
             max_recursion_depth,
             config,
             profile,
+            cache_dir,
         } => run_scan(
             pdf.as_deref(),
             path.as_deref(),
@@ -159,6 +162,7 @@ fn main() -> Result<()> {
             max_recursion_depth,
             config.as_deref(),
             profile.as_deref(),
+            cache_dir.as_deref(),
         ),
         Command::Explain { pdf, finding_id } => run_explain(&pdf, &finding_id),
         Command::Extract { kind, pdf, out } => run_extract(&kind, &pdf, &out),
@@ -223,6 +227,7 @@ fn run_scan(
     max_recursion_depth: usize,
     config: Option<&std::path::Path>,
     profile: Option<&str>,
+    cache_dir: Option<&std::path::Path>,
 ) -> Result<()> {
     if path.is_some() && pdf.is_some() {
         return Err(anyhow!("provide either a PDF path or --path, not both"));
@@ -259,6 +264,7 @@ fn run_scan(
             sarif_out,
             yara,
             yara_out,
+            cache_dir,
         );
     }
     let pdf = pdf.ok_or_else(|| anyhow!("PDF path is required unless --path is set"))?;
@@ -314,6 +320,7 @@ fn run_scan_batch(
     sarif_out: Option<&std::path::Path>,
     yara: bool,
     yara_out: Option<&std::path::Path>,
+    cache_dir: Option<&std::path::Path>,
 ) -> Result<()> {
     if sarif || sarif_out.is_some() {
         return Err(anyhow!("SARIF output is not supported for batch scans"));
@@ -321,6 +328,11 @@ fn run_scan_batch(
     if yara || yara_out.is_some() {
         return Err(anyhow!("YARA output is not supported for batch scans"));
     }
+    let cache = if let Some(dir) = cache_dir {
+        Some(ysnp_core::cache::ScanCache::new(dir)?)
+    } else {
+        None
+    };
     let matcher = Glob::new(glob)?.compile_matcher();
     let mut entries = Vec::new();
     let mut summary = ysnp_core::report::Summary {
@@ -330,6 +342,8 @@ fn run_scan_batch(
         low: 0,
         info: 0,
     };
+    let mut timing_total_ms = 0u64;
+    let mut timing_max_ms = 0u64;
     let iter = if dir.is_file() {
         WalkDir::new(dir.parent().unwrap_or(dir))
     } else {
@@ -344,7 +358,29 @@ fn run_scan_batch(
             continue;
         }
         let path_str = path.display().to_string();
-        let report = run_scan_single(&path_str, &opts, detectors)?;
+        let start = std::time::Instant::now();
+        let mmap = mmap_file(&path_str)?;
+        let hash = sha256_hex(&mmap);
+        let mut report = if let Some(cache) = &cache {
+            cache.load(&hash)
+        } else {
+            None
+        };
+        if report.is_none() {
+            report = Some(
+                ysnp_core::runner::run_scan_with_detectors(&mmap, opts.clone(), detectors)?
+                    .with_input_path(Some(path_str.clone())),
+            );
+            if let (Some(cache), Some(ref report)) = (&cache, report.as_ref()) {
+                let _ = cache.store(&hash, report);
+            }
+        } else if let Some(rep) = report.take() {
+            report = Some(rep.with_input_path(Some(path_str.clone())));
+        }
+        let report = report.expect("report");
+        let duration_ms = start.elapsed().as_millis() as u64;
+        timing_total_ms = timing_total_ms.saturating_add(duration_ms);
+        timing_max_ms = timing_max_ms.max(duration_ms);
         summary.total += report.summary.total;
         summary.high += report.summary.high;
         summary.medium += report.summary.medium;
@@ -353,12 +389,26 @@ fn run_scan_batch(
         entries.push(ysnp_core::report::BatchEntry {
             path: path_str,
             summary: report.summary,
+            duration_ms,
         });
     }
     if entries.is_empty() {
         return Err(anyhow!("no files matched {} in {}", glob, dir.display()));
     }
-    let batch = ysnp_core::report::BatchReport { summary, entries };
+    let avg_ms = if entries.is_empty() {
+        0
+    } else {
+        timing_total_ms / entries.len() as u64
+    };
+    let batch = ysnp_core::report::BatchReport {
+        summary,
+        entries,
+        timing: ysnp_core::report::BatchTiming {
+            total_ms: timing_total_ms,
+            avg_ms,
+            max_ms: timing_max_ms,
+        },
+    };
     if json {
         println!("{}", serde_json::to_string_pretty(&batch)?);
         return Ok(());

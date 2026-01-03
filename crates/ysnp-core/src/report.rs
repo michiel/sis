@@ -6,7 +6,7 @@ use crate::chain::{ChainTemplate, ExploitChain};
 use crate::intent::IntentSummary;
 use crate::model::{AttackSurface, Finding, Severity};
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Summary {
     pub total: usize,
     pub high: usize,
@@ -15,7 +15,7 @@ pub struct Summary {
     pub info: usize,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Report {
     pub summary: Summary,
     pub findings: Vec<Finding>,
@@ -27,16 +27,25 @@ pub struct Report {
     pub intent_summary: Option<IntentSummary>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct BatchEntry {
     pub path: String,
     pub summary: Summary,
+    pub duration_ms: u64,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct BatchTiming {
+    pub total_ms: u64,
+    pub avg_ms: u64,
+    pub max_ms: u64,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct BatchReport {
     pub summary: Summary,
     pub entries: Vec<BatchEntry>,
+    pub timing: BatchTiming,
 }
 
 impl Report {
@@ -92,6 +101,25 @@ pub fn print_human(report: &Report) {
             }
         }
     }
+    let mut printed = false;
+    for f in &report.findings {
+        if let Some(payload) = f
+            .meta
+            .get("payload.decoded_preview")
+            .or_else(|| f.meta.get("payload.preview"))
+        {
+            if !printed {
+                println!();
+                println!("Payload previews");
+                printed = true;
+            }
+            println!();
+            println!("{} — {}", f.id, f.title);
+            println!("```");
+            println!("{}", payload);
+            println!("```");
+        }
+    }
 }
 
 pub fn print_jsonl(report: &Report) -> Result<()> {
@@ -116,10 +144,15 @@ fn render_action_chain(f: &Finding) -> Option<String> {
     } else if f.kind == "js_present" {
         parts.push("Action: /JavaScript".into());
     }
-    if let Some(payload) = f.meta.get("payload.preview") {
-        parts.push(format!("Payload: {}", payload));
-    } else if let Some(kind) = f.meta.get("payload.type") {
+    if let Some(kind) = f.meta.get("payload.type") {
         parts.push(format!("Payload: {}", kind));
+    } else if f
+        .meta
+        .get("payload.decoded_preview")
+        .or_else(|| f.meta.get("payload.preview"))
+        .is_some()
+    {
+        parts.push("Payload: preview".into());
     }
     if parts.len() <= 1 {
         return None;
@@ -295,12 +328,16 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                     bucket.bucket, bucket.score, bucket.confidence
                 ));
                 if !bucket.signals.is_empty() {
-                    let mut uniq = bucket.signals.clone();
-                    uniq.sort();
-                    uniq.dedup();
+                    let mut weights: std::collections::BTreeMap<String, u32> =
+                        std::collections::BTreeMap::new();
+                    for sig in &bucket.signals {
+                        *weights.entry(sig.label.clone()).or_insert(0) += sig.weight;
+                    }
+                    let mut ranked: Vec<(String, u32)> = weights.into_iter().collect();
+                    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
                     out.push_str("**Classification signals**\n\n");
-                    for sig in uniq.into_iter().take(8) {
-                        out.push_str(&format!("- {}\n", sig));
+                    for (label, weight) in ranked.into_iter().take(8) {
+                        out.push_str(&format!("- {} (weight {})\n", label, weight));
                     }
                     out.push('\n');
                 }
@@ -418,6 +455,16 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             }
             out.push('\n');
         }
+        if let Some(payload) = f
+            .meta
+            .get("payload.decoded_preview")
+            .or_else(|| f.meta.get("payload.preview"))
+        {
+            out.push_str("**Payload**\n\n");
+            out.push_str("```\n");
+            out.push_str(payload);
+            out.push_str("\n```\n\n");
+        }
         if let Some(chain) = render_action_chain(f) {
             out.push_str("**Action Chain**\n\n");
             out.push_str(&format!("{}\n\n", chain));
@@ -511,24 +558,28 @@ pub fn render_batch_markdown(report: &BatchReport) -> String {
     out.push_str("# ysnp Batch Report\n\n");
     out.push_str("## Summary\n\n");
     out.push_str(&format!(
-        "- Files: {}\n- Total findings: {}\n- High: {}\n- Medium: {}\n- Low: {}\n- Info: {}\n\n",
+        "- Files: {}\n- Total findings: {}\n- High: {}\n- Medium: {}\n- Low: {}\n- Info: {}\n- Timing: total={}ms avg={}ms max={}ms\n\n",
         report.entries.len(),
         report.summary.total,
         report.summary.high,
         report.summary.medium,
         report.summary.low,
-        report.summary.info
+        report.summary.info,
+        report.timing.total_ms,
+        report.timing.avg_ms,
+        report.timing.max_ms
     ));
     out.push_str("## Per-File Totals\n\n");
     for entry in &report.entries {
         out.push_str(&format!(
-            "- {}: total={} high={} medium={} low={} info={}\n",
+            "- {}: total={} high={} medium={} low={} info={} duration={}ms\n",
             entry.path,
             entry.summary.total,
             entry.summary.high,
             entry.summary.medium,
             entry.summary.low,
-            entry.summary.info
+            entry.summary.info,
+            entry.duration_ms
         ));
     }
     out

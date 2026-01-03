@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use ysnp_core::detect::{Cost, Detector, Needs};
+use ysnp_core::evidence::{decoded_evidence_span, preview_ascii};
 use ysnp_core::model::{AttackSurface, Confidence, Finding, Severity};
 use ysnp_core::scan::span_to_evidence;
 use ysnp_pdf::decode::stream_filters;
@@ -352,6 +353,7 @@ impl Detector for AAEventDetector {
     }
     fn run(&self, ctx: &ysnp_core::scan::ScanContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
+        let annot_parents = ysnp_core::page_tree::build_annotation_parent_map(&ctx.graph);
         for entry in &ctx.graph.objects {
             if let Some(dict) = entry_dict(entry) {
                 if let Some((_, aa_obj)) = dict.get_first(b"/AA") {
@@ -362,6 +364,16 @@ impl Detector for AAEventDetector {
                                 "aa.event_key".into(),
                                 String::from_utf8_lossy(&k.decoded).to_string(),
                             );
+                            if let Some(page) = annot_parents.get(&ysnp_core::graph_walk::ObjRef {
+                                obj: entry.obj,
+                                gen: entry.gen,
+                            }) {
+                                meta.insert("page.number".into(), page.number.to_string());
+                                meta.insert(
+                                    "page.object".into(),
+                                    format!("{} {} obj", page.obj, page.gen),
+                                );
+                            }
                             let mut evidence = vec![
                                 span_to_evidence(k.span, "AA event key"),
                                 span_to_evidence(v.span, "AA event value"),
@@ -468,22 +480,21 @@ impl Detector for JavaScriptDetector {
                                 meta.insert("js.decode_ratio".into(), format!("{:.2}", ratio));
                             }
                             if let Some(origin) = payload.origin {
-                                evidence.push(ysnp_core::model::EvidenceSpan {
-                                    source: ysnp_core::model::EvidenceSource::Decoded,
-                                    offset: 0,
-                                    length: payload
-                                        .bytes
-                                        .len()
-                                        .min(u32::MAX as usize) as u32,
-                                    origin: Some(origin),
-                                    note: Some("Decoded JS payload".into()),
-                                });
+                                evidence.push(decoded_evidence_span(
+                                    origin,
+                                    &payload.bytes,
+                                    "Decoded JS payload",
+                                ));
                             }
                             let sig = js_signals::extract_js_signals(&payload.bytes);
                             for (k, v) in sig {
                                 meta.insert(k, v);
                             }
                             meta.insert("js.stream.decoded".into(), "true".into());
+                            meta.insert(
+                                "payload.decoded_preview".into(),
+                                preview_ascii(&payload.bytes, 120),
+                            );
                         }
                     }
                     findings.push(Finding {
@@ -586,6 +597,7 @@ impl Detector for UriDetector {
 
 fn uri_findings_from_annots(ctx: &ysnp_core::scan::ScanContext) -> Vec<Finding> {
     let mut out = Vec::new();
+    let annot_parents = ysnp_core::page_tree::build_annotation_parent_map(&ctx.graph);
     for entry in &ctx.graph.objects {
         let dict = match entry_dict(entry) {
             Some(d) => d,
@@ -595,14 +607,14 @@ fn uri_findings_from_annots(ctx: &ysnp_core::scan::ScanContext) -> Vec<Finding> 
             continue;
         }
         if let Some((_, a)) = dict.get_first(b"/A") {
-            if let Some(f) = uri_finding_from_action(ctx, entry, a, "Annotation /A") {
+            if let Some(f) = uri_finding_from_action(ctx, entry, a, "Annotation /A", &annot_parents) {
                 out.push(f);
             }
         }
         if let Some((_, aa)) = dict.get_first(b"/AA") {
             if let PdfAtom::Dict(aad) = &aa.atom {
                 for (_, v) in &aad.entries {
-                    if let Some(f) = uri_finding_from_action(ctx, entry, v, "Annotation /AA") {
+                    if let Some(f) = uri_finding_from_action(ctx, entry, v, "Annotation /AA", &annot_parents) {
                         out.push(f);
                     }
                 }
@@ -617,6 +629,7 @@ fn uri_finding_from_action(
     entry: &ObjEntry<'_>,
     obj: &ysnp_pdf::object::PdfObj<'_>,
     note: &str,
+    annot_parents: &std::collections::HashMap<ysnp_core::graph_walk::ObjRef, ysnp_core::page_tree::PageRefInfo>,
 ) -> Option<Finding> {
     let action_obj = match &obj.atom {
         PdfAtom::Dict(_) => obj.clone(),
@@ -639,6 +652,16 @@ fn uri_finding_from_action(
         span_to_evidence(v.span, "URI value"),
     ];
     let mut meta = std::collections::HashMap::new();
+    if let Some(page) = annot_parents.get(&ysnp_core::graph_walk::ObjRef {
+        obj: entry.obj,
+        gen: entry.gen,
+    }) {
+        meta.insert("page.number".into(), page.number.to_string());
+        meta.insert(
+            "page.object".into(),
+            format!("{} {} obj", page.obj, page.gen),
+        );
+    }
     if let Some(enriched) = payload_from_obj(ctx, v, "URI payload") {
         evidence.extend(enriched.evidence);
         meta.extend(enriched.meta);
@@ -803,13 +826,15 @@ impl Detector for EmbeddedFileDetector {
                                 decoded.data.len() as f64 / decoded.input_len as f64;
                             meta.insert("embedded.decode_ratio".into(), format!("{:.2}", ratio));
                         }
-                        evidence.push(ysnp_core::model::EvidenceSpan {
-                            source: ysnp_core::model::EvidenceSource::Decoded,
-                            offset: 0,
-                            length: decoded.data.len().min(u32::MAX as usize) as u32,
-                            origin: Some(st.data_span),
-                            note: Some("Decoded embedded file".into()),
-                        });
+                        evidence.push(decoded_evidence_span(
+                            st.data_span,
+                            &decoded.data,
+                            "Decoded embedded file",
+                        ));
+                        meta.insert(
+                            "embedded.decoded_preview".into(),
+                            preview_ascii(&decoded.data, 120),
+                        );
                     }
                     findings.push(Finding {
                         id: String::new(),
@@ -1685,14 +1710,12 @@ fn payload_from_dict(
                 );
                 meta.insert("payload.ref_chain".into(), payload.ref_chain);
                 meta.insert("payload.preview".into(), preview_ascii(&payload.bytes, 120));
+                meta.insert(
+                    "payload.decoded_preview".into(),
+                    preview_ascii(&payload.bytes, 120),
+                );
                 if let Some(origin) = payload.origin {
-                    evidence.push(ysnp_core::model::EvidenceSpan {
-                        source: ysnp_core::model::EvidenceSource::Decoded,
-                        offset: 0,
-                        length: payload.bytes.len().min(u32::MAX as usize) as u32,
-                        origin: Some(origin),
-                        note: Some("Decoded payload".into()),
-                    });
+                    evidence.push(decoded_evidence_span(origin, &payload.bytes, "Decoded payload"));
                 }
             }
             return Some(PayloadEnrichment { evidence, meta });
@@ -1720,29 +1743,15 @@ fn payload_from_obj(
         );
         meta.insert("payload.ref_chain".into(), payload.ref_chain);
         meta.insert("payload.preview".into(), preview_ascii(&payload.bytes, 120));
+        meta.insert(
+            "payload.decoded_preview".into(),
+            preview_ascii(&payload.bytes, 120),
+        );
         if let Some(origin) = payload.origin {
-            evidence.push(ysnp_core::model::EvidenceSpan {
-                source: ysnp_core::model::EvidenceSource::Decoded,
-                offset: 0,
-                length: payload.bytes.len().min(u32::MAX as usize) as u32,
-                origin: Some(origin),
-                note: Some("Decoded payload".into()),
-            });
+            evidence.push(decoded_evidence_span(origin, &payload.bytes, "Decoded payload"));
         }
     }
     Some(PayloadEnrichment { evidence, meta })
-}
-
-fn preview_ascii(data: &[u8], max_len: usize) -> String {
-    let mut out = String::new();
-    for &b in data.iter().take(max_len) {
-        if b.is_ascii_graphic() || b == b' ' {
-            out.push(b as char);
-        } else {
-            out.push('.');
-        }
-    }
-    out
 }
 
 fn s_span(s: &ysnp_pdf::object::PdfStr<'_>) -> ysnp_pdf::span::Span {

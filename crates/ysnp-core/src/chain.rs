@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExploitChain {
     pub id: String,
     pub trigger: Option<String>,
@@ -13,7 +13,7 @@ pub struct ExploitChain {
     pub notes: HashMap<String, String>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ChainTemplate {
     pub id: String,
     pub trigger: Option<String>,

@@ -1,6 +1,6 @@
 use crate::model::{Finding, Severity, YaraAnnotation};
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct YaraRule {
     pub name: String,
     pub tags: Vec<String>,

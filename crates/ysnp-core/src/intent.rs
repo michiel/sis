@@ -1,20 +1,26 @@
 use crate::model::{Confidence, Finding};
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IntentSummary {
     pub buckets: Vec<IntentBucketSummary>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IntentBucketSummary {
     pub bucket: IntentBucket,
     pub score: u32,
     pub confidence: Confidence,
     pub findings: Vec<String>,
-    pub signals: Vec<String>,
+    pub signals: Vec<IntentSignalSummary>,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IntentSignalSummary {
+    pub label: String,
+    pub weight: u32,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum IntentBucket {
     DataExfiltration,
     SandboxEscape,
@@ -34,8 +40,59 @@ pub struct IntentSignal {
 
 pub fn apply_intent(findings: &mut [Finding]) -> IntentSummary {
     let mut signals = Vec::new();
+    let mut has_js = false;
+    let mut has_action = false;
+    let mut has_uri = false;
+    let mut has_submit = false;
+    let mut has_launch = false;
+    let mut has_embedded = false;
+    let mut has_open_action = false;
     for f in findings.iter() {
         signals.extend(signals_from_finding(f));
+        match f.kind.as_str() {
+            "js_present" => has_js = true,
+            "uri_present" => has_uri = true,
+            "submitform_present" => has_submit = true,
+            "launch_action_present" => has_launch = true,
+            "embedded_file_present" => has_embedded = true,
+            "open_action_present" | "aa_present" | "aa_event_present" => has_open_action = true,
+            _ => {}
+        }
+        if f.meta.get("action.s").is_some() {
+            has_action = true;
+        }
+    }
+    if has_js && (has_uri || has_submit) {
+        signals.push(signal(
+            IntentBucket::DataExfiltration,
+            2,
+            "JS with external action",
+            None,
+        ));
+    }
+    if has_js && has_launch {
+        signals.push(signal(
+            IntentBucket::SandboxEscape,
+            2,
+            "JS with Launch action",
+            None,
+        ));
+    }
+    if has_open_action && has_js {
+        signals.push(signal(
+            IntentBucket::SandboxEscape,
+            1,
+            "Auto-run trigger with JS",
+            None,
+        ));
+    }
+    if has_embedded && has_action {
+        signals.push(signal(
+            IntentBucket::Persistence,
+            2,
+            "Embedded payload with action",
+            None,
+        ));
     }
 
     let mut buckets: std::collections::BTreeMap<IntentBucket, IntentBucketSummary> =
@@ -54,9 +111,19 @@ pub fn apply_intent(findings: &mut [Finding]) -> IntentSummary {
                 entry.findings.push(fid);
             }
         }
-        entry.signals.push(sig.label);
+        entry.signals.push(IntentSignalSummary {
+            label: sig.label,
+            weight: sig.weight,
+        });
     }
     for bucket in buckets.values_mut() {
+        let only_structural = bucket
+            .signals
+            .iter()
+            .all(|s| s.label == "Structural anomaly");
+        if only_structural {
+            bucket.score = bucket.score.saturating_sub(1);
+        }
         bucket.confidence = score_confidence(bucket.score);
     }
 
@@ -139,6 +206,22 @@ fn signals_from_finding(f: &Finding) -> Vec<IntentSignal> {
             out.push(signal(IntentBucket::SandboxEscape, 2, "Suspicious Acrobat APIs", fid.clone()));
         }
     }
+    if let Some(v) = f.meta.get("js.ast_domains") {
+        if !v.is_empty() {
+            out.push(signal(IntentBucket::DataExfiltration, 2, "AST domains present", fid.clone()));
+        }
+    }
+    if let Some(v) = f.meta.get("js.ast_urls") {
+        if !v.is_empty() {
+            out.push(signal(IntentBucket::DataExfiltration, 2, "AST URLs present", fid.clone()));
+        }
+    }
+    if let Some(v) = f.meta.get("js.ast_call_args") {
+        let lower = v.to_ascii_lowercase();
+        if lower.contains("geturl(") || lower.contains("submitform(") || lower.contains("launchurl(") {
+            out.push(signal(IntentBucket::DataExfiltration, 2, "JS network call arguments", fid.clone()));
+        }
+    }
     if let Some(target) = f.meta.get("action.target") {
         let t = target.to_ascii_lowercase();
         if t.contains("http") || t.contains("mailto:") || t.contains("data:") {
@@ -155,6 +238,12 @@ fn signals_from_finding(f: &Finding) -> Vec<IntentSignal> {
         }
         if p.contains("<script") || p.contains("javascript:") {
             out.push(signal(IntentBucket::Phishing, 1, "HTML-like payload", fid.clone()));
+        }
+    }
+    if let Some(preview) = f.meta.get("payload.decoded_preview") {
+        let p = preview.to_ascii_lowercase();
+        if p.contains("http") || p.contains("mailto:") || p.contains("data:") {
+            out.push(signal(IntentBucket::DataExfiltration, 1, "External decoded payload", fid.clone()));
         }
     }
 

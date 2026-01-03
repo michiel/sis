@@ -50,8 +50,17 @@ pub fn extract_js_signals(data: &[u8]) -> HashMap<String, String> {
     {
         if let Some(summary) = ast_behaviour_summary(data) {
             out.insert("js.ast_parsed".into(), "true".into());
-            if let Some(summary) = summary {
+            if let Some(summary) = summary.summary {
                 out.insert("js.behaviour_summary".into(), summary);
+            }
+            if !summary.call_args.is_empty() {
+                out.insert("js.ast_call_args".into(), summary.call_args.join("; "));
+            }
+            if !summary.urls.is_empty() {
+                out.insert("js.ast_urls".into(), summary.urls.join(", "));
+            }
+            if !summary.domains.is_empty() {
+                out.insert("js.ast_domains".into(), summary.domains.join(", "));
             }
         }
     }
@@ -240,12 +249,20 @@ fn contains_suspicious_api(data: &[u8]) -> bool {
 }
 
 #[cfg(feature = "js-ast")]
-fn ast_behaviour_summary(data: &[u8]) -> Option<Option<String>> {
+struct AstSummary {
+    summary: Option<String>,
+    call_args: Vec<String>,
+    urls: Vec<String>,
+    domains: Vec<String>,
+}
+
+#[cfg(feature = "js-ast")]
+fn ast_behaviour_summary(data: &[u8]) -> Option<AstSummary> {
     use boa_ast::expression::{Call, Literal};
     use boa_ast::visitor::{VisitWith, Visitor};
     use boa_interner::Interner;
     use boa_parser::{Parser, Source};
-    use std::collections::{BTreeSet, HashMap as Map};
+    use std::collections::{BTreeMap, BTreeSet, HashMap as Map};
 
     let src = std::str::from_utf8(data).ok()?;
     let mut interner = Interner::default();
@@ -257,6 +274,8 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<Option<String>> {
         interner: &'a Interner,
         calls: Map<String, usize>,
         urls: BTreeSet<String>,
+        domains: BTreeSet<String>,
+        call_args: BTreeMap<String, BTreeSet<String>>,
     }
 
     impl<'ast, 'a> Visitor<'ast> for JsAstVisitor<'a> {
@@ -267,6 +286,27 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<Option<String>> {
             let name = node.function().to_interned_string(self.interner);
             if !name.is_empty() {
                 *self.calls.entry(name).or_insert(0) += 1;
+            }
+            if !name.is_empty() {
+                for arg in node.args() {
+                    if let boa_ast::expression::Expression::Literal(Literal::String(sym)) = arg {
+                        let value = self
+                            .interner
+                            .resolve_expect(*sym)
+                            .join(|s| s.to_string(), String::from_utf16_lossy, true);
+                        let summary = summarise_arg_value(&value, 60);
+                        self.call_args
+                            .entry(name.clone())
+                            .or_default()
+                            .insert(summary);
+                        if looks_like_url(&value) {
+                            self.urls.insert(value.clone());
+                            if let Some(domain) = domain_from_url(&value) {
+                                self.domains.insert(domain);
+                            }
+                        }
+                    }
+                }
             }
             node.visit_with(self)
         }
@@ -279,6 +319,9 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<Option<String>> {
                     .join(|s| s.to_string(), String::from_utf16_lossy, true);
                 if looks_like_url(&value) {
                     self.urls.insert(value);
+                    if let Some(domain) = domain_from_url(&value) {
+                        self.domains.insert(domain);
+                    }
                 }
             }
             node.visit_with(self)
@@ -289,6 +332,8 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<Option<String>> {
         interner: &interner,
         calls: Map::new(),
         urls: BTreeSet::new(),
+        domains: BTreeSet::new(),
+        call_args: BTreeMap::new(),
     };
     let _ = script.visit_with(&mut visitor);
 
@@ -317,11 +362,31 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<Option<String>> {
             parts.push(format!("URLs: {}", summary));
         }
     }
-    if parts.is_empty() {
-        Some(None)
-    } else {
-        Some(Some(parts.join("; ")))
+    if !visitor.domains.is_empty() {
+        let summary = visitor
+            .domains
+            .into_iter()
+            .take(5)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !summary.is_empty() {
+            parts.push(format!("Domains: {}", summary));
+        }
     }
+    let call_args = render_call_args(visitor.call_args, 6, 3);
+    let urls = visitor.urls.into_iter().take(5).collect::<Vec<_>>();
+    let domains = visitor.domains.into_iter().take(5).collect::<Vec<_>>();
+    let summary = if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("; "))
+    };
+    Some(AstSummary {
+        summary,
+        call_args,
+        urls,
+        domains,
+    })
 }
 
 #[cfg(feature = "js-ast")]
@@ -331,4 +396,65 @@ fn looks_like_url(value: &str) -> bool {
         || lower.starts_with("https://")
         || lower.starts_with("mailto:")
         || lower.starts_with("javascript:")
+}
+
+#[cfg(feature = "js-ast")]
+fn render_call_args(
+    map: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    max_calls: usize,
+    max_args: usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (call, args) in map.into_iter().take(max_calls) {
+        let mut list: Vec<String> = args.into_iter().take(max_args).collect();
+        if list.is_empty() {
+            continue;
+        }
+        if list.len() == 1 {
+            out.push(format!("{}({})", call, list.remove(0)));
+        } else {
+            out.push(format!("{}({})", call, list.join(", ")));
+        }
+    }
+    out
+}
+
+#[cfg(feature = "js-ast")]
+fn summarise_arg_value(value: &str, max_len: usize) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if out.len() >= max_len {
+            break;
+        }
+        if ch.is_ascii_graphic() || ch == ' ' {
+            out.push(ch);
+        } else if ch.is_whitespace() {
+            out.push(' ');
+        } else {
+            out.push('.');
+        }
+    }
+    out.trim().to_string()
+}
+
+#[cfg(feature = "js-ast")]
+fn domain_from_url(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    if lower.starts_with("mailto:") {
+        let rest = &value[7..];
+        return rest.split('@').nth(1).map(|s| s.split('?').next().unwrap_or(s).to_string());
+    }
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        let trimmed = value.split("://").nth(1)?;
+        let host = trimmed.split('/').next().unwrap_or(trimmed);
+        let host = host.split('?').next().unwrap_or(host);
+        let host = host.split('#').next().unwrap_or(host);
+        if host.is_empty() {
+            None
+        } else {
+            Some(host.to_string())
+        }
+    } else {
+        None
+    }
 }

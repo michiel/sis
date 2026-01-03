@@ -2,6 +2,7 @@ use ysnp_pdf::content::{ContentOperand, ContentOp};
 use ysnp_pdf::object::{PdfAtom, PdfDict, PdfObj, PdfStream};
 
 use crate::scan::ScanContext;
+use crate::page_tree::build_page_tree;
 
 #[derive(Debug, Clone)]
 pub struct PageContent {
@@ -16,17 +17,17 @@ pub struct PageContent {
 
 pub fn build_content_index(ctx: &ScanContext<'_>) -> Vec<PageContent> {
     let mut out = Vec::new();
-    let mut page_number = 0usize;
-    for entry in &ctx.graph.objects {
+    let tree = build_page_tree(&ctx.graph);
+    for page in &tree.pages {
+        let entry = match ctx.graph.get_object(page.obj, page.gen) {
+            Some(e) => e,
+            None => continue,
+        };
         let dict = match entry_dict(entry) {
             Some(d) => d,
             None => continue,
         };
-        if !dict.has_name(b"/Type", b"/Page") {
-            continue;
-        }
-        page_number += 1;
-        let media_box = media_box_from_dict(dict);
+        let media_box = page.media_box.or_else(|| media_box_from_dict(dict));
         let mut text_points = Vec::new();
         let mut image_points = Vec::new();
         let mut invisible_text = false;
@@ -50,9 +51,9 @@ pub fn build_content_index(ctx: &ScanContext<'_>) -> Vec<PageContent> {
             }
         }
         out.push(PageContent {
-            obj: entry.obj,
-            gen: entry.gen,
-            page_number,
+            obj: page.obj,
+            gen: page.gen,
+            page_number: page.number,
             media_box,
             text_points,
             image_points,

@@ -2,10 +2,31 @@ use crate::model::{AttackSurface, Confidence, EvidenceSource, EvidenceSpan, Find
 use std::io::Cursor;
 use ysnp_pdf::ObjectGraph;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffSummary {
+    pub primary_objects: usize,
+    pub secondary_objects: usize,
+    pub primary_trailers: usize,
+    pub secondary_trailers: usize,
+}
+
+pub fn diff_summary(
+    bytes: &[u8],
+    primary: &ObjectGraph<'_>,
+) -> Result<DiffSummary, lopdf::Error> {
+    let doc = lopdf::Document::load_from(Cursor::new(bytes))?;
+    Ok(DiffSummary {
+        primary_objects: primary.objects.len(),
+        secondary_objects: doc.objects.len(),
+        primary_trailers: primary.trailers.len(),
+        secondary_trailers: doc.trailer.len(),
+    })
+}
+
 pub fn diff_with_lopdf(bytes: &[u8], primary: &ObjectGraph<'_>) -> Vec<Finding> {
     let evidence = keyword_evidence(bytes, b"startxref", "startxref marker", 3);
     let mut findings = Vec::new();
-    let doc = match lopdf::Document::load_from(Cursor::new(bytes)) {
+    let summary = match diff_summary(bytes, primary) {
         Ok(v) => v,
         Err(err) => {
             findings.push(Finding {
@@ -25,8 +46,7 @@ pub fn diff_with_lopdf(bytes: &[u8], primary: &ObjectGraph<'_>) -> Vec<Finding> 
             return findings;
         }
     };
-    let secondary_object_count = doc.objects.len();
-    if primary.objects.len() != secondary_object_count {
+    if summary.primary_objects != summary.secondary_objects {
         findings.push(Finding {
             id: String::new(),
             surface: AttackSurface::FileStructure,
@@ -36,8 +56,8 @@ pub fn diff_with_lopdf(bytes: &[u8], primary: &ObjectGraph<'_>) -> Vec<Finding> 
             title: "Parser object count mismatch".into(),
             description: format!(
                 "Primary parser saw {} objects; lopdf saw {} objects.",
-                primary.objects.len(),
-                secondary_object_count
+                summary.primary_objects,
+                summary.secondary_objects
             ),
             objects: vec!["object_graph".into()],
             evidence: evidence.clone(),
@@ -46,8 +66,7 @@ pub fn diff_with_lopdf(bytes: &[u8], primary: &ObjectGraph<'_>) -> Vec<Finding> 
             yara: None,
         });
     }
-    let secondary_trailer_count = doc.trailer.len();
-    if primary.trailers.len() != secondary_trailer_count {
+    if summary.primary_trailers != summary.secondary_trailers {
         findings.push(Finding {
             id: String::new(),
             surface: AttackSurface::XRefTrailer,
@@ -57,8 +76,8 @@ pub fn diff_with_lopdf(bytes: &[u8], primary: &ObjectGraph<'_>) -> Vec<Finding> 
             title: "Parser trailer count mismatch".into(),
             description: format!(
                 "Primary parser saw {} trailers; lopdf saw {} trailer entries.",
-                primary.trailers.len(),
-                secondary_trailer_count
+                summary.primary_trailers,
+                summary.secondary_trailers
             ),
             objects: vec!["xref".into()],
             evidence: evidence.clone(),
