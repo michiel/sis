@@ -288,6 +288,69 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                 ));
             }
             out.push('\n');
+            out.push_str("## Intent Details\n\n");
+            for bucket in &summary.buckets {
+                out.push_str(&format!(
+                    "### {:?} — score={} confidence={:?}\n\n",
+                    bucket.bucket, bucket.score, bucket.confidence
+                ));
+                if !bucket.signals.is_empty() {
+                    let mut uniq = bucket.signals.clone();
+                    uniq.sort();
+                    uniq.dedup();
+                    out.push_str("**Classification signals**\n\n");
+                    for sig in uniq.into_iter().take(8) {
+                        out.push_str(&format!("- {}\n", sig));
+                    }
+                    out.push('\n');
+                }
+                out.push_str("**Sequence of events**\n\n");
+                let mut shown = 0usize;
+                for fid in &bucket.findings {
+                    if shown >= 3 {
+                        break;
+                    }
+                    if let Some(f) = report.findings.iter().find(|f| &f.id == fid) {
+                        if let Some(chain) = render_action_chain(f) {
+                            out.push_str(&format!("- {}: {}\n", f.id, chain));
+                        } else {
+                            out.push_str(&format!("- {}: {}\n", f.id, f.title));
+                        }
+                        shown += 1;
+                    }
+                }
+                if shown == 0 {
+                    out.push_str("- No sequence available\n");
+                }
+                out.push('\n');
+                out.push_str("**Supporting evidence**\n\n");
+                let mut ev_count = 0usize;
+                for fid in &bucket.findings {
+                    if ev_count >= 3 {
+                        break;
+                    }
+                    if let Some(f) = report.findings.iter().find(|f| &f.id == fid) {
+                        for ev in &f.evidence {
+                            if ev_count >= 3 {
+                                break;
+                            }
+                            let origin = ev
+                                .origin
+                                .map(|o| format!("origin={}..{}", o.start, o.end))
+                                .unwrap_or_else(|| "origin=-".into());
+                            out.push_str(&format!(
+                                "- {} source={:?} offset={} length={} {}\n",
+                                f.id, ev.source, ev.offset, ev.length, origin
+                            ));
+                            ev_count += 1;
+                        }
+                    }
+                }
+                if ev_count == 0 {
+                    out.push_str("- No evidence captured\n");
+                }
+                out.push('\n');
+            }
         }
     }
 
@@ -407,11 +470,37 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             out.push('\n');
         }
         if !f.meta.is_empty() {
-            out.push_str("**Metadata**\n\n");
-            for (k, v) in &f.meta {
-                out.push_str(&format!("- {}: {}\n", k, v));
+            let mut js_meta: Vec<(&String, &String)> = f
+                .meta
+                .iter()
+                .filter(|(k, _)| k.starts_with("js."))
+                .collect();
+            js_meta.sort_by(|a, b| a.0.cmp(b.0));
+            let mut other_meta: Vec<(&String, &String)> = f
+                .meta
+                .iter()
+                .filter(|(k, _)| !k.starts_with("js."))
+                .collect();
+            other_meta.sort_by(|a, b| a.0.cmp(b.0));
+
+            if !other_meta.is_empty() {
+                out.push_str("**Metadata**\n\n");
+                out.push_str("| Key | Value |\n");
+                out.push_str("| --- | ----- |\n");
+                for (k, v) in other_meta {
+                    out.push_str(&format!("| {} | {} |\n", k, v));
+                }
+                out.push('\n');
             }
-            out.push('\n');
+            if !js_meta.is_empty() {
+                out.push_str("**JavaScript Metadata**\n\n");
+                out.push_str("| Key | Value |\n");
+                out.push_str("| --- | ----- |\n");
+                for (k, v) in js_meta {
+                    out.push_str(&format!("| {} | {} |\n", k, v));
+                }
+                out.push('\n');
+            }
         }
     }
     out
