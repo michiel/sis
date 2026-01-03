@@ -62,6 +62,18 @@ Focused scan for a specific trigger:
 cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --focus-trigger openaction
 ```
 
+Limit reachability to a smaller graph radius:
+
+```
+cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --focus-trigger openaction --focus-depth 3
+```
+
+Strict parsing (record lexer-level deviations):
+
+```
+cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --strict
+```
+
 When to use deep scan:
 - You have `StreamsAndFilters` findings and need to measure decode ratios.
 - You suspect embedded JavaScript or embedded files hidden behind filters.
@@ -129,6 +141,10 @@ If you want a parser-differential view:
 ```
 cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --diff-parser
 ```
+
+Notes:
+- Differential parsing uses `lopdf` as a secondary parser.
+- Use this when you suspect parser differentials or malformed structures.
 
 ## 8) Decoder-risk triage
 
@@ -202,6 +218,27 @@ Configuration-based scans:
 cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --config config.yml --profile interactive
 ```
 
+Example config for focus depth and strict mode:
+
+```
+cat > config.yml <<'YAML'
+scan:
+  strict: true
+  focus_depth: 3
+profiles:
+  interactive:
+    scan:
+      deep: true
+      diff_parser: true
+YAML
+```
+
+Then run:
+
+```
+cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --config config.yml --profile interactive
+```
+
 YARA export (stdout or file):
 
 ```
@@ -213,6 +250,18 @@ YARA scope (all/medium/high):
 
 ```
 cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --yara --yara-scope all
+```
+
+JavaScript AST summaries (feature build):
+
+```
+cargo run -p ysnp-cli --features js-ast --bin ysnp -- scan suspicious.pdf
+```
+
+Report example with strict parsing and differential parsing:
+
+```
+cargo run -p ysnp-cli --bin ysnp -- report suspicious.pdf --strict --diff-parser -o report.md
 ```
 
 ## 12) Troubleshooting
