@@ -18,6 +18,7 @@ pub struct ScanOptions {
     pub max_recursion_depth: usize,
     pub fast: bool,
     pub focus_trigger: Option<String>,
+    pub yara_scope: Option<String>,
 }
 
 pub struct ScanContext<'a> {

@@ -76,6 +76,7 @@ pub fn run_scan_with_detectors(
             evidence,
             remediation: Some("Reduce scan scope or raise max_objects.".into()),
             meta: Default::default(),
+            yara: None,
         });
     }
 
@@ -95,9 +96,10 @@ pub fn run_scan_with_detectors(
             f.id = stable_id(f);
         }
     }
+    let yara_rules = crate::yara::annotate_findings(&mut findings, ctx.options.yara_scope.as_deref());
     findings.sort_by(|a, b| (a.surface as u32, &a.kind, &a.id).cmp(&(b.surface as u32, &b.kind, &b.id)));
     let (chains, templates) = crate::chain_synth::synthesise_chains(&findings);
-    Ok(Report::from_findings(findings, chains, templates))
+    Ok(Report::from_findings(findings, chains, templates, yara_rules))
 }
 
 fn stable_id(f: &Finding) -> String {

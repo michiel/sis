@@ -25,6 +25,7 @@ pub fn diff_graphs(
             evidence: evidence.clone(),
             remediation: Some("Investigate parser differential artifacts.".into()),
             meta: Default::default(),
+            yara: None,
         });
     }
     if primary.trailers.len() != secondary.trailers.len() {
@@ -44,6 +45,7 @@ pub fn diff_graphs(
             evidence: evidence.clone(),
             remediation: Some("Inspect xref and trailer sections.".into()),
             meta: Default::default(),
+            yara: None,
         });
     }
     if primary.startxrefs.len() != secondary.startxrefs.len() {
@@ -63,6 +65,7 @@ pub fn diff_graphs(
             evidence,
             remediation: Some("Inspect incremental updates and xref offsets.".into()),
             meta: Default::default(),
+            yara: None,
         });
     }
     findings

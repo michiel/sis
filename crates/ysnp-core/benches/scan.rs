@@ -15,6 +15,7 @@ fn bench_scan(c: &mut Criterion) {
         max_recursion_depth: 64,
         fast: false,
         focus_trigger: None,
+        yara_scope: None,
     };
     c.bench_function("ysnp_scan_synthetic", |b| {
         b.iter(|| ysnp_core::runner::run_scan_with_detectors(bytes, opts, &detectors).unwrap())

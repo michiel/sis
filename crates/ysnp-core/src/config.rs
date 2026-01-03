@@ -29,6 +29,7 @@ pub struct ScanConfig {
     pub max_recursion_depth: Option<usize>,
     pub fast: Option<bool>,
     pub focus_trigger: Option<String>,
+    pub yara_scope: Option<String>,
 }
 
 impl Config {
@@ -84,5 +85,8 @@ fn apply_scan(scan: &ScanConfig, opts: &mut ScanOptions) {
     }
     if let Some(v) = &scan.focus_trigger {
         opts.focus_trigger = Some(v.clone());
+    }
+    if let Some(v) = &scan.yara_scope {
+        opts.yara_scope = Some(v.clone());
     }
 }

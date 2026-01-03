@@ -64,4 +64,14 @@ pub struct Finding {
     pub remediation: Option<String>,
     #[serde(default)]
     pub meta: HashMap<String, String>,
+    #[serde(default)]
+    pub yara: Option<YaraAnnotation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YaraAnnotation {
+    pub rule_name: String,
+    pub tags: Vec<String>,
+    pub strings: Vec<String>,
+    pub namespace: Option<String>,
 }

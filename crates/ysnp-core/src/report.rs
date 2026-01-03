@@ -21,6 +21,7 @@ pub struct Report {
     pub grouped: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     pub chains: Vec<ExploitChain>,
     pub chain_templates: Vec<ChainTemplate>,
+    pub yara_rules: Vec<crate::yara::YaraRule>,
 }
 
 impl Report {
@@ -28,6 +29,7 @@ impl Report {
         findings: Vec<Finding>,
         chains: Vec<ExploitChain>,
         chain_templates: Vec<ChainTemplate>,
+        yara_rules: Vec<crate::yara::YaraRule>,
     ) -> Self {
         let mut grouped: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
         for f in &findings {
@@ -46,6 +48,7 @@ impl Report {
             grouped,
             chains,
             chain_templates,
+            yara_rules,
         }
     }
 }
@@ -84,7 +87,20 @@ pub fn to_sarif(report: &Report) -> serde_json::Value {
                 "id": f.kind,
                 "name": f.title,
                 "shortDescription": { "text": f.title },
-                "fullDescription": { "text": f.description }
+                "fullDescription": { "text": f.description },
+                "helpUri": format!("https://example.invalid/ysnp/rules/{}", f.kind),
+                "defaultConfiguration": {
+                    "level": match f.severity {
+                        Severity::Critical | Severity::High => "error",
+                        Severity::Medium => "warning",
+                        _ => "note",
+                    }
+                },
+                "properties": {
+                    "surface": format!("{:?}", f.surface),
+                    "confidence": format!("{:?}", f.confidence),
+                    "tags": [format!("{:?}", f.surface), f.kind],
+                }
             }));
         }
     }
@@ -97,13 +113,38 @@ pub fn to_sarif(report: &Report) -> serde_json::Value {
                 Severity::Medium => "warning",
                 Severity::Low | Severity::Info => "note",
             };
+            let locations = sarif_locations(f);
             serde_json::json!({
                 "ruleId": f.kind,
                 "level": level,
                 "message": { "text": f.title },
+                "locations": locations,
+                "fingerprints": {
+                    "ysnp": f.id
+                },
                 "properties": {
                     "confidence": format!("{:?}", f.confidence),
                     "objects": f.objects,
+                    "surface": format!("{:?}", f.surface),
+                    "impact": f.meta.get("impact").cloned().unwrap_or_else(|| impact_for_finding(f)),
+                    "meta": f.meta,
+                    "yara": f.yara.as_ref().map(|y| {
+                        serde_json::json!({
+                            "rule_name": y.rule_name,
+                            "tags": y.tags,
+                            "strings": y.strings,
+                            "namespace": y.namespace
+                        })
+                    }),
+                    "evidence": f.evidence.iter().map(|ev| {
+                        serde_json::json!({
+                            "source": format!("{:?}", ev.source),
+                            "offset": ev.offset,
+                            "length": ev.length,
+                            "origin": ev.origin.map(|o| serde_json::json!({"start": o.start, "end": o.end})),
+                            "note": ev.note
+                        })
+                    }).collect::<Vec<_>>(),
                 }
             })
         })
@@ -122,6 +163,57 @@ pub fn to_sarif(report: &Report) -> serde_json::Value {
             "results": results
         }]
     })
+}
+
+fn sarif_locations(f: &Finding) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for ev in &f.evidence {
+        match ev.source {
+            crate::model::EvidenceSource::File => {
+                out.push(serde_json::json!({
+                    "physicalLocation": {
+                        "artifactLocation": { "uri": "input" },
+                        "region": {
+                            "byteOffset": ev.offset,
+                            "byteLength": ev.length
+                        }
+                    },
+                    "properties": {
+                        "source": "File",
+                        "note": ev.note,
+                    }
+                }));
+            }
+            crate::model::EvidenceSource::Decoded => {
+                if let Some(origin) = ev.origin {
+                    out.push(serde_json::json!({
+                        "physicalLocation": {
+                            "artifactLocation": { "uri": "input" },
+                            "region": {
+                                "byteOffset": origin.start,
+                                "byteLength": (origin.end - origin.start) as u64
+                            }
+                        },
+                        "properties": {
+                            "source": "Decoded",
+                            "decoded_offset": ev.offset,
+                            "decoded_length": ev.length,
+                            "note": ev.note,
+                        }
+                    }));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn sarif_rule_count(report: &Report) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    for f in &report.findings {
+        seen.insert(f.kind.clone());
+    }
+    seen.len()
 }
 
 fn render_action_chain(f: &Finding) -> Option<String> {
@@ -269,6 +361,27 @@ pub fn render_markdown(report: &Report) -> String {
         report.summary.info
     ));
 
+    out.push_str("## SARIF\n\n");
+    out.push_str(&format!(
+        "- Rules: {}\n- Results: {}\n- Generate with: `ysnp scan --sarif`\n\n",
+        sarif_rule_count(report),
+        report.findings.len()
+    ));
+
+    if !report.yara_rules.is_empty() {
+        out.push_str("## YARA\n\n");
+        out.push_str(&format!("- Rules: {}\n\n", report.yara_rules.len()));
+        for rule in &report.yara_rules {
+            let tags = if rule.tags.is_empty() {
+                "-".into()
+            } else {
+                rule.tags.join(", ")
+            };
+            out.push_str(&format!("- {} (tags: {})\n", rule.name, tags));
+        }
+        out.push('\n');
+    }
+
     out.push_str("## Findings\n\n");
     for f in &report.findings {
         out.push_str(&format!("### {} — {}\n\n", f.id, f.title));
@@ -304,6 +417,20 @@ pub fn render_markdown(report: &Report) -> String {
             .unwrap_or_else(|| impact_for_finding(f));
         out.push_str("**Impact**\n\n");
         out.push_str(&format!("{}\n\n", impact));
+        if let Some(y) = &f.yara {
+            out.push_str("**YARA**\n\n");
+            out.push_str(&format!("- Rule: `{}`\n", y.rule_name));
+            if !y.tags.is_empty() {
+                out.push_str(&format!("- Tags: {}\n", y.tags.join(", ")));
+            }
+            if !y.strings.is_empty() {
+                out.push_str(&format!("- Strings: {}\n", y.strings.join(", ")));
+            }
+            if let Some(ns) = &y.namespace {
+                out.push_str(&format!("- Namespace: {}\n", ns));
+            }
+            out.push('\n');
+        }
         if let Some(rem) = &f.remediation {
             out.push_str("**Remediation**\n\n");
             out.push_str(&format!("{}\n\n", rem));

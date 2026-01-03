@@ -39,6 +39,12 @@ SARIF (CI integration):
 cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --sarif > report.sarif
 ```
 
+SARIF to file:
+
+```
+cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --sarif-out report.sarif
+```
+
 Analysis steps:
 - Parse `summary` for high/medium counts.
 - Use `grouped` to drive dashboards or alerting.
@@ -194,6 +200,19 @@ Configuration-based scans:
 
 ```
 cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --config config.yml --profile interactive
+```
+
+YARA export (stdout or file):
+
+```
+cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --yara
+cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --yara-out rules.yar
+```
+
+YARA scope (all/medium/high):
+
+```
+cargo run -p ysnp-cli --bin ysnp -- scan suspicious.pdf --yara --yara-scope all
 ```
 
 ## 12) Troubleshooting

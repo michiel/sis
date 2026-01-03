@@ -73,6 +73,7 @@ impl Detector for XrefConflictDetector {
                 evidence,
                 remediation: Some("Validate with a strict parser; inspect each revision.".into()),
                 meta: Default::default(),
+                yara: None,
             }])
         } else {
             Ok(Vec::new())
@@ -113,6 +114,7 @@ impl Detector for IncrementalUpdateDetector {
                 evidence,
                 remediation: Some("Review changes between revisions for hidden content.".into()),
                 meta: Default::default(),
+                yara: None,
             }])
         } else {
             Ok(Vec::new())
@@ -164,6 +166,7 @@ impl Detector for ObjectIdShadowingDetector {
                     evidence,
                     remediation: Some("Compare object bodies across revisions.".into()),
                 meta: Default::default(),
+                yara: None,
                 });
             }
         }
@@ -226,6 +229,7 @@ impl Detector for ObjStmDensityDetector {
                     evidence,
                     remediation: Some("Inspect object streams in deep scan.".into()),
                     meta: Default::default(),
+                    yara: None,
                 }]);
             }
         }
@@ -273,6 +277,7 @@ impl Detector for OpenActionDetector {
                         evidence,
                         remediation: Some("Validate the action target and disable auto-run.".into()),
                         meta,
+                        yara: None,
                     });
                 }
             }
@@ -316,6 +321,7 @@ impl Detector for AAPresentDetector {
                         evidence,
                         remediation: Some("Review event actions for unsafe behavior.".into()),
                         meta: Default::default(),
+                        yara: None,
                     });
                 }
             }
@@ -370,6 +376,7 @@ impl Detector for AAEventDetector {
                                 evidence,
                                 remediation: Some("Inspect event-specific actions.".into()),
                                 meta,
+                                yara: None,
                             });
                         }
                     }
@@ -464,6 +471,7 @@ impl Detector for JavaScriptDetector {
                         evidence,
                         remediation: Some("Extract and review the JavaScript payload.".into()),
                         meta,
+                        yara: None,
                     });
                 }
             }
@@ -539,6 +547,7 @@ impl Detector for UriDetector {
                         evidence,
                         remediation: Some("Verify destination URLs.".into()),
                         meta,
+                        yara: None,
                     });
                 }
             }
@@ -662,6 +671,7 @@ impl Detector for EmbeddedFileDetector {
                         evidence,
                         remediation: Some("Extract and scan the embedded file.".into()),
                         meta,
+                        yara: None,
                     });
                 }
             }
@@ -704,6 +714,7 @@ impl Detector for RichMediaDetector {
                         evidence: vec![span_to_evidence(entry.full_span, "RichMedia object")],
                         remediation: Some("Inspect 3D or media assets.".into()),
                         meta: Default::default(),
+                        yara: None,
                     });
                 }
             }
@@ -748,6 +759,7 @@ impl Detector for ThreeDDetector {
                         evidence: vec![span_to_evidence(entry.full_span, "3D object")],
                         remediation: Some("Inspect embedded 3D assets.".into()),
                         meta: Default::default(),
+                        yara: None,
                     });
                 }
             }
@@ -791,6 +803,7 @@ impl Detector for SoundMovieDetector {
                         evidence: vec![span_to_evidence(entry.full_span, "Sound/Movie object")],
                         remediation: Some("Inspect embedded media objects.".into()),
                         meta: Default::default(),
+                        yara: None,
                     });
                 }
             }
@@ -834,6 +847,7 @@ impl Detector for FileSpecDetector {
                         evidence: vec![span_to_evidence(entry.full_span, "Filespec/AF object")],
                         remediation: Some("Inspect file specification targets.".into()),
                         meta: Default::default(),
+                        yara: None,
                     });
                 }
             }
@@ -874,6 +888,7 @@ impl Detector for XfaDetector {
                         evidence: vec![span_to_evidence(dict.span, "XFA dict")],
                         remediation: Some("Inspect XFA form data and scripts.".into()),
                         meta: Default::default(),
+                        yara: None,
                     });
                 }
             }
@@ -914,6 +929,7 @@ impl Detector for AcroFormDetector {
                         evidence: vec![span_to_evidence(dict.span, "AcroForm dict")],
                         remediation: Some("Inspect form fields and calculation scripts.".into()),
                         meta: Default::default(),
+                        yara: None,
                     });
                 }
             }
@@ -955,6 +971,7 @@ impl Detector for OCGDetector {
                         evidence: vec![span_to_evidence(entry.full_span, "OCG object")],
                         remediation: Some("Inspect optional content group settings.".into()),
                         meta: Default::default(),
+                        yara: None,
                     });
                 }
             }
@@ -996,6 +1013,7 @@ impl Detector for DecoderRiskDetector {
                         evidence: vec![span_to_evidence(st.dict.span, "Stream dict")],
                         remediation: Some("Treat JBIG2/JPX decoding as high risk.".into()),
                 meta: Default::default(),
+                yara: None,
                     });
                 }
             }
@@ -1048,6 +1066,7 @@ impl Detector for DecompressionRatioDetector {
                                 evidence: vec![span_to_evidence(st.data_span, "Stream data span")],
                                 remediation: Some("Inspect stream for decompression bombs.".into()),
                 meta: Default::default(),
+                yara: None,
                             });
                         }
                     }
@@ -1094,6 +1113,7 @@ impl Detector for HugeImageDetector {
                                 evidence: vec![span_to_evidence(st.dict.span, "Image dict")],
                                 remediation: Some("Inspect image payload for resource abuse.".into()),
                 meta: Default::default(),
+                yara: None,
                             });
                         }
                     }
@@ -1163,6 +1183,7 @@ impl Detector for ContentPhishingDetector {
                 evidence,
                 remediation: Some("Manually review page content and links.".into()),
                 meta: Default::default(),
+                yara: None,
             }]);
         }
         Ok(Vec::new())
@@ -1205,6 +1226,7 @@ impl Detector for StrictParseDeviationDetector {
                 }],
                 remediation: Some("Verify file type and parser tolerance.".into()),
                 meta: Default::default(),
+                yara: None,
             });
         }
         let tail = if ctx.bytes.len() > 1024 {
@@ -1231,6 +1253,7 @@ impl Detector for StrictParseDeviationDetector {
                 }],
                 remediation: Some("Check for truncated or malformed file.".into()),
                 meta: Default::default(),
+                yara: None,
             });
         }
         for entry in &ctx.graph.objects {
@@ -1257,6 +1280,7 @@ impl Detector for StrictParseDeviationDetector {
                                     "Inspect stream boundaries and filters for tampering.".into(),
                                 ),
                                 meta: Default::default(),
+                                yara: None,
                             });
                         }
                     }
@@ -1305,6 +1329,7 @@ fn action_by_s(
                     evidence,
                     remediation: Some("Review the action target.".into()),
                     meta,
+                    yara: None,
                 });
             }
         }

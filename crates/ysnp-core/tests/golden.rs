@@ -15,6 +15,7 @@ fn golden_synthetic_findings() {
         max_recursion_depth: 64,
         fast: false,
         focus_trigger: None,
+        yara_scope: None,
     };
     let report = ysnp_core::runner::run_scan_with_detectors(bytes, opts, &detectors)
         .expect("scan should succeed");

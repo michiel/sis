@@ -7,6 +7,7 @@ pub mod diff;
 pub mod graph_export;
 pub mod config;
 pub mod taint;
+pub mod yara;
 pub mod model;
 pub mod report;
 pub mod runner;

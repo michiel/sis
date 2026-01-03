@@ -32,6 +32,14 @@ enum Command {
         #[arg(long)]
         sarif: bool,
         #[arg(long)]
+        sarif_out: Option<PathBuf>,
+        #[arg(long)]
+        yara: bool,
+        #[arg(long)]
+        yara_out: Option<PathBuf>,
+        #[arg(long, default_value = "high")]
+        yara_scope: String,
+        #[arg(long)]
         diff_parser: bool,
         #[arg(long)]
         fast: bool,
@@ -99,6 +107,10 @@ fn main() -> Result<()> {
             json,
             jsonl,
             sarif,
+            sarif_out,
+            yara,
+            yara_out,
+            yara_scope,
             diff_parser,
             fast,
             focus_trigger,
@@ -115,6 +127,10 @@ fn main() -> Result<()> {
             json,
             jsonl,
             sarif,
+            sarif_out.as_deref(),
+            yara,
+            yara_out.as_deref(),
+            &yara_scope,
             diff_parser,
             fast,
             focus_trigger,
@@ -169,6 +185,10 @@ fn run_scan(
     json: bool,
     jsonl: bool,
     sarif: bool,
+    sarif_out: Option<&std::path::Path>,
+    yara: bool,
+    yara_out: Option<&std::path::Path>,
+    yara_scope: &str,
     diff_parser: bool,
     fast: bool,
     focus_trigger: Option<String>,
@@ -189,6 +209,7 @@ fn run_scan(
         max_recursion_depth,
         fast,
         focus_trigger,
+        yara_scope: Some(yara_scope.to_string()),
     };
     if let Some(path) = config {
         let cfg = ysnp_core::config::Config::load(path)?;
@@ -196,15 +217,30 @@ fn run_scan(
     }
     let detectors = ysnp_detectors::default_detectors();
     let report = ysnp_core::runner::run_scan_with_detectors(&mmap, opts, &detectors)?;
+    let want_sarif = sarif || sarif_out.is_some();
+    let want_yara = yara || yara_out.is_some();
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else if jsonl {
         ysnp_core::report::print_jsonl(&report)?;
-    } else if sarif {
+    } else if want_sarif {
         let v = ysnp_core::report::to_sarif(&report);
-        println!("{}", serde_json::to_string_pretty(&v)?);
+        let data = serde_json::to_string_pretty(&v)?;
+        if let Some(path) = sarif_out {
+            fs::write(path, data)?;
+        } else {
+            println!("{}", data);
+        }
     } else {
         ysnp_core::report::print_human(&report);
+    }
+    if want_yara {
+        let rules = ysnp_core::yara::render_rules(&report.yara_rules);
+        if let Some(path) = yara_out {
+            fs::write(path, rules)?;
+        } else {
+            println!("{}", rules);
+        }
     }
     Ok(())
 }
@@ -222,6 +258,7 @@ fn run_explain(pdf: &str, finding_id: &str) -> Result<()> {
         max_recursion_depth: 64,
         fast: false,
         focus_trigger: None,
+        yara_scope: None,
     };
     let detectors = ysnp_detectors::default_detectors();
     let report = ysnp_core::runner::run_scan_with_detectors(&mmap, opts, &detectors)?;
@@ -277,6 +314,7 @@ fn run_export_graph(pdf: &str, chains_only: bool, format: &str, outdir: &PathBuf
         max_recursion_depth: 64,
         fast: false,
         focus_trigger: None,
+        yara_scope: None,
     };
     let detectors = ysnp_detectors::default_detectors();
     let report = ysnp_core::runner::run_scan_with_detectors(&mmap, opts, &detectors)?;
@@ -323,6 +361,7 @@ fn run_report(
         max_recursion_depth,
         fast: false,
         focus_trigger: None,
+        yara_scope: None,
     };
     let detectors = ysnp_detectors::default_detectors();
     let report = ysnp_core::runner::run_scan_with_detectors(&mmap, opts, &detectors)?;
