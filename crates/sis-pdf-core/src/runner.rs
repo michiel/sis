@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
 use crate::model::Finding;
-use crate::report::Report;
+use crate::report::{Report, SecondaryParserSummary, StructuralSummary};
 use crate::scan::{DecodedCache, ScanContext, ScanOptions};
 use sis_pdf_pdf::{parse_pdf, ObjectGraph, ParseOptions};
 use sis_pdf_pdf::object::{PdfAtom, PdfDict, PdfObj};
@@ -131,8 +131,11 @@ pub fn run_scan_with_detectors(
         });
     }
 
+    let mut diff_result = None;
     if ctx.options.diff_parser {
-        findings.extend(crate::diff::diff_with_lopdf(ctx.bytes, &ctx.graph));
+        let mut diff = crate::diff::diff_with_lopdf(ctx.bytes, &ctx.graph);
+        findings.append(&mut diff.findings);
+        diff_result = Some(diff);
     }
 
     if let Some(ref trigger) = ctx.options.focus_trigger {
@@ -249,6 +252,11 @@ pub fn run_scan_with_detectors(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let structural_summary = Some(build_structural_summary(
+        &ctx,
+        diff_result.as_ref(),
+        &findings,
+    ));
     Ok(Report::from_findings(
         findings,
         chains,
@@ -259,6 +267,7 @@ pub fn run_scan_with_detectors(
         future_threats,
         network_intents,
         response_rules,
+        structural_summary,
     ))
 }
 
@@ -327,6 +336,112 @@ fn entry_dict<'a>(entry: &'a sis_pdf_pdf::graph::ObjEntry<'a>) -> Option<&'a Pdf
         PdfAtom::Stream(st) => Some(&st.dict),
         _ => None,
     }
+}
+
+fn build_structural_summary(
+    ctx: &ScanContext<'_>,
+    diff: Option<&crate::diff::DiffResult>,
+    findings: &[Finding],
+) -> StructuralSummary {
+    let objstm_count = ctx
+        .graph
+        .objects
+        .iter()
+        .filter(|entry| {
+            entry_dict(entry)
+                .map(|d| d.has_name(b"/Type", b"/ObjStm"))
+                .unwrap_or(false)
+        })
+        .count();
+    let object_count = ctx.graph.objects.len();
+    let objstm_ratio = if object_count == 0 {
+        0.0
+    } else {
+        objstm_count as f64 / object_count as f64
+    };
+    let header_offset = find_first(ctx.bytes, b"%PDF-").map(|v| v as u64);
+    let eof_offset = find_last(ctx.bytes, b"%%EOF").map(|v| v as u64);
+    let eof_distance_to_end = eof_offset.map(|off| {
+        ctx.bytes
+            .len()
+            .saturating_sub(off as usize + 5) as u64
+    });
+    let (polyglot_risk, polyglot_signatures) = polyglot_meta(findings);
+    let secondary_parser = diff.and_then(|d| d.summary.as_ref()).map(|s| SecondaryParserSummary {
+        parser: "lopdf".into(),
+        object_count: s.secondary_objects,
+        trailer_count: s.secondary_trailers,
+        missing_in_secondary: s.missing_in_secondary,
+        missing_in_primary: s.missing_in_primary,
+    });
+    let secondary_parser_error = diff.and_then(|d| d.error.clone());
+    StructuralSummary {
+        startxref_count: ctx.graph.startxrefs.len(),
+        trailer_count: ctx.graph.trailers.len(),
+        object_count,
+        objstm_count,
+        objstm_ratio,
+        recover_xref: ctx.options.recover_xref,
+        deep_scan: ctx.options.deep,
+        header_offset,
+        eof_offset,
+        eof_distance_to_end,
+        polyglot_risk,
+        polyglot_signatures,
+        secondary_parser,
+        secondary_parser_error,
+    }
+}
+
+fn find_first(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    let mut i = 0usize;
+    while i + needle.len() <= haystack.len() {
+        if &haystack[i..i + needle.len()] == needle {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn find_last(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    let mut i = haystack.len().saturating_sub(needle.len());
+    loop {
+        if &haystack[i..i + needle.len()] == needle {
+            return Some(i);
+        }
+        if i == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    None
+}
+
+fn polyglot_meta(findings: &[Finding]) -> (bool, Vec<String>) {
+    let mut sigs = Vec::new();
+    let mut found = false;
+    for f in findings {
+        if f.kind == "polyglot_signature_conflict" {
+            found = true;
+            if let Some(list) = f.meta.get("polyglot.signatures") {
+                sigs.extend(
+                    list.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
+            }
+        }
+    }
+    sigs.sort();
+    sigs.dedup();
+    (found, sigs)
 }
 
 fn collect_refs_from_obj(obj: &PdfObj<'_>, out: &mut Vec<ObjRef>) {

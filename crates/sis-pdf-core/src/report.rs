@@ -33,6 +33,8 @@ pub struct Report {
     pub network_intents: Vec<crate::campaign::NetworkIntent>,
     #[serde(default)]
     pub response_rules: Vec<crate::yara::YaraRule>,
+    #[serde(default)]
+    pub structural_summary: Option<StructuralSummary>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -67,6 +69,7 @@ impl Report {
         future_threats: Vec<crate::predictor::FutureThreat>,
         network_intents: Vec<crate::campaign::NetworkIntent>,
         response_rules: Vec<crate::yara::YaraRule>,
+        structural_summary: Option<StructuralSummary>,
     ) -> Self {
         let mut grouped: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
         for f in &findings {
@@ -92,6 +95,7 @@ impl Report {
             future_threats,
             network_intents,
             response_rules,
+            structural_summary,
         }
     }
 
@@ -101,12 +105,110 @@ impl Report {
     }
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct StructuralSummary {
+    pub startxref_count: usize,
+    pub trailer_count: usize,
+    pub object_count: usize,
+    pub objstm_count: usize,
+    pub objstm_ratio: f64,
+    pub recover_xref: bool,
+    pub deep_scan: bool,
+    pub header_offset: Option<u64>,
+    pub eof_offset: Option<u64>,
+    pub eof_distance_to_end: Option<u64>,
+    pub polyglot_risk: bool,
+    pub polyglot_signatures: Vec<String>,
+    pub secondary_parser: Option<SecondaryParserSummary>,
+    pub secondary_parser_error: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct SecondaryParserSummary {
+    pub parser: String,
+    pub object_count: usize,
+    pub trailer_count: usize,
+    pub missing_in_secondary: usize,
+    pub missing_in_primary: usize,
+}
+
 pub fn print_human(report: &Report) {
     println!("Findings: {}", report.summary.total);
     println!(
         "High: {}  Medium: {}  Low: {}  Info: {}",
         report.summary.high, report.summary.medium, report.summary.low, report.summary.info
     );
+    if let Some((risk, sigs)) = polyglot_summary(&report.findings) {
+        let line = if sigs.is_empty() {
+            risk
+        } else {
+            format!("{} ({})", risk, sigs.join(", "))
+        };
+        println!("Polyglot risk: {}", line);
+    }
+    if let Some(summary) = &report.structural_summary {
+        println!();
+        println!("Structural reconciliation");
+        println!(
+            "  Objects: {}  ObjStm: {} (ratio {:.3})",
+            summary.object_count, summary.objstm_count, summary.objstm_ratio
+        );
+        println!(
+            "  startxref: {}  trailers: {}",
+            summary.startxref_count, summary.trailer_count
+        );
+        println!(
+            "  Recover xref: {}  Deep scan: {}",
+            summary.recover_xref, summary.deep_scan
+        );
+        match summary.header_offset {
+            Some(offset) => println!("  Header offset: {}", offset),
+            None => println!("  Header offset: not found"),
+        }
+        match summary.eof_offset {
+            Some(offset) => {
+                let distance = summary.eof_distance_to_end.unwrap_or(0);
+                println!("  EOF offset: {} (distance to end {})", offset, distance);
+            }
+            None => println!("  EOF offset: not found"),
+        }
+        if summary.polyglot_risk {
+            let sigs = if summary.polyglot_signatures.is_empty() {
+                "-".into()
+            } else {
+                summary.polyglot_signatures.join(", ")
+            };
+            println!("  Polyglot risk: yes ({})", sigs);
+        } else {
+            println!("  Polyglot risk: no");
+        }
+        if let Some(sec) = &summary.secondary_parser {
+            println!(
+                "  Secondary parser: {} objects={} trailers={} missing_in_secondary={} missing_in_primary={}",
+                sec.parser,
+                sec.object_count,
+                sec.trailer_count,
+                sec.missing_in_secondary,
+                sec.missing_in_primary
+            );
+        } else if let Some(err) = &summary.secondary_parser_error {
+            println!("  Secondary parser: failed ({})", err);
+        } else {
+            println!("  Secondary parser: not run");
+        }
+    }
+    if let Some(resource) = resource_risk_summary(&report.findings) {
+        println!();
+        println!("Resource risks");
+        println!(
+            "  Embedded files: {}  File specs: {}  Rich media: {}  3D: {}  Sound/Movie: {}",
+            resource.embedded_files,
+            resource.filespecs,
+            resource.richmedia,
+            resource.three_d,
+            resource.sound_movie
+        );
+    }
     println!();
     for (surface, kinds) in &report.grouped {
         println!("{}", escape_control(surface));
@@ -172,6 +274,68 @@ fn escape_markdown(input: &str) -> String {
         }
     }
     out
+}
+
+fn polyglot_summary(findings: &[Finding]) -> Option<(String, Vec<String>)> {
+    let mut sigs = Vec::new();
+    let mut found = false;
+    for f in findings {
+        if f.kind == "polyglot_signature_conflict" {
+            found = true;
+            if let Some(list) = f.meta.get("polyglot.signatures") {
+                sigs.extend(
+                    list.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
+            }
+        }
+    }
+    if found {
+        sigs.sort();
+        sigs.dedup();
+        Some(("yes".into(), sigs))
+    } else {
+        Some(("no".into(), Vec::new()))
+    }
+}
+
+struct ResourceRiskSummary {
+    embedded_files: usize,
+    filespecs: usize,
+    richmedia: usize,
+    three_d: usize,
+    sound_movie: usize,
+}
+
+fn resource_risk_summary(findings: &[Finding]) -> Option<ResourceRiskSummary> {
+    let mut summary = ResourceRiskSummary {
+        embedded_files: 0,
+        filespecs: 0,
+        richmedia: 0,
+        three_d: 0,
+        sound_movie: 0,
+    };
+    for f in findings {
+        match f.kind.as_str() {
+            "embedded_file_present" => summary.embedded_files += 1,
+            "filespec_present" => summary.filespecs += 1,
+            "richmedia_present" => summary.richmedia += 1,
+            "3d_present" => summary.three_d += 1,
+            "sound_movie_present" => summary.sound_movie += 1,
+            _ => {}
+        }
+    }
+    if summary.embedded_files == 0
+        && summary.filespecs == 0
+        && summary.richmedia == 0
+        && summary.three_d == 0
+        && summary.sound_movie == 0
+    {
+        None
+    } else {
+        Some(summary)
+    }
 }
 
 struct LinkEdge {
@@ -547,9 +711,90 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         report.summary.low,
         report.summary.info
     ));
+    if let Some((risk, sigs)) = polyglot_summary(&report.findings) {
+        let line = if sigs.is_empty() {
+            risk
+        } else {
+            format!("{} ({})", risk, sigs.join(", "))
+        };
+        out.push_str(&format!(
+            "- Polyglot risk: {}\n\n",
+            escape_markdown(&line)
+        ));
+    }
 
     if let Some(path) = input_path {
         out.push_str(&format!("- Input: `{}`\n\n", escape_markdown(path)));
+    }
+
+    if let Some(summary) = &report.structural_summary {
+        out.push_str("## Structural Reconciliation\n\n");
+        out.push_str(&format!(
+            "- Objects: {} (ObjStm: {}, ratio {:.3})\n",
+            summary.object_count, summary.objstm_count, summary.objstm_ratio
+        ));
+        out.push_str(&format!(
+            "- startxref markers: {} trailers: {}\n",
+            summary.startxref_count, summary.trailer_count
+        ));
+        out.push_str(&format!(
+            "- Recover xref: {} Deep scan: {}\n",
+            summary.recover_xref, summary.deep_scan
+        ));
+        if let Some(offset) = summary.header_offset {
+            out.push_str(&format!("- Header offset: {}\n", offset));
+        } else {
+            out.push_str("- Header offset: not found\n");
+        }
+        if let Some(offset) = summary.eof_offset {
+            let distance = summary.eof_distance_to_end.unwrap_or(0);
+            out.push_str(&format!(
+                "- EOF offset: {} (distance to end {})\n",
+                offset, distance
+            ));
+        } else {
+            out.push_str("- EOF offset: not found\n");
+        }
+        if summary.polyglot_risk {
+            let sigs = if summary.polyglot_signatures.is_empty() {
+                "-".into()
+            } else {
+                summary.polyglot_signatures.join(", ")
+            };
+            out.push_str(&format!("- Polyglot risk: yes ({})\n", escape_markdown(&sigs)));
+        } else {
+            out.push_str("- Polyglot risk: no\n");
+        }
+        if let Some(sec) = &summary.secondary_parser {
+            out.push_str(&format!(
+                "- Secondary parser: {} objects={} trailers={} missing_in_secondary={} missing_in_primary={}\n",
+                escape_markdown(&sec.parser),
+                sec.object_count,
+                sec.trailer_count,
+                sec.missing_in_secondary,
+                sec.missing_in_primary
+            ));
+        } else if let Some(err) = &summary.secondary_parser_error {
+            out.push_str(&format!(
+                "- Secondary parser: failed ({})\n",
+                escape_markdown(err)
+            ));
+        } else {
+            out.push_str("- Secondary parser: not run\n");
+        }
+        out.push('\n');
+    }
+
+    if let Some(resource) = resource_risk_summary(&report.findings) {
+        out.push_str("## Resource Risks\n\n");
+        out.push_str(&format!(
+            "- Embedded files: {}\n- File specs: {}\n- Rich media: {}\n- 3D: {}\n- Sound/Movie: {}\n\n",
+            resource.embedded_files,
+            resource.filespecs,
+            resource.richmedia,
+            resource.three_d,
+            resource.sound_movie
+        ));
     }
 
     if let Some(summary) = &report.intent_summary {

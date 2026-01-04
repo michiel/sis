@@ -24,7 +24,8 @@ impl Detector for StrictParseDeviationDetector {
     }
     fn run(&self, ctx: &sis_pdf_core::scan::ScanContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
-        if !ctx.bytes.starts_with(b"%PDF-") {
+        let header_offset = find_first(ctx.bytes, b"%PDF-");
+        if header_offset.is_none() || !ctx.bytes.starts_with(b"%PDF-") {
             findings.push(Finding {
                 id: String::new(),
                 surface: self.surface(),
@@ -46,12 +47,42 @@ impl Detector for StrictParseDeviationDetector {
                 yara: None,
             });
         }
+        if let Some(off) = header_offset {
+            if off > 0 {
+                let mut meta = std::collections::HashMap::new();
+                meta.insert("header.offset".into(), off.to_string());
+                findings.push(Finding {
+                    id: String::new(),
+                    surface: self.surface(),
+                    kind: "header_offset_unusual".into(),
+                    severity: if off > 1024 { Severity::Medium } else { Severity::Low },
+                    confidence: Confidence::Probable,
+                    title: "PDF header offset unusual".into(),
+                    description: format!(
+                        "PDF header found at offset {} (expected at start of file).",
+                        off
+                    ),
+                    objects: vec!["header".into()],
+                    evidence: vec![sis_pdf_core::model::EvidenceSpan {
+                        source: sis_pdf_core::model::EvidenceSource::File,
+                        offset: off as u64,
+                        length: 5,
+                        origin: None,
+                        note: Some("PDF header".into()),
+                    }],
+                    remediation: Some("Inspect for polyglot or header-tolerant evasion.".into()),
+                    meta,
+                    yara: None,
+                });
+            }
+        }
         let tail = if ctx.bytes.len() > 1024 {
             &ctx.bytes[ctx.bytes.len() - 1024..]
         } else {
             ctx.bytes
         };
-        if !tail.windows(5).any(|w| w == b"%%EOF") {
+        let eof_offset = find_last(ctx.bytes, b"%%EOF");
+        if eof_offset.is_none() {
             findings.push(Finding {
                 id: String::new(),
                 surface: self.surface(),
@@ -72,6 +103,36 @@ impl Detector for StrictParseDeviationDetector {
                 meta: Default::default(),
                 yara: None,
             });
+        } else if let Some(off) = eof_offset {
+            let distance = ctx.bytes.len().saturating_sub(off + 5);
+            if distance > 1024 {
+                let mut meta = std::collections::HashMap::new();
+                meta.insert("eof.offset".into(), off.to_string());
+                meta.insert("eof.distance_to_end".into(), distance.to_string());
+                findings.push(Finding {
+                    id: String::new(),
+                    surface: self.surface(),
+                    kind: "eof_offset_unusual".into(),
+                    severity: Severity::Low,
+                    confidence: Confidence::Probable,
+                    title: "EOF marker far from file end".into(),
+                    description: format!(
+                        "EOF marker found at offset {}, which is {} bytes from file end.",
+                        off, distance
+                    ),
+                    objects: vec!["eof".into()],
+                    evidence: vec![sis_pdf_core::model::EvidenceSpan {
+                        source: sis_pdf_core::model::EvidenceSource::File,
+                        offset: off as u64,
+                        length: 5,
+                        origin: None,
+                        note: Some("EOF marker".into()),
+                    }],
+                    remediation: Some("Inspect for incremental updates or trailing data.".into()),
+                    meta,
+                    yara: None,
+                });
+            }
         }
         for entry in &ctx.graph.objects {
             if let PdfAtom::Stream(st) = &entry.atom {
@@ -192,4 +253,35 @@ fn deviation_severity(kind: &str) -> Severity {
         | "truncated_stream_data" => Severity::Medium,
         _ => Severity::Low,
     }
+}
+
+fn find_first(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    let mut i = 0usize;
+    while i + needle.len() <= haystack.len() {
+        if &haystack[i..i + needle.len()] == needle {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn find_last(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    let mut i = haystack.len().saturating_sub(needle.len());
+    loop {
+        if &haystack[i..i + needle.len()] == needle {
+            return Some(i);
+        }
+        if i == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    None
 }

@@ -12,6 +12,13 @@ pub struct DiffSummary {
     pub missing_in_primary: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct DiffResult {
+    pub findings: Vec<Finding>,
+    pub summary: Option<DiffSummary>,
+    pub error: Option<String>,
+}
+
 pub fn diff_summary(
     bytes: &[u8],
     primary: &ObjectGraph<'_>,
@@ -37,7 +44,7 @@ pub fn diff_summary(
     })
 }
 
-pub fn diff_with_lopdf(bytes: &[u8], primary: &ObjectGraph<'_>) -> Vec<Finding> {
+pub fn diff_with_lopdf(bytes: &[u8], primary: &ObjectGraph<'_>) -> DiffResult {
     let evidence = keyword_evidence(bytes, b"startxref", "startxref marker", 3);
     let mut findings = Vec::new();
     let summary = match diff_summary(bytes, primary) {
@@ -57,7 +64,11 @@ pub fn diff_with_lopdf(bytes: &[u8], primary: &ObjectGraph<'_>) -> Vec<Finding> 
                 meta: Default::default(),
                 yara: None,
             });
-            return findings;
+            return DiffResult {
+                findings,
+                summary: None,
+                error: Some(err.to_string()),
+            };
         }
     };
     if summary.primary_objects != summary.secondary_objects {
@@ -122,13 +133,43 @@ pub fn diff_with_lopdf(bytes: &[u8], primary: &ObjectGraph<'_>) -> Vec<Finding> 
                 summary.missing_in_secondary, summary.missing_in_primary
             ),
             objects: vec!["object_graph".into()],
-            evidence,
+            evidence: evidence.clone(),
             remediation: Some("Inspect missing objects and xref consistency.".into()),
             meta,
             yara: None,
         });
+        let mut meta = std::collections::HashMap::new();
+        meta.insert(
+            "shadow.missing_in_secondary".into(),
+            summary.missing_in_secondary.to_string(),
+        );
+        meta.insert(
+            "shadow.missing_in_primary".into(),
+            summary.missing_in_primary.to_string(),
+        );
+        findings.push(Finding {
+            id: String::new(),
+            surface: AttackSurface::FileStructure,
+            kind: "object_shadow_mismatch".into(),
+            severity: Severity::Medium,
+            confidence: Confidence::Probable,
+            title: "Object shadow mismatch".into(),
+            description: format!(
+                "Object sets differ between primary scan and xref-based parse (missing_in_secondary={}, missing_in_primary={}).",
+                summary.missing_in_secondary, summary.missing_in_primary
+            ),
+            objects: vec!["object_graph".into()],
+            evidence: evidence.clone(),
+            remediation: Some("Compare recovered objects to xref entries for hidden revisions.".into()),
+            meta,
+            yara: None,
+        });
     }
-    findings
+    DiffResult {
+        findings,
+        summary: Some(summary),
+        error: None,
+    }
 }
 
 fn keyword_evidence(bytes: &[u8], keyword: &[u8], note: &str, limit: usize) -> Vec<EvidenceSpan> {

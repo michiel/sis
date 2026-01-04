@@ -17,7 +17,8 @@ fn diff_summary_matches_findings() {
     )
     .expect("parse synthetic.pdf");
     let summary = diff_summary(bytes, &graph).expect("diff summary");
-    let findings = diff_with_lopdf(bytes, &graph);
+    let diff_result = diff_with_lopdf(bytes, &graph);
+    let findings = diff_result.findings;
 
     let object_diff = findings
         .iter()

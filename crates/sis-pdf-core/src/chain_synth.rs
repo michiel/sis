@@ -21,6 +21,7 @@ pub fn synthesise_chains(findings: &[Finding]) -> (Vec<ExploitChain>, Vec<ChainT
         .count();
     let taint = taint_from_findings(findings);
     let mut chains = Vec::new();
+    chains.extend(build_object_chains(findings, structural_count, &taint));
     for f in findings {
         let trigger = trigger_from_kind(&f.kind);
         let action = f
@@ -89,6 +90,81 @@ pub fn synthesise_chains(findings: &[Finding]) -> (Vec<ExploitChain>, Vec<ChainT
     }
 
     (chains, templates.into_values().collect())
+}
+
+fn build_object_chains(
+    findings: &[Finding],
+    structural_count: usize,
+    taint: &crate::taint::Taint,
+) -> Vec<ExploitChain> {
+    let mut by_object: HashMap<String, Vec<&Finding>> = HashMap::new();
+    for f in findings {
+        for obj in &f.objects {
+            if obj.contains("obj") {
+                by_object.entry(obj.clone()).or_default().push(f);
+            }
+        }
+    }
+    let mut chains = Vec::new();
+    for (obj, group) in by_object {
+        let mut trigger = None;
+        let mut action = None;
+        let mut payload = None;
+        let mut findings_ids = Vec::new();
+        for f in &group {
+            findings_ids.push(f.id.clone());
+            if trigger.is_none() {
+                trigger = trigger_from_kind(&f.kind);
+            }
+            if action.is_none() {
+                action = f
+                    .meta
+                    .get("action.s")
+                    .cloned()
+                    .or_else(|| action_from_kind(&f.kind));
+            }
+            if payload.is_none() {
+                payload = payload_from_finding(f);
+            }
+        }
+        let categories = [trigger.is_some(), action.is_some(), payload.is_some()]
+            .iter()
+            .filter(|v| **v)
+            .count();
+        if categories < 2 {
+            continue;
+        }
+        let mut notes = HashMap::new();
+        notes.insert("correlation.object".into(), obj.clone());
+        if action.is_some() && payload.is_some() {
+            notes.insert("correlation.action_payload".into(), "true".into());
+        }
+        if structural_count > 0 {
+            notes.insert("structural.suspicious_count".into(), structural_count.to_string());
+        }
+        if taint.flagged {
+            notes.insert("taint.flagged".into(), "true".into());
+            notes.insert("taint.reasons".into(), taint.reasons.join("; "));
+        }
+        let mut chain = ExploitChain {
+            id: String::new(),
+            trigger,
+            action,
+            payload,
+            findings: findings_ids,
+            score: 0.0,
+            reasons: Vec::new(),
+            path: String::new(),
+            notes,
+        };
+        chain.path = render_path(&chain);
+        let (score, reasons) = score_chain(&chain);
+        chain.score = score;
+        chain.reasons = reasons;
+        chain.id = chain_id(&chain);
+        chains.push(chain);
+    }
+    chains
 }
 
 fn trigger_from_kind(kind: &str) -> Option<String> {

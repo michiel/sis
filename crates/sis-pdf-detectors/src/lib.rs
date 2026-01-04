@@ -24,17 +24,23 @@ pub mod supply_chain;
 pub mod advanced_crypto;
 pub mod multi_stage;
 pub mod quantum_risk;
+pub mod polyglot;
+pub mod external_context;
+pub mod filter_depth;
+pub mod objstm_summary;
 #[cfg(feature = "js-sandbox")]
 pub mod js_sandbox;
 
 pub fn default_detectors() -> Vec<Box<dyn Detector>> {
     #[allow(unused_mut)]
     let mut detectors: Vec<Box<dyn Detector>> = vec![
+        Box::new(polyglot::PolyglotDetector),
         Box::new(XrefConflictDetector),
         Box::new(IncrementalUpdateDetector),
         Box::new(ObjectIdShadowingDetector),
         Box::new(linearization::LinearizationDetector),
         Box::new(ObjStmDensityDetector),
+        Box::new(objstm_summary::ObjStmSummaryDetector),
         Box::new(OpenActionDetector),
         Box::new(AAPresentDetector),
         Box::new(AAEventDetector),
@@ -50,6 +56,7 @@ pub fn default_detectors() -> Vec<Box<dyn Detector>> {
         Box::new(GoToRDetector),
         Box::new(UriDetector),
         Box::new(SubmitFormDetector),
+        Box::new(external_context::ExternalActionContextDetector),
         Box::new(FontMatrixDetector),
         Box::new(font_exploits::FontExploitDetector),
         Box::new(EmbeddedFileDetector),
@@ -64,6 +71,7 @@ pub fn default_detectors() -> Vec<Box<dyn Detector>> {
         Box::new(XfaDetector),
         Box::new(AcroFormDetector),
         Box::new(OCGDetector),
+        Box::new(filter_depth::FilterChainDepthDetector),
         Box::new(DecoderRiskDetector),
         Box::new(DecompressionRatioDetector),
         Box::new(HugeImageDetector),
@@ -1386,6 +1394,14 @@ impl Detector for DecompressionRatioDetector {
                     if decoded.input_len > 0 {
                         let ratio = decoded.data.len() as f64 / decoded.input_len as f64;
                         if ratio > 100.0 {
+                            let mut meta = std::collections::HashMap::new();
+                            meta.insert("decode.ratio".into(), format!("{:.1}", ratio));
+                            meta.insert("decode.input_len".into(), decoded.input_len.to_string());
+                            meta.insert("decode.output_len".into(), decoded.data.len().to_string());
+                            if !filters.is_empty() {
+                                meta.insert("filters.count".into(), filters.len().to_string());
+                                meta.insert("filters.list".into(), filters.join(", "));
+                            }
                             findings.push(Finding {
                                 id: String::new(),
                                 surface: self.surface(),
@@ -1402,8 +1418,8 @@ impl Detector for DecompressionRatioDetector {
                                 objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
                                 evidence: vec![span_to_evidence(st.data_span, "Stream data span")],
                                 remediation: Some("Inspect stream for decompression bombs.".into()),
-                meta: Default::default(),
-                yara: None,
+                                meta,
+                                yara: None,
                             });
                         }
                     }
