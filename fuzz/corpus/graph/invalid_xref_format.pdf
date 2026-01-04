@@ -1,0 +1,12 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog >>
+endobj
+xref
+0 1
+foo bar baz
+trailer
+<< /Size 1 /Root 1 0 R >>
+startxref
+0
+%%EOF
