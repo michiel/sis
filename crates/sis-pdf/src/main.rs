@@ -9,6 +9,8 @@ use memmap2::Mmap;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
+const MAX_REPORT_BYTES: u64 = 50 * 1024 * 1024;
+
 #[derive(Parser)]
 #[command(name = "sis")]
 struct Args {
@@ -91,6 +93,8 @@ enum Command {
         pdf: String,
         #[arg(short, long)]
         out: PathBuf,
+        #[arg(long, default_value_t = 128 * 1024 * 1024)]
+        max_extract_bytes: usize,
     },
     #[command(about = "Generate a full Markdown report for a PDF scan")]
     Report {
@@ -261,7 +265,12 @@ fn main() -> Result<()> {
             ml_threshold,
         ),
         Command::Explain { pdf, finding_id } => run_explain(&pdf, &finding_id),
-        Command::Extract { kind, pdf, out } => run_extract(&kind, &pdf, &out),
+        Command::Extract {
+            kind,
+            pdf,
+            out,
+            max_extract_bytes,
+        } => run_extract(&kind, &pdf, &out, max_extract_bytes),
         Command::Report {
             pdf,
             deep,
@@ -678,7 +687,7 @@ fn run_explain(pdf: &str, finding_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_extract(kind: &str, pdf: &str, outdir: &PathBuf) -> Result<()> {
+fn run_extract(kind: &str, pdf: &str, outdir: &PathBuf, max_extract_bytes: usize) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     fs::create_dir_all(outdir)?;
     let graph = sis_pdf_pdf::parse_pdf(
@@ -688,11 +697,13 @@ fn run_extract(kind: &str, pdf: &str, outdir: &PathBuf) -> Result<()> {
             deep: false,
             strict: false,
             max_objstm_bytes: 32 * 1024 * 1024,
+            max_objects: 500_000,
+            max_objstm_total_bytes: 256 * 1024 * 1024,
         },
     )?;
     match kind {
         "js" => extract_js(&graph, &mmap, outdir),
-        "embedded" => extract_embedded(&graph, &mmap, outdir),
+        "embedded" => extract_embedded(&graph, &mmap, outdir, max_extract_bytes),
         _ => Err(anyhow!("unknown extract kind")),
     }
 }
@@ -980,7 +991,7 @@ fn run_response_generate(
     let generator = sis_pdf_core::response::ResponseGenerator;
     let mut rules = Vec::new();
     if let Some(path) = from_report {
-        let data = fs::read_to_string(path)?;
+        let data = read_text_with_limit(path, MAX_REPORT_BYTES)?;
         let report: sis_pdf_core::report::Report = serde_json::from_str(&data)?;
         if let Some(summary) = &report.behavior_summary {
             for pattern in &summary.patterns {
@@ -1125,8 +1136,10 @@ fn extract_embedded(
     graph: &sis_pdf_pdf::ObjectGraph<'_>,
     bytes: &[u8],
     outdir: &PathBuf,
+    max_extract_bytes: usize,
 ) -> Result<()> {
     let mut count = 0usize;
+    let mut total_written = 0usize;
     for entry in &graph.objects {
         if let sis_pdf_pdf::object::PdfAtom::Stream(st) = &entry.atom {
             if st.dict.has_name(b"/Type", b"/EmbeddedFile") {
@@ -1135,11 +1148,23 @@ fn extract_embedded(
                     let name = embedded_filename(&st.dict).unwrap_or_else(|| {
                         format!("embedded_{}_{}.bin", entry.obj, entry.gen)
                     });
-                    let path = outdir.join(name);
+                    let safe_name = sanitize_embedded_filename(&name);
+                    let path = outdir.join(&safe_name);
+                    if max_extract_bytes > 0
+                        && total_written.saturating_add(decoded.data.len()) > max_extract_bytes
+                    {
+                        println!(
+                            "Embedded extraction budget exceeded ({} bytes), stopping",
+                            max_extract_bytes
+                        );
+                        break;
+                    }
                     let hash = sha256_hex(&decoded.data);
                     let magic = magic_type(&decoded.data);
+                    let data_len = decoded.data.len();
                     fs::write(path, decoded.data)?;
                     println!("Embedded file: sha256={} magic={}", hash, magic);
+                    total_written = total_written.saturating_add(data_len);
                     count += 1;
                 }
             }
@@ -1161,6 +1186,26 @@ fn embedded_filename(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> 
         }
     }
     None
+}
+
+fn sanitize_embedded_filename(name: &str) -> String {
+    let leaf = std::path::Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("embedded.bin");
+    let mut out = String::new();
+    for ch in leaf.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "embedded.bin".into()
+    } else {
+        out
+    }
 }
 
 fn entry_dict<'a>(entry: &'a sis_pdf_pdf::graph::ObjEntry<'a>) -> Option<&'a sis_pdf_pdf::object::PdfDict<'a>> {
@@ -1225,6 +1270,19 @@ fn sha256_hex(data: &[u8]) -> String {
     hex::encode(digest)
 }
 
+fn read_text_with_limit(path: &std::path::Path, max_bytes: u64) -> Result<String> {
+    if let Ok(meta) = fs::metadata(path) {
+        if meta.len() > max_bytes {
+            return Err(anyhow!(
+                "file {} exceeds {} bytes",
+                path.display(),
+                max_bytes
+            ));
+        }
+    }
+    Ok(fs::read_to_string(path)?)
+}
+
 fn magic_type(data: &[u8]) -> String {
     if data.starts_with(b"MZ") {
         "pe".into()
@@ -1238,5 +1296,19 @@ fn magic_type(data: &[u8]) -> String {
         "script".into()
     } else {
         "unknown".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_embedded_filename;
+
+    #[test]
+    fn sanitize_embedded_filename_strips_paths() {
+        let name = "../evil/../../payload.exe";
+        let safe = sanitize_embedded_filename(name);
+        assert!(!safe.contains('/'));
+        assert!(!safe.contains('\\'));
+        assert!(safe.ends_with("payload.exe"));
     }
 }

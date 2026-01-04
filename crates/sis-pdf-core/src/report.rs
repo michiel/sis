@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 
@@ -132,7 +132,7 @@ pub fn print_human(report: &Report) {
             println!();
             println!("{} — {}", f.id, f.title);
             println!("```");
-            println!("{}", payload);
+            println!("{}", escape_control(payload));
             println!("```");
         }
     }
@@ -146,6 +146,147 @@ pub fn print_jsonl(report: &Report) -> Result<()> {
 }
 
 pub use crate::sarif::sarif_rule_count;
+
+fn escape_control(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch.is_ascii_control() && ch != '\n' && ch != '\t' {
+            out.push_str(&format!("\\x{:02X}", ch as u32));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+struct LinkEdge {
+    from: String,
+    to: String,
+    reason: String,
+}
+
+fn build_link_edges(report: &Report) -> Vec<LinkEdge> {
+    let mut keys: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for f in &report.findings {
+        for obj in &f.objects {
+            add_link_key(&mut keys, "object", obj, &f.id);
+        }
+        if let Some(target) = f.meta.get("action.target") {
+            for token in split_values(target) {
+                add_link_key(&mut keys, "action_target", &token, &f.id);
+            }
+        }
+        if let Some(targets) = f.meta.get("supply_chain.action_targets") {
+            for token in split_values(targets) {
+                add_link_key(&mut keys, "action_target", &token, &f.id);
+            }
+        }
+        if let Some(urls) = f.meta.get("js.ast_urls") {
+            for token in split_values(urls) {
+                add_link_key(&mut keys, "url", &token, &f.id);
+            }
+        }
+        if let Some(payload_type) = f.meta.get("payload.type") {
+            add_link_key(&mut keys, "payload", payload_type, &f.id);
+        }
+        if let Some(names) = f.meta.get("supply_chain.embedded_names") {
+            for token in split_values(names) {
+                add_link_key(&mut keys, "embedded_name", &token, &f.id);
+            }
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for ((kind, value), ids) in keys {
+        if ids.len() < 2 {
+            continue;
+        }
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                let (a, b) = if ids[i] <= ids[j] {
+                    (ids[i].clone(), ids[j].clone())
+                } else {
+                    (ids[j].clone(), ids[i].clone())
+                };
+                let reason = match kind.as_str() {
+                    "object" => format!("shared object {}", value),
+                    "action_target" => format!("shared action target {}", value),
+                    "url" => format!("shared url {}", value),
+                    "payload" => format!("shared payload {}", value),
+                    "embedded_name" => format!("shared embedded filename {}", value),
+                    _ => format!("shared {}", value),
+                };
+                if seen.insert((a.clone(), b.clone(), reason.clone())) {
+                    out.push(LinkEdge {
+                        from: a,
+                        to: b,
+                        reason,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+fn add_link_key(
+    keys: &mut BTreeMap<(String, String), Vec<String>>,
+    kind: &str,
+    value: &str,
+    finding_id: &str,
+) {
+    let value = value.trim();
+    if value.is_empty() {
+        return;
+    }
+    keys.entry((kind.to_string(), value.to_string()))
+        .or_default()
+        .push(finding_id.to_string());
+}
+
+fn split_values(input: &str) -> Vec<String> {
+    input
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.trim_matches(['"', '\'']).to_string())
+        .collect()
+}
+
+fn render_chain_notes(chain: &ExploitChain) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = chain
+        .notes
+        .iter()
+        .filter(|(k, _)| {
+            k.starts_with("action.")
+                || k.starts_with("payload.")
+                || k.starts_with("js.")
+                || k.starts_with("supply_chain.")
+                || k.starts_with("taint.")
+                || k.starts_with("structural.")
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+fn render_finding_context(f: &Finding) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("kind `{}`", f.kind));
+    if let Some(target) = f.meta.get("action.target") {
+        parts.push(format!("action_target {}", target));
+    }
+    if let Some(urls) = f.meta.get("js.ast_urls") {
+        parts.push(format!("urls {}", urls));
+    }
+    if let Some(payload) = f.meta.get("payload.type") {
+        parts.push(format!("payload {}", payload));
+    }
+    if !f.objects.is_empty() {
+        parts.push(format!("objects {}", f.objects.join(", ")));
+    }
+    parts.join("; ")
+}
 
 fn render_action_chain(f: &Finding) -> Option<String> {
     let mut parts = Vec::new();
@@ -523,6 +664,91 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         out.push('\n');
     }
 
+    if !report.chains.is_empty() {
+        let link_edges = build_link_edges(report);
+        out.push_str("## Exploit Chain Reconstruction\n\n");
+        for chain in &report.chains {
+            out.push_str(&format!(
+                "### {} (score {:.2})\n\n",
+                chain.id, chain.score
+            ));
+            out.push_str(&format!("- Path: {}\n", chain.path));
+            if let Some(trigger) = &chain.trigger {
+                out.push_str(&format!("- Trigger: `{}`\n", trigger));
+            }
+            if let Some(action) = &chain.action {
+                out.push_str(&format!("- Action: `{}`\n", action));
+            }
+            if let Some(payload) = &chain.payload {
+                out.push_str(&format!("- Payload: `{}`\n", payload));
+            }
+            if let Some(target) = chain.notes.get("action.target") {
+                out.push_str(&format!("- Action target: {}\n", target));
+            }
+            if !chain.reasons.is_empty() {
+                out.push_str(&format!("- Score reasons: {}\n", chain.reasons.join("; ")));
+            }
+            out.push('\n');
+            out.push_str("**Findings in chain**\n\n");
+            if chain.findings.is_empty() {
+                out.push_str("- No findings recorded\n\n");
+            } else {
+                for fid in &chain.findings {
+                    if let Some(f) = report.findings.iter().find(|f| &f.id == fid) {
+                        out.push_str(&format!(
+                            "- {}: {} (surface `{:?}`) [{}]\n",
+                            f.id,
+                            f.title,
+                            f.surface,
+                            render_finding_context(f)
+                        ));
+                    } else {
+                        out.push_str(&format!("- {}: (missing finding)\n", fid));
+                    }
+                }
+                out.push('\n');
+            }
+            let notes = render_chain_notes(chain);
+            if !notes.is_empty() {
+                out.push_str("**Chain notes**\n\n");
+                for (k, v) in notes.into_iter().take(12) {
+                    out.push_str(&format!("- {}: {}\n", k, v));
+                }
+                out.push('\n');
+            }
+            out.push_str("**Link details**\n\n");
+            let mut links = Vec::new();
+            for edge in &link_edges {
+                if chain.findings.iter().any(|fid| fid == &edge.from || fid == &edge.to) {
+                    links.push(edge);
+                }
+            }
+            if links.is_empty() {
+                out.push_str("- No linked findings\n\n");
+            } else {
+                for edge in links.iter().take(12) {
+                    let from_f = report.findings.iter().find(|f| f.id == edge.from);
+                    let to_f = report.findings.iter().find(|f| f.id == edge.to);
+                    let from_title = from_f.map(|f| f.title.as_str()).unwrap_or("unknown");
+                    let to_title = to_f.map(|f| f.title.as_str()).unwrap_or("unknown");
+                    let from_ctx = from_f
+                        .map(render_finding_context)
+                        .unwrap_or_else(|| "-".into());
+                    let to_ctx = to_f
+                        .map(render_finding_context)
+                        .unwrap_or_else(|| "-".into());
+                    out.push_str(&format!(
+                        "- {} ({}) -> {} ({}) via {}\n",
+                        edge.from, from_title, edge.to, to_title, edge.reason
+                    ));
+                    out.push_str(&format!("  - left: {}\n", from_ctx));
+                    out.push_str(&format!("  - right: {}\n", to_ctx));
+                }
+                out.push('\n');
+            }
+        }
+    }
+
     let strict_findings: Vec<&Finding> = report
         .findings
         .iter()
@@ -594,7 +820,7 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         {
             out.push_str("**Payload**\n\n");
             out.push_str("```\n");
-            out.push_str(payload);
+            out.push_str(&escape_control(payload));
             out.push_str("\n```\n\n");
         }
         if let Some(chain) = render_action_chain(f) {
@@ -667,7 +893,7 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                 out.push_str("| Key | Value |\n");
                 out.push_str("| --- | ----- |\n");
                 for (k, v) in other_meta {
-                    out.push_str(&format!("| {} | {} |\n", k, v));
+                    out.push_str(&format!("| {} | {} |\n", k, escape_control(v)));
                 }
                 out.push('\n');
             }
@@ -676,7 +902,7 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                 out.push_str("| Key | Value |\n");
                 out.push_str("| --- | ----- |\n");
                 for (k, v) in js_meta {
-                    out.push_str(&format!("| {} | {} |\n", k, v));
+                    out.push_str(&format!("| {} | {} |\n", k, escape_control(v)));
                 }
                 out.push('\n');
             }
@@ -715,6 +941,19 @@ pub fn render_batch_markdown(report: &BatchReport) -> String {
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_control;
+
+    #[test]
+    fn escapes_control_chars() {
+        let input = "ok\x1b[31mred";
+        let escaped = escape_control(input);
+        assert!(escaped.contains("\\x1B"));
+        assert!(!escaped.contains('\x1b'));
+    }
 }
 
 fn summary_from_findings(findings: &[Finding]) -> Summary {

@@ -125,6 +125,37 @@ cargo run -p sis-pdf --bin sis -- export-features --path samples --glob "*.pdf" 
 cargo test
 ```
 
+## Fuzzing
+
+Install cargo-fuzz:
+
+```
+cargo install cargo-fuzz
+```
+
+List targets:
+
+```
+cd fuzz
+cargo fuzz list
+```
+
+Run a target (examples):
+
+```
+cargo fuzz run lexer
+cargo fuzz run parser
+cargo fuzz run graph
+cargo fuzz run objstm
+cargo fuzz run decode_streams
+```
+
+To use a custom corpus, pass a directory path:
+
+```
+cargo fuzz run parser fuzz/corpus/parser
+```
+
 ## Status
 
 This is a working implementation aligned to the spec in `docs/sis-pdf-spec.md`. It focuses on parsing correctness, evidence spans, and a practical rule set. Expect iterative hardening and expansion.

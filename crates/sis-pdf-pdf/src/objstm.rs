@@ -14,10 +14,16 @@ pub fn expand_objstm<'a>(
     objects: &[ObjEntry<'a>],
     strict: bool,
     max_objstm_bytes: usize,
+    max_objects_total: usize,
+    max_total_decoded_bytes: usize,
 ) -> ObjStmExpansion<'a> {
     let mut out = Vec::new();
     let mut buffers = Vec::new();
+    let mut decoded_total = 0usize;
     for entry in objects {
+        if max_objects_total > 0 && objects.len() + out.len() >= max_objects_total {
+            break;
+        }
         let st = match &entry.atom {
             PdfAtom::Stream(st) => st,
             _ => continue,
@@ -37,6 +43,12 @@ pub fn expand_objstm<'a>(
             Ok(v) => v,
             Err(_) => continue,
         };
+        if max_total_decoded_bytes > 0 {
+            decoded_total = decoded_total.saturating_add(decoded.data.len());
+            if decoded_total > max_total_decoded_bytes {
+                break;
+            }
+        }
         if decoded.data.len() <= first {
             continue;
         }
@@ -49,6 +61,9 @@ pub fn expand_objstm<'a>(
             continue;
         }
         for idx in 0..n {
+            if max_objects_total > 0 && objects.len() + out.len() >= max_objects_total {
+                break;
+            }
             let obj_num = tokens[idx * 2] as u32;
             let offset = tokens[idx * 2 + 1] as usize;
             let obj_start = first.saturating_add(offset);

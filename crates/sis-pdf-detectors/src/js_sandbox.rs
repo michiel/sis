@@ -4,6 +4,7 @@ use std::rc::Rc;
 use anyhow::Result;
 use boa_engine::object::ObjectInitializer;
 use boa_engine::property::Attribute;
+use boa_engine::vm::RuntimeLimits;
 use boa_engine::{Context, JsValue, NativeFunction, Source};
 
 use sis_pdf_core::detect::{Cost, Detector, Needs};
@@ -46,6 +47,11 @@ impl Detector for JavaScriptSandboxDetector {
             }
             let log = Rc::new(RefCell::new(Vec::<String>::new()));
             let mut context = Context::default();
+            let mut limits = RuntimeLimits::default();
+            limits.set_loop_iteration_limit(100_000);
+            limits.set_recursion_limit(128);
+            limits.set_stack_size_limit(512 * 1024);
+            context.set_runtime_limits(limits);
             register_app(&mut context, log.clone());
             let source = Source::from_bytes(&info.bytes);
             let _ = context.eval(source);

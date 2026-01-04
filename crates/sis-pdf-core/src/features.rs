@@ -216,6 +216,8 @@ impl FeatureExtractor {
                 deep: opts.deep,
                 strict: opts.strict,
                 max_objstm_bytes: opts.max_decode_bytes,
+                max_objects: opts.max_objects,
+                max_objstm_total_bytes: opts.max_total_decoded_bytes,
             },
         )?;
         let ctx = ScanContext {

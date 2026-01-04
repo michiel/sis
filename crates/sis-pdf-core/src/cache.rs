@@ -8,6 +8,7 @@ use crate::report::Report;
 use crate::features::FeatureVector;
 
 const CACHE_VERSION: u32 = 1;
+const MAX_CACHE_BYTES: u64 = 50 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 struct CacheEntry<'a> {
@@ -54,6 +55,11 @@ impl ScanCache {
 
     pub fn load(&self, hash: &str) -> Option<Report> {
         let path = self.path_for(hash);
+        if let Ok(meta) = fs::metadata(&path) {
+            if meta.len() > MAX_CACHE_BYTES {
+                return None;
+            }
+        }
         let data = fs::read(path).ok()?;
         let entry: CacheEntryOwned = serde_json::from_slice(&data).ok()?;
         if entry.version != CACHE_VERSION {
@@ -75,6 +81,11 @@ impl ScanCache {
 
     pub fn load_features(&self, hash: &str) -> Option<FeatureVector> {
         let path = self.feature_path_for(hash);
+        if let Ok(meta) = fs::metadata(&path) {
+            if meta.len() > MAX_CACHE_BYTES {
+                return None;
+            }
+        }
         let data = fs::read(path).ok()?;
         let entry: FeatureEntryOwned = serde_json::from_slice(&data).ok()?;
         if entry.version != CACHE_VERSION {

@@ -20,6 +20,8 @@ pub fn run_scan_with_detectors(
             deep: options.deep,
             strict: options.strict,
             max_objstm_bytes: options.max_decode_bytes,
+            max_objects: options.max_objects,
+            max_objstm_total_bytes: options.max_total_decoded_bytes,
         },
     )?;
     let mut focus_filtered = false;

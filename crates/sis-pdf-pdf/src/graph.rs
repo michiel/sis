@@ -14,6 +14,8 @@ pub struct ParseOptions {
     pub deep: bool,
     pub strict: bool,
     pub max_objstm_bytes: usize,
+    pub max_objects: usize,
+    pub max_objstm_total_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -80,11 +82,18 @@ pub fn parse_pdf(bytes: &[u8], options: ParseOptions) -> Result<ObjectGraph<'_>>
             }
         }
     }
-    let (mut objects, deviations) = scan_indirect_objects(bytes, options.strict);
+    let (mut objects, deviations) =
+        scan_indirect_objects(bytes, options.strict, options.max_objects);
     let mut decoded_buffers = Vec::new();
     if options.deep {
-        let ObjStmExpansion { objects: mut extra, buffers } =
-            expand_objstm(bytes, &objects, options.strict, options.max_objstm_bytes);
+        let ObjStmExpansion { objects: mut extra, buffers } = expand_objstm(
+            bytes,
+            &objects,
+            options.strict,
+            options.max_objstm_bytes,
+            options.max_objects,
+            options.max_objstm_total_bytes,
+        );
         objects.append(&mut extra);
         decoded_buffers = buffers;
     }

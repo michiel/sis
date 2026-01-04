@@ -718,11 +718,28 @@ pub fn parse_indirect_object_at<'a>(
     (res, devs)
 }
 
-pub fn scan_indirect_objects<'a>(bytes: &'a [u8], strict: bool) -> (Vec<ObjEntry<'a>>, Vec<Deviation>) {
+pub fn scan_indirect_objects<'a>(
+    bytes: &'a [u8],
+    strict: bool,
+    max_objects: usize,
+) -> (Vec<ObjEntry<'a>>, Vec<Deviation>) {
     let mut out = Vec::new();
     let mut deviations = Vec::new();
     let mut i = 0usize;
     while i + 7 < bytes.len() {
+        if max_objects > 0 && out.len() >= max_objects {
+            if strict {
+                deviations.push(Deviation {
+                    kind: "max_objects_reached".into(),
+                    span: Span {
+                        start: i as u64,
+                        end: (i + 1) as u64,
+                    },
+                    note: None,
+                });
+            }
+            break;
+        }
         if !bytes[i].is_ascii_digit() {
             i += 1;
             continue;
@@ -750,4 +767,16 @@ pub fn scan_indirect_objects<'a>(bytes: &'a [u8], strict: bool) -> (Vec<ObjEntry
         }
     }
     (out, deviations)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_indirect_objects;
+
+    #[test]
+    fn scan_respects_max_objects() {
+        let data = b"1 0 obj<<>>endobj\n2 0 obj<<>>endobj\n3 0 obj<<>>endobj";
+        let (objects, _) = scan_indirect_objects(data, false, 2);
+        assert_eq!(objects.len(), 2);
+    }
 }

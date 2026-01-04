@@ -11,6 +11,8 @@ fn diff_summary_matches_findings() {
             deep: false,
             strict: false,
             max_objstm_bytes: 5_000_000,
+            max_objects: 500_000,
+            max_objstm_total_bytes: 256 * 1024 * 1024,
         },
     )
     .expect("parse synthetic.pdf");
