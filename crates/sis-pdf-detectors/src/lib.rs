@@ -28,6 +28,7 @@ pub mod polyglot;
 pub mod external_context;
 pub mod filter_depth;
 pub mod objstm_summary;
+pub mod ir_graph_static;
 #[cfg(feature = "js-sandbox")]
 pub mod js_sandbox;
 
@@ -78,6 +79,7 @@ pub fn default_detectors() -> Vec<Box<dyn Detector>> {
         Box::new(content_phishing::ContentPhishingDetector),
         Box::new(content_phishing::ContentDeceptionDetector),
         Box::new(strict::StrictParseDeviationDetector),
+        Box::new(ir_graph_static::IrGraphStaticDetector),
     ];
     #[cfg(feature = "js-sandbox")]
     detectors.push(Box::new(js_sandbox::JavaScriptSandboxDetector));

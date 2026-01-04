@@ -39,8 +39,10 @@ pub struct ScanConfig {
     pub focus_depth: Option<usize>,
     pub yara_scope: Option<String>,
     pub strict: Option<bool>,
+    pub ir: Option<bool>,
     pub ml_model: Option<String>,
     pub ml_threshold: Option<f32>,
+    pub ml_mode: Option<String>,
 }
 
 impl Config {
@@ -166,6 +168,9 @@ fn apply_scan(scan: &ScanConfig, opts: &mut ScanOptions) {
     if let Some(v) = scan.strict {
         opts.strict = v;
     }
+    if let Some(v) = scan.ir {
+        opts.ir = v;
+    }
     if let Some(model) = &scan.ml_model {
         let threshold = scan.ml_threshold.unwrap_or(0.9);
         if !(0.0..=1.0).contains(&threshold) {
@@ -174,9 +179,15 @@ fn apply_scan(scan: &ScanConfig, opts: &mut ScanOptions) {
                 threshold
             );
         }
+        let mode = scan
+            .ml_mode
+            .as_deref()
+            .map(parse_ml_mode)
+            .unwrap_or(crate::ml::MlMode::Traditional);
         opts.ml_config = Some(crate::ml::MlConfig {
             model_path: model.into(),
             threshold,
+            mode,
         });
     } else if let Some(v) = scan.ml_threshold {
         if !(0.0..=1.0).contains(&v) {
@@ -187,5 +198,12 @@ fn apply_scan(scan: &ScanConfig, opts: &mut ScanOptions) {
         } else if let Some(cfg) = &mut opts.ml_config {
             cfg.threshold = v;
         }
+    }
+}
+
+fn parse_ml_mode(value: &str) -> crate::ml::MlMode {
+    match value.to_lowercase().as_str() {
+        "graph" => crate::ml::MlMode::Graph,
+        _ => crate::ml::MlMode::Traditional,
     }
 }

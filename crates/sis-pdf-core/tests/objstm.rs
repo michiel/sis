@@ -18,11 +18,11 @@ fn deep_objstm_surfaces_js() {
         focus_depth: 0,
         yara_scope: None,
         strict: false,
+        ir: false,
         ml_config: None,
     };
-
     let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, opts, &detectors)
-        .expect("objstm scan should succeed");
+        .expect("scan should succeed");
     let kinds: std::collections::HashSet<&str> =
         report.findings.iter().map(|f| f.kind.as_str()).collect();
     assert!(kinds.contains("js_present"));

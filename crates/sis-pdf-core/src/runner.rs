@@ -148,83 +148,165 @@ pub fn run_scan_with_detectors(
         }
     }
     if let Some(ml_cfg) = &ctx.options.ml_config {
-        let feature_vec = crate::features::FeatureExtractor::extract(&ctx);
-        let defense = crate::adversarial::AdversarialDefense;
-        match crate::ml_models::load_stacking(&ml_cfg.model_path) {
-            Ok(model) => {
-                let prediction = model.predict(&feature_vec, ml_cfg.threshold);
-                if prediction.label {
-                    let mut meta = std::collections::HashMap::new();
-                    meta.insert("ml.score".into(), format!("{:.4}", prediction.score));
-                    meta.insert("ml.threshold".into(), format!("{:.4}", prediction.threshold));
-                    meta.insert(
-                        "ml.base_scores".into(),
-                        prediction
-                            .base_scores
-                            .iter()
-                            .map(|v| format!("{:.4}", v))
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    );
-                    let stability = defense.validate_prediction_stability(&feature_vec);
-                    meta.insert("ml.stability".into(), format!("{:.3}", stability.score));
-                    if let Ok(fv_json) = serde_json::to_string(&feature_vec) {
-                        meta.insert("ml.features".into(), fv_json);
+        match ml_cfg.mode {
+            crate::ml::MlMode::Traditional => {
+                let feature_vec = crate::features::FeatureExtractor::extract(&ctx);
+                let defense = crate::adversarial::AdversarialDefense;
+                match crate::ml_models::load_stacking(&ml_cfg.model_path) {
+                    Ok(model) => {
+                        let prediction = model.predict(&feature_vec, ml_cfg.threshold);
+                        if prediction.label {
+                            let mut meta = std::collections::HashMap::new();
+                            meta.insert("ml.score".into(), format!("{:.4}", prediction.score));
+                            meta.insert("ml.threshold".into(), format!("{:.4}", prediction.threshold));
+                            meta.insert(
+                                "ml.base_scores".into(),
+                                prediction
+                                    .base_scores
+                                    .iter()
+                                    .map(|v| format!("{:.4}", v))
+                                    .collect::<Vec<_>>()
+                                    .join(","),
+                            );
+                            let stability = defense.validate_prediction_stability(&feature_vec);
+                            meta.insert("ml.stability".into(), format!("{:.3}", stability.score));
+                            if let Ok(fv_json) = serde_json::to_string(&feature_vec) {
+                                meta.insert("ml.features".into(), fv_json);
+                            }
+                            findings.push(Finding {
+                                id: String::new(),
+                                surface: crate::model::AttackSurface::Metadata,
+                                kind: "ml_malware_score_high".into(),
+                                severity: crate::model::Severity::High,
+                                confidence: crate::model::Confidence::Probable,
+                                title: "ML classifier score high".into(),
+                                description: format!(
+                                    "Stacking classifier scored {:.4} (threshold {:.4}).",
+                                    prediction.score, prediction.threshold
+                                ),
+                                objects: vec!["ml".into()],
+                                evidence: Vec::new(),
+                                remediation: Some("Review ML features and validate with manual analysis.".into()),
+                                meta,
+                                yara: None,
+                            });
+                        }
                     }
+                    Err(err) => {
+                        findings.push(Finding {
+                            id: String::new(),
+                            surface: crate::model::AttackSurface::Metadata,
+                            kind: "ml_model_error".into(),
+                            severity: crate::model::Severity::Low,
+                            confidence: crate::model::Confidence::Heuristic,
+                            title: "ML model load failed".into(),
+                            description: format!("Failed to load ML model: {}", err),
+                            objects: vec!["ml".into()],
+                            evidence: Vec::new(),
+                            remediation: Some("Check ML model path and format.".into()),
+                            meta: Default::default(),
+                            yara: None,
+                        });
+                    }
+                }
+                if let Some(attempt) = defense.detect_adversarial(&feature_vec) {
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert("ml.adversarial_score".into(), format!("{:.2}", attempt.score));
+                    meta.insert("ml.adversarial_reason".into(), attempt.reason);
                     findings.push(Finding {
                         id: String::new(),
                         surface: crate::model::AttackSurface::Metadata,
-                        kind: "ml_malware_score_high".into(),
-                        severity: crate::model::Severity::High,
-                        confidence: crate::model::Confidence::Probable,
-                        title: "ML classifier score high".into(),
-                        description: format!(
-                            "Stacking classifier scored {:.4} (threshold {:.4}).",
-                            prediction.score, prediction.threshold
-                        ),
+                        kind: "ml_adversarial_suspected".into(),
+                        severity: crate::model::Severity::Low,
+                        confidence: crate::model::Confidence::Heuristic,
+                        title: "Potential adversarial ML sample".into(),
+                        description: "Feature profile suggests adversarial manipulation attempts.".into(),
                         objects: vec!["ml".into()],
                         evidence: Vec::new(),
-                        remediation: Some("Review ML features and validate with manual analysis.".into()),
+                        remediation: Some("Validate findings against alternate detectors.".into()),
                         meta,
                         yara: None,
                     });
                 }
             }
-            Err(err) => {
-                findings.push(Finding {
-                    id: String::new(),
-                    surface: crate::model::AttackSurface::Metadata,
-                    kind: "ml_model_error".into(),
-                    severity: crate::model::Severity::Low,
-                    confidence: crate::model::Confidence::Heuristic,
-                    title: "ML model load failed".into(),
-                    description: format!("Failed to load ML model: {}", err),
-                    objects: vec!["ml".into()],
-                    evidence: Vec::new(),
-                    remediation: Some("Check ML model path and format.".into()),
-                    meta: Default::default(),
-                    yara: None,
-                });
+            crate::ml::MlMode::Graph => {
+                #[cfg(feature = "ml-graph")]
+                {
+                    let ir_opts = sis_pdf_pdf::ir::IrOptions::default();
+                    let ir_graph = crate::ir_pipeline::build_ir_graph(&ctx.graph, &ir_opts);
+                    let edge_index = ir_graph.org.edge_index();
+                    let prediction = sis_pdf_ml_graph::load_and_predict(
+                        &ml_cfg.model_path,
+                        &ir_graph.node_texts,
+                        &edge_index,
+                        ml_cfg.threshold,
+                    );
+                    match prediction {
+                        Ok(prediction) => {
+                            if prediction.label {
+                                let mut meta = std::collections::HashMap::new();
+                                meta.insert("ml.graph.score".into(), format!("{:.4}", prediction.score));
+                                meta.insert(
+                                    "ml.graph.threshold".into(),
+                                    format!("{:.4}", prediction.threshold),
+                                );
+                                findings.push(Finding {
+                                    id: String::new(),
+                                    surface: crate::model::AttackSurface::Metadata,
+                                    kind: "ml_graph_score_high".into(),
+                                    severity: crate::model::Severity::High,
+                                    confidence: crate::model::Confidence::Probable,
+                                    title: "Graph ML classifier score high".into(),
+                                    description: format!(
+                                        "Graph classifier scored {:.4} (threshold {:.4}).",
+                                        prediction.score, prediction.threshold
+                                    ),
+                                    objects: vec!["ml".into()],
+                                    evidence: Vec::new(),
+                                    remediation: Some(
+                                        "Review graph ML output and corroborate with findings.".into(),
+                                    ),
+                                    meta,
+                                    yara: None,
+                                });
+                            }
+                        }
+                        Err(err) => findings.push(Finding {
+                            id: String::new(),
+                            surface: crate::model::AttackSurface::Metadata,
+                            kind: "ml_model_error".into(),
+                            severity: crate::model::Severity::Low,
+                            confidence: crate::model::Confidence::Heuristic,
+                            title: "ML model load failed".into(),
+                            description: format!("Graph ML failed: {}", err),
+                            objects: vec!["ml".into()],
+                            evidence: Vec::new(),
+                            remediation: Some("Check graph model files and format.".into()),
+                            meta: Default::default(),
+                            yara: None,
+                        }),
+                    }
+                }
+                #[cfg(not(feature = "ml-graph"))]
+                {
+                    findings.push(Finding {
+                        id: String::new(),
+                        surface: crate::model::AttackSurface::Metadata,
+                        kind: "ml_model_error".into(),
+                        severity: crate::model::Severity::Low,
+                        confidence: crate::model::Confidence::Heuristic,
+                        title: "ML graph mode unavailable".into(),
+                        description:
+                            "Graph ML mode requested but not compiled (enable feature ml-graph)."
+                                .into(),
+                        objects: vec!["ml".into()],
+                        evidence: Vec::new(),
+                        remediation: Some("Rebuild with --features ml-graph.".into()),
+                        meta: Default::default(),
+                        yara: None,
+                    });
+                }
             }
-        }
-        if let Some(attempt) = defense.detect_adversarial(&feature_vec) {
-            let mut meta = std::collections::HashMap::new();
-            meta.insert("ml.adversarial_score".into(), format!("{:.2}", attempt.score));
-            meta.insert("ml.adversarial_reason".into(), attempt.reason);
-            findings.push(Finding {
-                id: String::new(),
-                surface: crate::model::AttackSurface::Metadata,
-                kind: "ml_adversarial_suspected".into(),
-                severity: crate::model::Severity::Low,
-                confidence: crate::model::Confidence::Heuristic,
-                title: "Potential adversarial ML sample".into(),
-                description: "Feature profile suggests adversarial manipulation attempts.".into(),
-                objects: vec!["ml".into()],
-                evidence: Vec::new(),
-                remediation: Some("Validate findings against alternate detectors.".into()),
-                meta,
-                yara: None,
-            });
         }
     }
     for f in &mut findings {

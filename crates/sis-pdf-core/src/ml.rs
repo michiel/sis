@@ -2,10 +2,23 @@ use std::path::PathBuf;
 
 use crate::features::FeatureVector;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum MlMode {
+    Traditional,
+    Graph,
+}
+
+impl Default for MlMode {
+    fn default() -> Self {
+        MlMode::Traditional
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MlConfig {
     pub model_path: PathBuf,
     pub threshold: f32,
+    pub mode: MlMode,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

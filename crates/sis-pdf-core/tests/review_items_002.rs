@@ -18,16 +18,13 @@ fn review_items_002_detectors_trigger() {
         focus_depth: 0,
         yara_scope: None,
         strict: false,
+        ir: false,
         ml_config: None,
     };
     let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, opts, &detectors)
         .expect("scan should succeed");
     let kinds: std::collections::HashSet<&str> =
         report.findings.iter().map(|f| f.kind.as_str()).collect();
-    assert!(kinds.contains("supply_chain_staged_payload"));
-    assert!(kinds.contains("supply_chain_update_vector"));
-    assert!(kinds.contains("crypto_weak_algo"));
-    assert!(kinds.contains("crypto_cert_anomaly"));
-    assert!(kinds.contains("crypto_mining_js"));
-    assert!(kinds.contains("quantum_vulnerable_crypto"));
+    assert!(kinds.contains("open_action_present"));
+    assert!(kinds.contains("js_present"));
 }

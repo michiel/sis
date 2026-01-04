@@ -3,6 +3,7 @@ members = [
   "crates/sis-pdf-core",
   "crates/sis-pdf-pdf",
   "crates/sis-pdf-detectors",
+  "crates/sis-pdf-ml-graph",
   "crates/sis-pdf",
 ]
 resolver = "2"

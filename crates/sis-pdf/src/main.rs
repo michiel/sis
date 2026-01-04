@@ -1,14 +1,12 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use globset::Glob;
 use memmap2::Mmap;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
-
 const MAX_REPORT_BYTES: u64 = 50 * 1024 * 1024;
 const WARN_PDF_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_PDF_BYTES: u64 = 500 * 1024 * 1024;
@@ -19,14 +17,12 @@ const MAX_JSONL_LINE_BYTES: usize = 10 * 1024;
 const MAX_JSONL_ENTRIES: usize = 1_000_000;
 const MAX_CAMPAIGN_INTENT_LEN: usize = 1024;
 const MAX_WALK_DEPTH: usize = 10;
-
 #[derive(Parser)]
 #[command(name = "sis")]
 struct Args {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand)]
 enum Command {
     #[command(about = "Scan PDFs for suspicious indicators and report findings")]
@@ -73,6 +69,8 @@ enum Command {
         focus_depth: usize,
         #[arg(long)]
         strict: bool,
+        #[arg(long)]
+        ir: bool,
         #[arg(long, default_value_t = 500_000)]
         max_objects: usize,
         #[arg(long, default_value_t = 64)]
@@ -89,6 +87,8 @@ enum Command {
         ml_model_dir: Option<PathBuf>,
         #[arg(long, default_value_t = 0.9)]
         ml_threshold: f32,
+        #[arg(long, default_value = "traditional", value_parser = ["traditional", "graph"])]
+        ml_mode: String,
     },
     #[command(about = "Explain a specific finding with evidence details")]
     Explain {
@@ -124,6 +124,8 @@ enum Command {
         max_recursion_depth: usize,
         #[arg(long)]
         strict: bool,
+        #[arg(long)]
+        ir: bool,
         #[arg(short, long)]
         out: Option<PathBuf>,
         #[arg(long)]
@@ -132,12 +134,22 @@ enum Command {
         ml_model_dir: Option<PathBuf>,
         #[arg(long, default_value_t = 0.9)]
         ml_threshold: f32,
+        #[arg(long, default_value = "traditional", value_parser = ["traditional", "graph"])]
+        ml_mode: String,
     },
     #[command(about = "Export action chains from a scan as DOT or JSON")]
     ExportGraph {
         pdf: String,
         #[arg(long)]
         chains_only: bool,
+        #[arg(long, default_value = "dot", value_parser = ["dot", "json"])]
+        format: String,
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    #[command(about = "Export object reference graph as DOT or JSON")]
+    ExportOrg {
+        pdf: String,
         #[arg(long, default_value = "dot", value_parser = ["dot", "json"])]
         format: String,
         #[arg(short, long)]
@@ -208,7 +220,6 @@ enum Command {
         out: PathBuf,
     },
 }
-
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {
@@ -234,6 +245,7 @@ fn main() -> Result<()> {
             focus_trigger,
             focus_depth,
             strict,
+            ir,
             max_objects,
             max_recursion_depth,
             config,
@@ -242,6 +254,7 @@ fn main() -> Result<()> {
             ml,
             ml_model_dir,
             ml_threshold,
+            ml_mode,
         } => run_scan(
             pdf.as_deref(),
             path.as_deref(),
@@ -264,6 +277,7 @@ fn main() -> Result<()> {
             focus_trigger,
             focus_depth,
             strict,
+            ir,
             max_objects,
             max_recursion_depth,
             config.as_deref(),
@@ -272,6 +286,7 @@ fn main() -> Result<()> {
             ml,
             ml_model_dir.as_deref(),
             ml_threshold,
+            &ml_mode,
         ),
         Command::Explain { pdf, finding_id } => run_explain(&pdf, &finding_id),
         Command::Extract {
@@ -290,10 +305,12 @@ fn main() -> Result<()> {
             max_objects,
             max_recursion_depth,
             strict,
+            ir,
             out,
             ml,
             ml_model_dir,
             ml_threshold,
+            ml_mode,
         } => run_report(
             &pdf,
             deep,
@@ -304,10 +321,12 @@ fn main() -> Result<()> {
             max_objects,
             max_recursion_depth,
             strict,
+            ir,
             out.as_deref(),
             ml,
             ml_model_dir.as_deref(),
             ml_threshold,
+            &ml_mode,
         ),
         Command::ExportGraph {
             pdf,
@@ -315,6 +334,7 @@ fn main() -> Result<()> {
             format,
             out,
         } => run_export_graph(&pdf, chains_only, &format, &out),
+        Command::ExportOrg { pdf, format, out } => run_export_org(&pdf, &format, &out),
         Command::ExportFeatures {
             pdf,
             path,
@@ -357,7 +377,6 @@ fn main() -> Result<()> {
         Command::RedTeam { target, out } => run_redteam(&target, &out),
     }
 }
-
 fn mmap_file(path: &str) -> Result<Mmap> {
     let f = fs::File::open(path)?;
     let size = f.metadata()?.len();
@@ -376,7 +395,6 @@ fn mmap_file(path: &str) -> Result<Mmap> {
     }
     unsafe { Mmap::map(&f).map_err(|e| anyhow!(e)) }
 }
-
 fn run_scan(
     pdf: Option<&str>,
     path: Option<&std::path::Path>,
@@ -399,6 +417,7 @@ fn run_scan(
     focus_trigger: Option<String>,
     focus_depth: usize,
     strict: bool,
+    ir: bool,
     max_objects: usize,
     max_recursion_depth: usize,
     config: Option<&std::path::Path>,
@@ -407,6 +426,7 @@ fn run_scan(
     ml: bool,
     ml_model_dir: Option<&std::path::Path>,
     ml_threshold: f32,
+    ml_mode: &str,
 ) -> Result<()> {
     if path.is_some() && pdf.is_some() {
         return Err(anyhow!("provide either a PDF path or --path, not both"));
@@ -429,6 +449,7 @@ fn run_scan(
         focus_depth,
         yara_scope: Some(yara_scope.to_string()),
         strict,
+        ir,
         ml_config: None,
     };
     if let Some(path) = config {
@@ -440,11 +461,13 @@ fn run_scan(
         opts.ml_config = Some(sis_pdf_core::ml::MlConfig {
             model_path: model_dir.to_path_buf(),
             threshold: ml_threshold,
+            mode: parse_ml_mode(ml_mode),
         });
     } else if let Some(dir) = ml_model_dir {
         opts.ml_config = Some(sis_pdf_core::ml::MlConfig {
             model_path: dir.to_path_buf(),
             threshold: ml_threshold,
+            mode: parse_ml_mode(ml_mode),
         });
     }
     let want_export_intents = export_intents || export_intents_out.is_some();
@@ -505,7 +528,6 @@ fn run_scan(
     }
     Ok(())
 }
-
 fn run_scan_single(
     pdf: &str,
     opts: &sis_pdf_core::scan::ScanOptions,
@@ -516,7 +538,6 @@ fn run_scan_single(
         .with_input_path(Some(pdf.to_string()));
     Ok(report)
 }
-
 fn write_intents_jsonl(
     report: &sis_pdf_core::report::Report,
     writer: &mut dyn Write,
@@ -533,7 +554,6 @@ fn write_intents_jsonl(
     }
     Ok(())
 }
-
 fn run_scan_batch(
     dir: &std::path::Path,
     glob: &str,
@@ -689,10 +709,11 @@ fn run_scan_batch(
     println!("{}", md);
     Ok(())
 }
-
 fn run_explain(pdf: &str, finding_id: &str) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     let opts = sis_pdf_core::scan::ScanOptions {
+        strict: false,
+        ir: false,
         deep: true,
         max_decode_bytes: 32 * 1024 * 1024,
         max_total_decoded_bytes: 256 * 1024 * 1024,
@@ -705,7 +726,6 @@ fn run_explain(pdf: &str, finding_id: &str) -> Result<()> {
         focus_trigger: None,
         focus_depth: 0,
         yara_scope: None,
-        strict: false,
         ml_config: None,
     };
     let detectors = sis_pdf_detectors::default_detectors();
@@ -741,7 +761,6 @@ fn run_explain(pdf: &str, finding_id: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn run_extract(kind: &str, pdf: &str, outdir: &PathBuf, max_extract_bytes: usize) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     fs::create_dir_all(outdir)?;
@@ -762,11 +781,12 @@ fn run_extract(kind: &str, pdf: &str, outdir: &PathBuf, max_extract_bytes: usize
         _ => Err(anyhow!("unknown extract kind")),
     }
 }
-
 fn run_export_graph(pdf: &str, chains_only: bool, format: &str, outdir: &PathBuf) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     fs::create_dir_all(outdir)?;
     let opts = sis_pdf_core::scan::ScanOptions {
+        strict: false,
+        ir: false,
         deep: true,
         max_decode_bytes: 32 * 1024 * 1024,
         max_total_decoded_bytes: 256 * 1024 * 1024,
@@ -779,7 +799,6 @@ fn run_export_graph(pdf: &str, chains_only: bool, format: &str, outdir: &PathBuf
         focus_trigger: None,
         focus_depth: 0,
         yara_scope: None,
-        strict: false,
         ml_config: None,
     };
     let detectors = sis_pdf_detectors::default_detectors();
@@ -804,7 +823,32 @@ fn run_export_graph(pdf: &str, chains_only: bool, format: &str, outdir: &PathBuf
     }
     Ok(())
 }
-
+fn run_export_org(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
+    let mmap = mmap_file(pdf)?;
+    let graph = sis_pdf_pdf::parse_pdf(
+        &mmap,
+        sis_pdf_pdf::ParseOptions {
+            recover_xref: true,
+            deep: false,
+            strict: false,
+            max_objstm_bytes: 32 * 1024 * 1024,
+            max_objects: 500_000,
+            max_objstm_total_bytes: 256 * 1024 * 1024,
+        },
+    )?;
+    let org = sis_pdf_core::org::OrgGraph::from_object_graph(&graph);
+    match format {
+        "json" => {
+            let v = sis_pdf_core::org_export::export_org_json(&org);
+            fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+        }
+        _ => {
+            let dot = sis_pdf_core::org_export::export_org_dot(&org);
+            fs::write(out, dot)?;
+        }
+    }
+    Ok(())
+}
 fn run_report(
     pdf: &str,
     deep: bool,
@@ -815,10 +859,12 @@ fn run_report(
     max_objects: usize,
     max_recursion_depth: usize,
     strict: bool,
+    ir: bool,
     out: Option<&std::path::Path>,
     ml: bool,
     ml_model_dir: Option<&std::path::Path>,
     ml_threshold: f32,
+    ml_mode: &str,
 ) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     let diff_parser = diff_parser || strict;
@@ -839,6 +885,7 @@ fn run_report(
         yara_scope: None,
         focus_depth: 0,
         strict,
+        ir,
         ml_config: None,
     };
     let mut opts = opts;
@@ -847,11 +894,13 @@ fn run_report(
         opts.ml_config = Some(sis_pdf_core::ml::MlConfig {
             model_path: model_dir.to_path_buf(),
             threshold: ml_threshold,
+            mode: parse_ml_mode(ml_mode),
         });
     } else if let Some(dir) = ml_model_dir {
         opts.ml_config = Some(sis_pdf_core::ml::MlConfig {
             model_path: dir.to_path_buf(),
             threshold: ml_threshold,
+            mode: parse_ml_mode(ml_mode),
         });
     }
     let detectors = sis_pdf_detectors::default_detectors();
@@ -865,7 +914,6 @@ fn run_report(
     }
     Ok(())
 }
-
 fn run_export_features(
     pdf: Option<&str>,
     path: Option<&std::path::Path>,
@@ -896,6 +944,7 @@ fn run_export_features(
         yara_scope: None,
         focus_depth: 0,
         strict,
+        ir: false,
         ml_config: None,
     };
     let mut paths = Vec::new();
@@ -991,7 +1040,6 @@ fn run_export_features(
     }
     Ok(())
 }
-
 fn run_stream_analyze(pdf: &str, chunk_size: usize, max_buffer: usize) -> Result<()> {
     let mut f = fs::File::open(pdf)?;
     let mut analyzer = sis_pdf_core::stream_analyzer::StreamAnalyzer::new(max_buffer);
@@ -1015,7 +1063,6 @@ fn run_stream_analyze(pdf: &str, chunk_size: usize, max_buffer: usize) -> Result
     }
     Ok(())
 }
-
 fn run_campaign_correlate(input: &std::path::Path, out: Option<&std::path::Path>) -> Result<()> {
     let data = read_text_with_limit(input, MAX_JSONL_BYTES)?;
     let mut by_path: std::collections::HashMap<String, sis_pdf_core::campaign::PDFAnalysis> =
@@ -1100,7 +1147,6 @@ fn run_campaign_correlate(input: &std::path::Path, out: Option<&std::path::Path>
     }
     Ok(())
 }
-
 fn run_response_generate(
     kind: Option<&str>,
     from_report: Option<&std::path::Path>,
@@ -1136,7 +1182,6 @@ fn run_response_generate(
     }
     Ok(())
 }
-
 fn run_mutate(pdf: &str, out: &std::path::Path, scan: bool) -> Result<()> {
     let data = fs::read(pdf)?;
     fs::create_dir_all(out)?;
@@ -1151,6 +1196,8 @@ fn run_mutate(pdf: &str, out: &std::path::Path, scan: bool) -> Result<()> {
     if scan {
         let detectors = sis_pdf_detectors::default_detectors();
         let opts = sis_pdf_core::scan::ScanOptions {
+            strict: false,
+            ir: false,
             deep: true,
             max_decode_bytes: 32 * 1024 * 1024,
             max_total_decoded_bytes: 256 * 1024 * 1024,
@@ -1163,7 +1210,6 @@ fn run_mutate(pdf: &str, out: &std::path::Path, scan: bool) -> Result<()> {
             focus_trigger: None,
             focus_depth: 0,
             yara_scope: None,
-            strict: false,
             ml_config: None,
         };
         let base_report =
@@ -1188,7 +1234,6 @@ fn run_mutate(pdf: &str, out: &std::path::Path, scan: bool) -> Result<()> {
     }
     Ok(())
 }
-
 fn count_kinds(findings: &[sis_pdf_core::model::Finding]) -> std::collections::BTreeMap<String, usize> {
     let mut out = std::collections::BTreeMap::new();
     for f in findings {
@@ -1196,7 +1241,6 @@ fn count_kinds(findings: &[sis_pdf_core::model::Finding]) -> std::collections::B
     }
     out
 }
-
 fn diff_kind_counts(
     base: &std::collections::BTreeMap<String, usize>,
     current: &std::collections::BTreeMap<String, usize>,
@@ -1216,7 +1260,6 @@ fn diff_kind_counts(
     }
     out
 }
-
 fn run_redteam(target: &str, out: &std::path::Path) -> Result<()> {
     let sim = sis_pdf_core::redteam::RedTeamSimulator;
     let pdf = sim.generate_evasive_pdf(&sis_pdf_core::redteam::DetectorProfile {
@@ -1226,13 +1269,11 @@ fn run_redteam(target: &str, out: &std::path::Path) -> Result<()> {
     println!("wrote red-team fixture: {}", out.display());
     Ok(())
 }
-
 fn sanitize_filename(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
 }
-
 fn extract_js(graph: &sis_pdf_pdf::ObjectGraph<'_>, bytes: &[u8], outdir: &PathBuf) -> Result<()> {
     let mut count = 0usize;
     for entry in &graph.objects {
@@ -1249,7 +1290,6 @@ fn extract_js(graph: &sis_pdf_pdf::ObjectGraph<'_>, bytes: &[u8], outdir: &PathB
     println!("Extracted {} JavaScript payloads", count);
     Ok(())
 }
-
 fn extract_embedded(
     graph: &sis_pdf_pdf::ObjectGraph<'_>,
     bytes: &[u8],
@@ -1291,7 +1331,6 @@ fn extract_embedded(
     println!("Extracted {} embedded files", count);
     Ok(())
 }
-
 fn embedded_filename(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> {
     if let Some((_, obj)) = dict.get_first(b"/F") {
         if let sis_pdf_pdf::object::PdfAtom::Str(s) = &obj.atom {
@@ -1305,7 +1344,6 @@ fn embedded_filename(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> 
     }
     None
 }
-
 fn sanitize_embedded_filename(name: &str) -> String {
     let leaf = std::path::Path::new(name)
         .file_name()
@@ -1325,7 +1363,6 @@ fn sanitize_embedded_filename(name: &str) -> String {
         out
     }
 }
-
 fn entry_dict<'a>(entry: &'a sis_pdf_pdf::graph::ObjEntry<'a>) -> Option<&'a sis_pdf_pdf::object::PdfDict<'a>> {
     match &entry.atom {
         sis_pdf_pdf::object::PdfAtom::Dict(d) => Some(d),
@@ -1333,7 +1370,6 @@ fn entry_dict<'a>(entry: &'a sis_pdf_pdf::graph::ObjEntry<'a>) -> Option<&'a sis
         _ => None,
     }
 }
-
 fn extract_obj_bytes(
     graph: &sis_pdf_pdf::ObjectGraph<'_>,
     bytes: &[u8],
@@ -1361,14 +1397,12 @@ fn extract_obj_bytes(
         _ => None,
     }
 }
-
 fn string_bytes(s: &sis_pdf_pdf::object::PdfStr<'_>) -> Vec<u8> {
     match s {
         sis_pdf_pdf::object::PdfStr::Literal { decoded, .. } => decoded.clone(),
         sis_pdf_pdf::object::PdfStr::Hex { decoded, .. } => decoded.clone(),
     }
 }
-
 fn preview_bytes(bytes: &[u8]) -> String {
     let mut s = String::new();
     for &b in bytes.iter().take(256) {
@@ -1380,7 +1414,6 @@ fn preview_bytes(bytes: &[u8]) -> String {
     }
     s
 }
-
 fn escape_terminal(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -1392,20 +1425,17 @@ fn escape_terminal(input: &str) -> String {
     }
     out
 }
-
 fn is_printable_ascii(input: &str) -> bool {
     input
         .bytes()
         .all(|b| (0x20..=0x7E).contains(&b))
 }
-
 fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     let digest = hasher.finalize();
     hex::encode(digest)
 }
-
 fn read_text_with_limit(path: &std::path::Path, max_bytes: u64) -> Result<String> {
     if let Ok(meta) = fs::metadata(path) {
         if meta.len() > max_bytes {
@@ -1424,7 +1454,6 @@ fn read_text_with_limit(path: &std::path::Path, max_bytes: u64) -> Result<String
     }
     Ok(fs::read_to_string(path)?)
 }
-
 fn magic_type(data: &[u8]) -> String {
     if data.starts_with(b"MZ") {
         "pe".into()
@@ -1440,11 +1469,15 @@ fn magic_type(data: &[u8]) -> String {
         "unknown".into()
     }
 }
-
+fn parse_ml_mode(value: &str) -> sis_pdf_core::ml::MlMode {
+    match value.to_lowercase().as_str() {
+        "graph" => sis_pdf_core::ml::MlMode::Graph,
+        _ => sis_pdf_core::ml::MlMode::Traditional,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::sanitize_embedded_filename;
-
     #[test]
     fn sanitize_embedded_filename_strips_paths() {
         let name = "../evil/../../payload.exe";

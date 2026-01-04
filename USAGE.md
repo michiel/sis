@@ -301,6 +301,30 @@ Notes:
 - The ML score adds a `ml_malware_score_high` finding when it exceeds the threshold.
 - Adversarial checks add `ml_adversarial_suspected` when feature profiles look manipulated.
 
+Graph ML mode (PDFObj IR + ORG + GNN, feature build):
+
+```
+cargo run -p sis-pdf --features ml-graph --bin sis -- scan suspicious.pdf --ml --ml-mode graph --ml-model-dir models
+```
+
+Notes:
+- Graph ML expects `graph_model.json` in the model directory.
+- Graph ML emits `ml_graph_score_high` when it exceeds the threshold.
+
+## 12b) Export object reference graph (ORG)
+
+DOT export:
+
+```
+sis export-org suspicious.pdf --format dot -o org.dot
+```
+
+JSON export:
+
+```
+sis export-org suspicious.pdf --format json -o org.json
+```
+
 ## 13) Export features for datasets
 
 JSONL feature export:

@@ -1,6 +1,7 @@
 pub mod decode;
 pub mod content;
 pub mod graph;
+pub mod ir;
 pub mod lexer;
 pub mod objstm;
 pub mod object;

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use sis_pdf_pdf::graph::ObjEntry;
 use sis_pdf_pdf::object::{PdfAtom, PdfName, PdfObj};
 
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ObjRef {
     pub obj: u32,
     pub gen: u16,

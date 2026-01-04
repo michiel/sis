@@ -35,6 +35,8 @@ pub struct Report {
     pub response_rules: Vec<crate::yara::YaraRule>,
     #[serde(default)]
     pub structural_summary: Option<StructuralSummary>,
+    #[serde(default)]
+    pub ml_summary: Option<MlSummary>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -82,6 +84,7 @@ impl Report {
                 .push(f.id.clone());
         }
         let summary = summary_from_findings(&findings);
+        let ml_summary = ml_summary_from_findings(&findings);
         Self {
             summary,
             findings,
@@ -96,6 +99,7 @@ impl Report {
             network_intents,
             response_rules,
             structural_summary,
+            ml_summary,
         }
     }
 
@@ -130,6 +134,20 @@ pub struct SecondaryParserSummary {
     pub trailer_count: usize,
     pub missing_in_secondary: usize,
     pub missing_in_primary: usize,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct MlSummary {
+    pub graph: Option<MlRunSummary>,
+    pub traditional: Option<MlRunSummary>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct MlRunSummary {
+    pub score: f32,
+    pub threshold: f32,
+    pub label: bool,
+    pub kind: String,
 }
 
 pub fn print_human(report: &Report) {
@@ -195,6 +213,22 @@ pub fn print_human(report: &Report) {
             println!("  Secondary parser: failed ({})", err);
         } else {
             println!("  Secondary parser: not run");
+        }
+    }
+    if let Some(ml) = &report.ml_summary {
+        println!();
+        println!("ML summary");
+        if let Some(run) = &ml.graph {
+            println!(
+                "  Graph: score {:.4} threshold {:.4} label {}",
+                run.score, run.threshold, run.label
+            );
+        }
+        if let Some(run) = &ml.traditional {
+            println!(
+                "  Traditional: score {:.4} threshold {:.4} label {}",
+                run.score, run.threshold, run.label
+            );
         }
     }
     if let Some(resource) = resource_risk_summary(&report.findings) {
@@ -335,6 +369,53 @@ fn resource_risk_summary(findings: &[Finding]) -> Option<ResourceRiskSummary> {
         None
     } else {
         Some(summary)
+    }
+}
+
+fn ml_summary_from_findings(findings: &[Finding]) -> Option<MlSummary> {
+    let mut graph = None;
+    let mut traditional = None;
+    for f in findings {
+        if f.kind == "ml_graph_score_high" {
+            let score = f
+                .meta
+                .get("ml.graph.score")
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.0);
+            let threshold = f
+                .meta
+                .get("ml.graph.threshold")
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.0);
+            graph = Some(MlRunSummary {
+                score,
+                threshold,
+                label: true,
+                kind: f.kind.clone(),
+            });
+        } else if f.kind == "ml_malware_score_high" {
+            let score = f
+                .meta
+                .get("ml.score")
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.0);
+            let threshold = f
+                .meta
+                .get("ml.threshold")
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.0);
+            traditional = Some(MlRunSummary {
+                score,
+                threshold,
+                label: true,
+                kind: f.kind.clone(),
+            });
+        }
+    }
+    if graph.is_none() && traditional.is_none() {
+        None
+    } else {
+        Some(MlSummary { graph, traditional })
     }
 }
 
@@ -781,6 +862,23 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             ));
         } else {
             out.push_str("- Secondary parser: not run\n");
+        }
+        out.push('\n');
+    }
+
+    if let Some(ml) = &report.ml_summary {
+        out.push_str("## ML Summary\n\n");
+        if let Some(run) = &ml.graph {
+            out.push_str(&format!(
+                "- Graph: score {:.4} threshold {:.4} label {}\n",
+                run.score, run.threshold, run.label
+            ));
+        }
+        if let Some(run) = &ml.traditional {
+            out.push_str(&format!(
+                "- Traditional: score {:.4} threshold {:.4} label {}\n",
+                run.score, run.threshold, run.label
+            ));
         }
         out.push('\n');
     }

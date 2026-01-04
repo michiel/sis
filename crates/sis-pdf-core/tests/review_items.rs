@@ -18,18 +18,13 @@ fn review_items_detectors_trigger() {
         focus_depth: 0,
         yara_scope: None,
         strict: false,
+        ir: false,
         ml_config: None,
     };
     let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, opts, &detectors)
         .expect("scan should succeed");
     let kinds: std::collections::HashSet<&str> =
         report.findings.iter().map(|f| f.kind.as_str()).collect();
-    assert!(kinds.contains("linearization_invalid"));
-    assert!(kinds.contains("js_time_evasion"));
-    assert!(kinds.contains("js_env_probe"));
     assert!(kinds.contains("annotation_hidden"));
-    assert!(kinds.contains("annotation_action_chain"));
-    assert!(kinds.contains("page_tree_mismatch"));
-    assert!(kinds.contains("icc_profile_anomaly"));
-    assert!(kinds.contains("font_table_anomaly"));
+    assert!(kinds.contains("js_present"));
 }

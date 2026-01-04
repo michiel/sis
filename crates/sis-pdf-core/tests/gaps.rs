@@ -1,6 +1,6 @@
 use sis_pdf_core::scan::ScanOptions;
 
-fn base_opts() -> ScanOptions {
+fn opts() -> ScanOptions {
     ScanOptions {
         deep: false,
         max_decode_bytes: 8 * 1024 * 1024,
@@ -15,6 +15,7 @@ fn base_opts() -> ScanOptions {
         focus_depth: 0,
         yara_scope: None,
         strict: false,
+        ir: false,
         ml_config: None,
     }
 }
@@ -23,7 +24,7 @@ fn base_opts() -> ScanOptions {
 fn detects_annotation_uri() {
     let bytes = include_bytes!("fixtures/annot_uri.pdf");
     let detectors = sis_pdf_detectors::default_detectors();
-    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, base_opts(), &detectors)
+    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, opts(), &detectors)
         .expect("scan should succeed");
     let kinds: std::collections::HashSet<&str> =
         report.findings.iter().map(|f| f.kind.as_str()).collect();
@@ -34,7 +35,7 @@ fn detects_annotation_uri() {
 fn detects_fontmatrix_payload() {
     let bytes = include_bytes!("fixtures/fontmatrix_payload.pdf");
     let detectors = sis_pdf_detectors::default_detectors();
-    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, base_opts(), &detectors)
+    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, opts(), &detectors)
         .expect("scan should succeed");
     let kinds: std::collections::HashSet<&str> =
         report.findings.iter().map(|f| f.kind.as_str()).collect();
@@ -45,7 +46,7 @@ fn detects_fontmatrix_payload() {
 fn detects_html_like_content() {
     let bytes = include_bytes!("fixtures/html_text.pdf");
     let detectors = sis_pdf_detectors::default_detectors();
-    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, base_opts(), &detectors)
+    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, opts(), &detectors)
         .expect("scan should succeed");
     let kinds: std::collections::HashSet<&str> =
         report.findings.iter().map(|f| f.kind.as_str()).collect();
