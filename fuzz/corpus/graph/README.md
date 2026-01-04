@@ -32,9 +32,11 @@ Anomaly types:
 | invalid_dict_key.pdf |  |  | X |  |  | X |  |  |
 | invalid_header.pdf | X |  |  |  |  |  |  |  |
 | invalid_hex_string.pdf |  |  | X |  |  |  |  |  |
+| invalid_name_escape.pdf |  |  |  |  |  | X |  |  |
 | invalid_name_token.pdf |  |  |  |  |  | X |  |  |
 | invalid_obj_header.pdf |  |  | X |  |  |  |  |  |
 | invalid_dict_nested_array.pdf |  |  | X |  |  |  |  |  |
+| invalid_ref_object_keyword.pdf |  |  | X |  |  | X |  |  |
 | invalid_ref.pdf |  |  |  |  |  | X |  |  |
 | invalid_string_escape.pdf |  |  | X |  |  |  |  |  |
 | invalid_string_literal.pdf |  |  | X |  |  |  |  |  |
@@ -48,25 +50,33 @@ Anomaly types:
 | missing_endstream.pdf |  |  |  | X |  |  |  |  |
 | missing_eof.pdf | X | X |  |  |  |  |  |  |
 | missing_stream_keyword.pdf |  |  |  | X |  |  |  |  |
+| missing_trailer_root.pdf |  | X |  |  |  |  |  |  |
 | multi_startxref.pdf |  | X |  |  |  |  |  |  |
 | negative_length.pdf |  |  |  | X |  |  | X |  |
 | negative_obj_number.pdf |  |  | X |  |  |  | X |  |
 | nested_xref.pdf |  | X |  |  |  |  |  |  |
+| objstm_non_numeric_header.pdf |  |  |  |  | X |  |  |  |
 | objstm_missing_first.pdf |  |  |  |  | X |  |  |  |
 | objstm_negative_first.pdf |  |  |  |  | X |  | X |  |
 | odd_hex_escapes.pdf |  |  | X |  |  |  |  |  |
 | overflow_integer.pdf |  |  | X |  |  |  | X |  |
 | stream_length_mismatch.pdf |  |  |  | X |  |  |  |  |
+| stream_in_dict.pdf |  |  | X |  |  |  |  |  |
+| stream_no_length.pdf |  |  |  | X |  |  |  |  |
+| stream_with_extra_endstream.pdf |  |  |  | X |  |  |  |  |
 | stray_binary.pdf |  |  |  |  |  |  |  | X |
+| trailer_prev_non_numeric.pdf |  | X |  |  |  |  | X |  |
 | trailer_missing_size.pdf |  | X |  |  |  |  |  |  |
 | truncated_stream.pdf |  |  |  | X |  |  |  |  |
 | unterminated_dict.pdf |  |  | X |  |  |  |  |  |
 | unsupported_filter.pdf |  |  |  | X |  |  |  |  |
 | weird_whitespace.pdf |  |  |  |  |  |  |  | X |
+| invalid_xref_keyword.pdf |  | X |  |  |  |  |  |  |
 | xref_subsection_mismatch.pdf |  | X |  |  |  |  |  |  |
 | xref_missing_trailer.pdf |  | X |  |  |  |  |  |  |
 | xref_negative_offset.pdf |  | X |  |  |  |  | X |  |
 | xref_overlap.pdf |  | X |  |  |  |  |  |  |
+| xref_section_header_mismatch2.pdf |  | X |  |  |  |  |  |  |
 | xref_with_gaps.pdf |  | X |  |  |  |  |  |  |
 | xref_zero_entries.pdf |  | X |  |  |  |  |  |  |
 | zero_length_filtered_stream.pdf |  |  |  | X |  |  |  |  |
