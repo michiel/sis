@@ -10,6 +10,15 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 const MAX_REPORT_BYTES: u64 = 50 * 1024 * 1024;
+const WARN_PDF_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_PDF_BYTES: u64 = 500 * 1024 * 1024;
+const MAX_BATCH_FILES: usize = 10_000;
+const MAX_BATCH_BYTES: u64 = 50 * 1024 * 1024 * 1024;
+const MAX_JSONL_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_JSONL_LINE_BYTES: usize = 10 * 1024;
+const MAX_JSONL_ENTRIES: usize = 1_000_000;
+const MAX_CAMPAIGN_INTENT_LEN: usize = 1024;
+const MAX_WALK_DEPTH: usize = 10;
 
 #[derive(Parser)]
 #[command(name = "sis")]
@@ -351,6 +360,20 @@ fn main() -> Result<()> {
 
 fn mmap_file(path: &str) -> Result<Mmap> {
     let f = fs::File::open(path)?;
+    let size = f.metadata()?.len();
+    if size > WARN_PDF_BYTES {
+        eprintln!(
+            "security_boundary: large file {} ({} bytes)",
+            path, size
+        );
+    }
+    if size > MAX_PDF_BYTES {
+        eprintln!(
+            "security_boundary: mmap rejected for {} ({} bytes exceeds limit {})",
+            path, size, MAX_PDF_BYTES
+        );
+        return Err(anyhow!("file exceeds max size: {} bytes", size));
+    }
     unsafe { Mmap::map(&f).map_err(|e| anyhow!(e)) }
 }
 
@@ -388,12 +411,16 @@ fn run_scan(
     if path.is_some() && pdf.is_some() {
         return Err(anyhow!("provide either a PDF path or --path, not both"));
     }
+    let diff_parser = diff_parser || strict;
+    if diff_parser && strict {
+        eprintln!("security_boundary: enabling diff parser in strict mode");
+    }
     let mut opts = sis_pdf_core::scan::ScanOptions {
         deep,
         max_decode_bytes,
         max_total_decoded_bytes,
         recover_xref,
-        parallel: true,
+        parallel: false,
         diff_parser,
         max_objects,
         max_recursion_depth,
@@ -555,9 +582,15 @@ fn run_scan_batch(
     let mut timing_max_ms = 0u64;
     let iter = if dir.is_file() {
         WalkDir::new(dir.parent().unwrap_or(dir))
+            .follow_links(false)
+            .max_depth(MAX_WALK_DEPTH)
     } else {
         WalkDir::new(dir)
+            .follow_links(false)
+            .max_depth(MAX_WALK_DEPTH)
     };
+    let mut total_bytes = 0u64;
+    let mut file_count = 0usize;
     for entry in iter.into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file() {
             continue;
@@ -565,6 +598,24 @@ fn run_scan_batch(
         let path = entry.path();
         if !matcher.is_match(path) {
             continue;
+        }
+        file_count += 1;
+        if file_count > MAX_BATCH_FILES {
+            eprintln!(
+                "security_boundary: batch file count exceeded (max {})",
+                MAX_BATCH_FILES
+            );
+            return Err(anyhow!("batch file count exceeds limit"));
+        }
+        if let Ok(meta) = entry.metadata() {
+            total_bytes = total_bytes.saturating_add(meta.len());
+            if total_bytes > MAX_BATCH_BYTES {
+                eprintln!(
+                    "security_boundary: batch size exceeded ({} bytes, max {})",
+                    total_bytes, MAX_BATCH_BYTES
+                );
+                return Err(anyhow!("batch size exceeds limit"));
+            }
         }
         let path_str = path.display().to_string();
         let start = std::time::Instant::now();
@@ -663,8 +714,12 @@ fn run_explain(pdf: &str, finding_id: &str) -> Result<()> {
     let Some(finding) = report.findings.iter().find(|f| f.id == finding_id) else {
         return Err(anyhow!("finding id not found"));
     };
-    println!("{} - {}", finding.id, finding.title);
-    println!("{}", finding.description);
+    println!(
+        "{} - {}",
+        escape_terminal(&finding.id),
+        escape_terminal(&finding.title)
+    );
+    println!("{}", escape_terminal(&finding.description));
     println!("Severity: {:?}  Confidence: {:?}", finding.severity, finding.confidence);
     println!();
     for ev in &finding.evidence {
@@ -673,7 +728,7 @@ fn run_explain(pdf: &str, finding_id: &str) -> Result<()> {
             ev.source,
             ev.offset,
             ev.length,
-            ev.note.as_deref().unwrap_or("-")
+            escape_terminal(ev.note.as_deref().unwrap_or("-"))
         );
         if matches!(ev.source, sis_pdf_core::model::EvidenceSource::File) {
             let start = ev.offset as usize;
@@ -766,6 +821,10 @@ fn run_report(
     ml_threshold: f32,
 ) -> Result<()> {
     let mmap = mmap_file(pdf)?;
+    let diff_parser = diff_parser || strict;
+    if diff_parser && strict {
+        eprintln!("security_boundary: enabling diff parser in strict mode");
+    }
     let opts = sis_pdf_core::scan::ScanOptions {
         deep,
         max_decode_bytes,
@@ -846,15 +905,39 @@ fn run_export_features(
         let matcher = Glob::new(glob)?.compile_matcher();
         let iter = if dir.is_file() {
             WalkDir::new(dir.parent().unwrap_or(dir))
+                .follow_links(false)
+                .max_depth(MAX_WALK_DEPTH)
         } else {
             WalkDir::new(dir)
+                .follow_links(false)
+                .max_depth(MAX_WALK_DEPTH)
         };
+        let mut total_bytes = 0u64;
+        let mut file_count = 0usize;
         for entry in iter.into_iter().filter_map(Result::ok) {
             if !entry.file_type().is_file() {
                 continue;
             }
             let path = entry.path();
             if matcher.is_match(path) {
+                file_count += 1;
+                if file_count > MAX_BATCH_FILES {
+                    eprintln!(
+                        "security_boundary: export file count exceeded (max {})",
+                        MAX_BATCH_FILES
+                    );
+                    return Err(anyhow!("export file count exceeds limit"));
+                }
+                if let Ok(meta) = entry.metadata() {
+                    total_bytes = total_bytes.saturating_add(meta.len());
+                    if total_bytes > MAX_BATCH_BYTES {
+                        eprintln!(
+                            "security_boundary: export size exceeded ({} bytes, max {})",
+                            total_bytes, MAX_BATCH_BYTES
+                        );
+                        return Err(anyhow!("export size exceeds limit"));
+                    }
+                }
                 paths.push(path.to_path_buf());
             }
         }
@@ -934,17 +1017,52 @@ fn run_stream_analyze(pdf: &str, chunk_size: usize, max_buffer: usize) -> Result
 }
 
 fn run_campaign_correlate(input: &std::path::Path, out: Option<&std::path::Path>) -> Result<()> {
-    let data = fs::read_to_string(input)?;
+    let data = read_text_with_limit(input, MAX_JSONL_BYTES)?;
     let mut by_path: std::collections::HashMap<String, sis_pdf_core::campaign::PDFAnalysis> =
         std::collections::HashMap::new();
-    for line in data.lines() {
+    let mut entries = 0usize;
+    for (idx, line) in data.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        let v: serde_json::Value = serde_json::from_str(line)?;
+        if line.len() > MAX_JSONL_LINE_BYTES {
+            eprintln!(
+                "security_boundary: JSONL line {} exceeds {} bytes",
+                idx + 1,
+                MAX_JSONL_LINE_BYTES
+            );
+            continue;
+        }
+        entries += 1;
+        if entries > MAX_JSONL_ENTRIES {
+            eprintln!(
+                "security_boundary: JSONL entry limit exceeded (max {})",
+                MAX_JSONL_ENTRIES
+            );
+            return Err(anyhow!("JSONL entry limit exceeded"));
+        }
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!(
+                    "security_boundary: JSONL parse error on line {}: {}",
+                    idx + 1,
+                    err
+                );
+                continue;
+            }
+        };
         let path = v.get("path").and_then(|v| v.as_str()).unwrap_or("unknown");
         let url = v.get("url").and_then(|v| v.as_str()).unwrap_or("");
         if url.is_empty() {
+            continue;
+        }
+        if url.len() > MAX_CAMPAIGN_INTENT_LEN || !is_printable_ascii(url) {
+            eprintln!(
+                "security_boundary: JSONL url rejected (len={}, printable_ascii={})",
+                url.len(),
+                is_printable_ascii(url)
+            );
             continue;
         }
         let domain = sis_pdf_core::campaign::extract_domain(url);
@@ -1254,13 +1372,31 @@ fn string_bytes(s: &sis_pdf_pdf::object::PdfStr<'_>) -> Vec<u8> {
 fn preview_bytes(bytes: &[u8]) -> String {
     let mut s = String::new();
     for &b in bytes.iter().take(256) {
-        if b.is_ascii_graphic() || b == b' ' {
+        if (0x20..=0x7E).contains(&b) {
             s.push(b as char);
         } else {
             s.push('.');
         }
     }
     s
+}
+
+fn escape_terminal(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch.is_ascii_control() && ch != '\n' && ch != '\t' {
+            out.push_str(&format!("\\x{:02X}", ch as u32));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn is_printable_ascii(input: &str) -> bool {
+    input
+        .bytes()
+        .all(|b| (0x20..=0x7E).contains(&b))
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -1273,6 +1409,12 @@ fn sha256_hex(data: &[u8]) -> String {
 fn read_text_with_limit(path: &std::path::Path, max_bytes: u64) -> Result<String> {
     if let Ok(meta) = fs::metadata(path) {
         if meta.len() > max_bytes {
+            eprintln!(
+                "security_boundary: read rejected for {} ({} bytes exceeds limit {})",
+                path.display(),
+                meta.len(),
+                max_bytes
+            );
             return Err(anyhow!(
                 "file {} exceeds {} bytes",
                 path.display(),

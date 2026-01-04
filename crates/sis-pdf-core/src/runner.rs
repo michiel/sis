@@ -8,6 +8,8 @@ use sis_pdf_pdf::{parse_pdf, ObjectGraph, ParseOptions};
 use sis_pdf_pdf::object::{PdfAtom, PdfDict, PdfObj};
 use crate::graph_walk::{build_adjacency, reachable_from, ObjRef};
 
+const PARALLEL_DETECTOR_THREADS: usize = 4;
+
 pub fn run_scan_with_detectors(
     bytes: &[u8],
     options: ScanOptions,
@@ -45,20 +47,44 @@ pub fn run_scan_with_detectors(
 
     let mut findings: Vec<Finding> = if ctx.options.parallel {
         use rayon::prelude::*;
-        detectors
-            .par_iter()
-            .filter(|d| {
-                if ctx.options.fast {
-                    d.cost() == crate::detect::Cost::Cheap
-                } else {
-                    ctx.options.deep || d.cost() != crate::detect::Cost::Expensive
-                }
-            })
-            .map(|d| d.run(&ctx))
-            .collect::<Result<Vec<_>, _>>()?
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(PARALLEL_DETECTOR_THREADS)
+            .build();
+        match pool {
+            Ok(pool) => pool.install(|| {
+                detectors
+                    .par_iter()
+                    .filter(|d| {
+                        if ctx.options.fast {
+                            d.cost() == crate::detect::Cost::Cheap
+                        } else {
+                            ctx.options.deep || d.cost() != crate::detect::Cost::Expensive
+                        }
+                    })
+                    .map(|d| d.run(&ctx))
+                    .collect::<Result<Vec<_>, _>>()
+            })?
             .into_iter()
             .flatten()
-            .collect()
+            .collect(),
+            Err(err) => {
+                eprintln!(
+                    "security_boundary: failed to build parallel detector pool; falling back to sequential ({})",
+                    err
+                );
+                let mut out = Vec::new();
+                for d in detectors {
+                    if ctx.options.fast && d.cost() != crate::detect::Cost::Cheap {
+                        continue;
+                    }
+                    if !ctx.options.fast && !ctx.options.deep && d.cost() == crate::detect::Cost::Expensive {
+                        continue;
+                    }
+                    out.extend(d.run(&ctx)?);
+                }
+                out
+            }
+        }
     } else {
         let mut out = Vec::new();
         for d in detectors {
@@ -74,6 +100,11 @@ pub fn run_scan_with_detectors(
     };
 
     if ctx.graph.objects.len() > ctx.options.max_objects {
+        eprintln!(
+            "security_boundary: object count {} exceeded max_objects {}",
+            ctx.graph.objects.len(),
+            ctx.options.max_objects
+        );
         let evidence = ctx
             .graph
             .objects
@@ -325,7 +356,6 @@ fn filter_graph_by_refs<'a>(
         trailers: graph.trailers.clone(),
         startxrefs: graph.startxrefs.clone(),
         deviations: graph.deviations.clone(),
-        decoded_buffers: graph.decoded_buffers.clone(),
     }
 }
 

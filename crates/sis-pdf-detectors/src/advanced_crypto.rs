@@ -105,9 +105,31 @@ impl Detector for AdvancedCryptoDetector {
 fn trailer_encrypt_dict<'a>(
     ctx: &'a sis_pdf_core::scan::ScanContext<'a>,
 ) -> Option<PdfDict<'a>> {
-    let trailer = ctx.graph.trailers.last()?;
-    let (_, enc) = trailer.get_first(b"/Encrypt")?;
-    resolve_dict(&ctx.graph, enc)
+    if let Some(trailer) = ctx.graph.trailers.last() {
+        if let Some((_, enc)) = trailer.get_first(b"/Encrypt") {
+            return resolve_dict(&ctx.graph, enc);
+        }
+    }
+    fallback_encrypt_dict(ctx)
+}
+
+fn fallback_encrypt_dict<'a>(
+    ctx: &'a sis_pdf_core::scan::ScanContext<'a>,
+) -> Option<PdfDict<'a>> {
+    let entry = ctx.graph.objects.iter().find(|entry| {
+        entry_dict(entry)
+            .map(|d| {
+                d.has_name(b"/Filter", b"/Standard")
+                    && (d.get_first(b"/V").is_some() || d.get_first(b"/R").is_some())
+            })
+            .unwrap_or(false)
+    })?;
+    eprintln!("security_boundary: using fallback /Encrypt dict from object graph");
+    match &entry.atom {
+        PdfAtom::Dict(d) => Some(d.clone()),
+        PdfAtom::Stream(st) => Some(st.dict.clone()),
+        _ => None,
+    }
 }
 
 fn resolve_dict<'a>(graph: &'a sis_pdf_pdf::ObjectGraph<'a>, obj: &PdfObj<'a>) -> Option<PdfDict<'a>> {

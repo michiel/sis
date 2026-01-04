@@ -34,7 +34,8 @@ impl Detector for PageTreeManipulationDetector {
         let mut visited = HashSet::new();
         let mut stack = Vec::new();
 
-        if let Some(root) = root_pages_obj(ctx) {
+        let root = root_pages_obj(ctx).or_else(|| fallback_pages_root(ctx));
+        if let Some(root) = root {
             detect_cycles(ctx, &root, &mut visited, &mut stack, &mut findings);
             let actual = count_pages(ctx, &root, &mut HashSet::new());
             let declared = declared_page_count(ctx, &root);
@@ -100,6 +101,19 @@ impl Detector for PageTreeManipulationDetector {
         }
         Ok(findings)
     }
+}
+
+fn fallback_pages_root<'a>(ctx: &'a sis_pdf_core::scan::ScanContext<'a>) -> Option<PdfObj<'a>> {
+    let entry = ctx.graph.objects.iter().find(|entry| {
+        entry_dict(entry)
+            .map(|d| d.has_name(b"/Type", b"/Pages"))
+            .unwrap_or(false)
+    })?;
+    eprintln!("security_boundary: using fallback /Pages root from object graph");
+    Some(PdfObj {
+        span: entry.body_span,
+        atom: entry.atom.clone(),
+    })
 }
 
 fn root_pages_obj<'a>(ctx: &'a sis_pdf_core::scan::ScanContext<'a>) -> Option<PdfObj<'a>> {

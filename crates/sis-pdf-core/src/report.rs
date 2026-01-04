@@ -109,11 +109,11 @@ pub fn print_human(report: &Report) {
     );
     println!();
     for (surface, kinds) in &report.grouped {
-        println!("{}", surface);
+        println!("{}", escape_control(surface));
         for (kind, ids) in kinds {
-            println!("  {} ({})", kind, ids.len());
+            println!("  {} ({})", escape_control(kind), ids.len());
             for id in ids {
-                println!("    - {}", id);
+                println!("    - {}", escape_control(id));
             }
         }
     }
@@ -130,7 +130,7 @@ pub fn print_human(report: &Report) {
                 printed = true;
             }
             println!();
-            println!("{} — {}", f.id, f.title);
+            println!("{} — {}", escape_control(&f.id), escape_control(&f.title));
             println!("```");
             println!("{}", escape_control(payload));
             println!("```");
@@ -154,6 +154,21 @@ fn escape_control(input: &str) -> String {
             out.push_str(&format!("\\x{:02X}", ch as u32));
         } else {
             out.push(ch);
+        }
+    }
+    out
+}
+
+fn escape_markdown(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' | '`' | '*' | '_' | '{' | '}' | '[' | ']' | '(' | ')' | '#' | '+' | '-' | '.'
+            | '!' | '|' | '>' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
         }
     }
     out
@@ -534,7 +549,7 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
     ));
 
     if let Some(path) = input_path {
-        out.push_str(&format!("- Input: `{}`\n\n", path));
+        out.push_str(&format!("- Input: `{}`\n\n", escape_markdown(path)));
     }
 
     if let Some(summary) = &report.intent_summary {
@@ -543,7 +558,7 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             for bucket in &summary.buckets {
                 out.push_str(&format!(
                     "- {}: score={} confidence={:?} findings={}\n",
-                    format!("{:?}", bucket.bucket),
+                    escape_markdown(&format!("{:?}", bucket.bucket)),
                     bucket.score,
                     bucket.confidence,
                     bucket.findings.len()
@@ -566,7 +581,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
                     out.push_str("**Classification signals**\n\n");
                     for (label, weight) in ranked.into_iter().take(8) {
-                        out.push_str(&format!("- {} (weight {})\n", label, weight));
+                        out.push_str(&format!(
+                            "- {} (weight {})\n",
+                            escape_markdown(&label),
+                            weight
+                        ));
                     }
                     out.push('\n');
                 }
@@ -578,9 +597,17 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                     }
                     if let Some(f) = report.findings.iter().find(|f| &f.id == fid) {
                         if let Some(chain) = render_action_chain(f) {
-                            out.push_str(&format!("- {}: {}\n", f.id, chain));
+                            out.push_str(&format!(
+                                "- {}: {}\n",
+                                escape_markdown(&f.id),
+                                escape_markdown(&chain)
+                            ));
                         } else {
-                            out.push_str(&format!("- {}: {}\n", f.id, f.title));
+                            out.push_str(&format!(
+                                "- {}: {}\n",
+                                escape_markdown(&f.id),
+                                escape_markdown(&f.title)
+                            ));
                         }
                         shown += 1;
                     }
@@ -606,7 +633,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                                 .unwrap_or_else(|| "origin=-".into());
                             out.push_str(&format!(
                                 "- {} source={:?} offset={} length={} {}\n",
-                                f.id, ev.source, ev.offset, ev.length, origin
+                                escape_markdown(&f.id),
+                                ev.source,
+                                ev.offset,
+                                ev.length,
+                                escape_markdown(&origin)
                             ));
                             ev_count += 1;
                         }
@@ -626,10 +657,10 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             for pattern in &summary.patterns {
                 out.push_str(&format!(
                     "- {} (severity {:?}) kinds=[{}] objects=[{}]\n",
-                    pattern.summary,
+                    escape_markdown(&pattern.summary),
                     pattern.severity,
-                    pattern.kinds.join(", "),
-                    pattern.objects.join(", ")
+                    escape_markdown(&pattern.kinds.join(", ")),
+                    escape_markdown(&pattern.objects.join(", "))
                 ));
             }
             out.push('\n');
@@ -641,7 +672,8 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         for threat in &report.future_threats {
             out.push_str(&format!(
                 "- {} (confidence {:.2})\n",
-                threat.label, threat.confidence
+                escape_markdown(&threat.label),
+                threat.confidence
             ));
         }
         out.push('\n');
@@ -651,7 +683,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         out.push_str("## Network Intents\n\n");
         for intent in &report.network_intents {
             let domain = intent.domain.as_deref().unwrap_or("-");
-            out.push_str(&format!("- {} (domain {})\n", intent.url, domain));
+            out.push_str(&format!(
+                "- {} (domain {})\n",
+                escape_markdown(&intent.url),
+                escape_markdown(domain)
+            ));
         }
         out.push('\n');
     }
@@ -659,7 +695,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
     if !report.response_rules.is_empty() {
         out.push_str("## Response Rules\n\n");
         for rule in &report.response_rules {
-            out.push_str(&format!("- {} (tags: {})\n", rule.name, rule.tags.join(", ")));
+            out.push_str(&format!(
+                "- {} (tags: {})\n",
+                escape_markdown(&rule.name),
+                escape_markdown(&rule.tags.join(", "))
+            ));
         }
         out.push('\n');
     }
@@ -670,23 +710,33 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         for chain in &report.chains {
             out.push_str(&format!(
                 "### {} (score {:.2})\n\n",
-                chain.id, chain.score
+                escape_markdown(&chain.id),
+                chain.score
             ));
-            out.push_str(&format!("- Path: {}\n", chain.path));
+            out.push_str(&format!(
+                "- Path: {}\n",
+                escape_markdown(&chain.path)
+            ));
             if let Some(trigger) = &chain.trigger {
-                out.push_str(&format!("- Trigger: `{}`\n", trigger));
+                out.push_str(&format!("- Trigger: `{}`\n", escape_markdown(trigger)));
             }
             if let Some(action) = &chain.action {
-                out.push_str(&format!("- Action: `{}`\n", action));
+                out.push_str(&format!("- Action: `{}`\n", escape_markdown(action)));
             }
             if let Some(payload) = &chain.payload {
-                out.push_str(&format!("- Payload: `{}`\n", payload));
+                out.push_str(&format!("- Payload: `{}`\n", escape_markdown(payload)));
             }
             if let Some(target) = chain.notes.get("action.target") {
-                out.push_str(&format!("- Action target: {}\n", target));
+                out.push_str(&format!(
+                    "- Action target: {}\n",
+                    escape_markdown(target)
+                ));
             }
             if !chain.reasons.is_empty() {
-                out.push_str(&format!("- Score reasons: {}\n", chain.reasons.join("; ")));
+                out.push_str(&format!(
+                    "- Score reasons: {}\n",
+                    escape_markdown(&chain.reasons.join("; "))
+                ));
             }
             out.push('\n');
             out.push_str("**Findings in chain**\n\n");
@@ -697,13 +747,16 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                     if let Some(f) = report.findings.iter().find(|f| &f.id == fid) {
                         out.push_str(&format!(
                             "- {}: {} (surface `{:?}`) [{}]\n",
-                            f.id,
-                            f.title,
+                            escape_markdown(&f.id),
+                            escape_markdown(&f.title),
                             f.surface,
-                            render_finding_context(f)
+                            escape_markdown(&render_finding_context(f))
                         ));
                     } else {
-                        out.push_str(&format!("- {}: (missing finding)\n", fid));
+                        out.push_str(&format!(
+                            "- {}: (missing finding)\n",
+                            escape_markdown(fid)
+                        ));
                     }
                 }
                 out.push('\n');
@@ -712,7 +765,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             if !notes.is_empty() {
                 out.push_str("**Chain notes**\n\n");
                 for (k, v) in notes.into_iter().take(12) {
-                    out.push_str(&format!("- {}: {}\n", k, v));
+                    out.push_str(&format!(
+                        "- {}: {}\n",
+                        escape_markdown(&k),
+                        escape_markdown(&v)
+                    ));
                 }
                 out.push('\n');
             }
@@ -739,10 +796,20 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                         .unwrap_or_else(|| "-".into());
                     out.push_str(&format!(
                         "- {} ({}) -> {} ({}) via {}\n",
-                        edge.from, from_title, edge.to, to_title, edge.reason
+                        escape_markdown(&edge.from),
+                        escape_markdown(from_title),
+                        escape_markdown(&edge.to),
+                        escape_markdown(to_title),
+                        escape_markdown(&edge.reason)
                     ));
-                    out.push_str(&format!("  - left: {}\n", from_ctx));
-                    out.push_str(&format!("  - right: {}\n", to_ctx));
+                    out.push_str(&format!(
+                        "  - left: {}\n",
+                        escape_markdown(&from_ctx)
+                    ));
+                    out.push_str(&format!(
+                        "  - right: {}\n",
+                        escape_markdown(&to_ctx)
+                    ));
                 }
                 out.push('\n');
             }
@@ -761,7 +828,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             strict_findings.len()
         ));
         for f in &strict_findings {
-            out.push_str(&format!("- {}: {}\n", f.id, f.title));
+            out.push_str(&format!(
+                "- {}: {}\n",
+                escape_markdown(&f.id),
+                escape_markdown(&f.title)
+            ));
         }
         out.push('\n');
     }
@@ -782,34 +853,48 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             } else {
                 rule.tags.join(", ")
             };
-            out.push_str(&format!("- {} (tags: {})\n", rule.name, tags));
+            out.push_str(&format!(
+                "- {} (tags: {})\n",
+                escape_markdown(&rule.name),
+                escape_markdown(&tags)
+            ));
         }
         out.push('\n');
     }
 
     out.push_str("## Findings\n\n");
     for f in &report.findings {
-        out.push_str(&format!("### {} — {}\n\n", f.id, f.title));
+        out.push_str(&format!(
+            "### {} — {}\n\n",
+            escape_markdown(&f.id),
+            escape_markdown(&f.title)
+        ));
         out.push_str(&format!("- Surface: `{:?}`\n", f.surface));
-        out.push_str(&format!("- Kind: `{}`\n", f.kind));
+        out.push_str(&format!("- Kind: `{}`\n", escape_markdown(&f.kind)));
         out.push_str(&format!("- Severity: `{:?}`\n", f.severity));
         out.push_str(&format!("- Confidence: `{:?}`\n", f.confidence));
         if !f.objects.is_empty() {
-            out.push_str(&format!("- Objects: {}\n", f.objects.join(", ")));
+            out.push_str(&format!(
+                "- Objects: {}\n",
+                escape_markdown(&f.objects.join(", "))
+            ));
         }
         if let Some(page) = f.meta.get("page.number") {
-            out.push_str(&format!("- Page: {}\n", page));
+            out.push_str(&format!("- Page: {}\n", escape_markdown(page)));
         }
         if let Some(coord) = f.meta.get("content.coord") {
-            out.push_str(&format!("- Coord: {}\n", coord));
+            out.push_str(&format!("- Coord: {}\n", escape_markdown(coord)));
         }
         out.push_str("\n**Description**\n\n");
-        out.push_str(&format!("{}\n\n", f.description));
+        out.push_str(&format!("{}\n\n", escape_markdown(&f.description)));
         if let Some(s) = f.meta.get("action.s") {
             out.push_str("**Action Details**\n\n");
-            out.push_str(&format!("- Action type: `{}`\n", s));
+            out.push_str(&format!(
+                "- Action type: `{}`\n",
+                escape_markdown(s)
+            ));
             if let Some(t) = f.meta.get("action.target") {
-                out.push_str(&format!("- Target: {}\n", t));
+                out.push_str(&format!("- Target: {}\n", escape_markdown(t)));
             }
             out.push('\n');
         }
@@ -825,11 +910,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         }
         if let Some(chain) = render_action_chain(f) {
             out.push_str("**Action Chain**\n\n");
-            out.push_str(&format!("{}\n\n", chain));
+            out.push_str(&format!("{}\n\n", escape_markdown(&chain)));
         }
         if let Some(behaviour) = render_payload_behaviour(f) {
             out.push_str("**Payload Behaviour**\n\n");
-            out.push_str(&format!("{}\n\n", behaviour));
+            out.push_str(&format!("{}\n\n", escape_markdown(&behaviour)));
         }
         let impact = f
             .meta
@@ -837,24 +922,33 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             .cloned()
             .unwrap_or_else(|| impact_for_finding(f));
         out.push_str("**Impact**\n\n");
-        out.push_str(&format!("{}\n\n", impact));
+        out.push_str(&format!("{}\n\n", escape_markdown(&impact)));
         if let Some(y) = &f.yara {
             out.push_str("**YARA**\n\n");
-            out.push_str(&format!("- Rule: `{}`\n", y.rule_name));
+            out.push_str(&format!(
+                "- Rule: `{}`\n",
+                escape_markdown(&y.rule_name)
+            ));
             if !y.tags.is_empty() {
-                out.push_str(&format!("- Tags: {}\n", y.tags.join(", ")));
+                out.push_str(&format!(
+                    "- Tags: {}\n",
+                    escape_markdown(&y.tags.join(", "))
+                ));
             }
             if !y.strings.is_empty() {
-                out.push_str(&format!("- Strings: {}\n", y.strings.join(", ")));
+                out.push_str(&format!(
+                    "- Strings: {}\n",
+                    escape_markdown(&y.strings.join(", "))
+                ));
             }
             if let Some(ns) = &y.namespace {
-                out.push_str(&format!("- Namespace: {}\n", ns));
+                out.push_str(&format!("- Namespace: {}\n", escape_markdown(ns)));
             }
             out.push('\n');
         }
         if let Some(rem) = &f.remediation {
             out.push_str("**Remediation**\n\n");
-            out.push_str(&format!("{}\n\n", rem));
+            out.push_str(&format!("{}\n\n", escape_markdown(rem)));
         }
         if !f.evidence.is_empty() {
             out.push_str("**Evidence**\n\n");
@@ -865,10 +959,13 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                     .unwrap_or_else(|| "origin=-".into());
                 out.push_str(&format!(
                     "- source={:?} offset={} length={} {}",
-                    ev.source, ev.offset, ev.length, origin
+                    ev.source,
+                    ev.offset,
+                    ev.length,
+                    escape_markdown(&origin)
                 ));
                 if let Some(note) = &ev.note {
-                    out.push_str(&format!(" note={}", note));
+                    out.push_str(&format!(" note={}", escape_markdown(note)));
                 }
                 out.push('\n');
             }
@@ -893,7 +990,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                 out.push_str("| Key | Value |\n");
                 out.push_str("| --- | ----- |\n");
                 for (k, v) in other_meta {
-                    out.push_str(&format!("| {} | {} |\n", k, escape_control(v)));
+                    out.push_str(&format!(
+                        "| {} | {} |\n",
+                        escape_markdown(k),
+                        escape_markdown(&escape_control(v))
+                    ));
                 }
                 out.push('\n');
             }
@@ -902,7 +1003,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                 out.push_str("| Key | Value |\n");
                 out.push_str("| --- | ----- |\n");
                 for (k, v) in js_meta {
-                    out.push_str(&format!("| {} | {} |\n", k, escape_control(v)));
+                    out.push_str(&format!(
+                        "| {} | {} |\n",
+                        escape_markdown(k),
+                        escape_markdown(&escape_control(v))
+                    ));
                 }
                 out.push('\n');
             }
@@ -931,7 +1036,7 @@ pub fn render_batch_markdown(report: &BatchReport) -> String {
     for entry in &report.entries {
         out.push_str(&format!(
             "- {}: total={} high={} medium={} low={} info={} duration={}ms\n",
-            entry.path,
+            escape_markdown(&entry.path),
             entry.summary.total,
             entry.summary.high,
             entry.summary.medium,

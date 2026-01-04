@@ -43,7 +43,6 @@ pub struct ObjectGraph<'a> {
     pub trailers: Vec<PdfDict<'a>>,
     pub startxrefs: Vec<u64>,
     pub deviations: Vec<Deviation>,
-    pub decoded_buffers: Vec<Vec<u8>>,
 }
 
 impl<'a> ObjectGraph<'a> {
@@ -84,9 +83,8 @@ pub fn parse_pdf(bytes: &[u8], options: ParseOptions) -> Result<ObjectGraph<'_>>
     }
     let (mut objects, deviations) =
         scan_indirect_objects(bytes, options.strict, options.max_objects);
-    let mut decoded_buffers = Vec::new();
     if options.deep {
-        let ObjStmExpansion { objects: mut extra, buffers } = expand_objstm(
+        let ObjStmExpansion { objects: mut extra } = expand_objstm(
             bytes,
             &objects,
             options.strict,
@@ -95,7 +93,6 @@ pub fn parse_pdf(bytes: &[u8], options: ParseOptions) -> Result<ObjectGraph<'_>>
             options.max_objstm_total_bytes,
         );
         objects.append(&mut extra);
-        decoded_buffers = buffers;
     }
     let mut index: HashMap<(u32, u16), Vec<usize>> = HashMap::new();
     for (i, o) in objects.iter().enumerate() {
@@ -108,7 +105,6 @@ pub fn parse_pdf(bytes: &[u8], options: ParseOptions) -> Result<ObjectGraph<'_>>
         trailers,
         startxrefs,
         deviations,
-        decoded_buffers,
     })
 }
 

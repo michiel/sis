@@ -7,6 +7,8 @@ use sis_pdf_pdf::object::PdfAtom;
 
 pub struct StrictParseDeviationDetector;
 
+const DEVIATION_CLUSTER_THRESHOLD: usize = 50;
+
 impl Detector for StrictParseDeviationDetector {
     fn id(&self) -> &'static str {
         "strict_parse_deviation"
@@ -103,6 +105,60 @@ impl Detector for StrictParseDeviationDetector {
             }
         }
         if ctx.options.strict {
+            if ctx.graph.deviations.len() > DEVIATION_CLUSTER_THRESHOLD {
+                eprintln!(
+                    "security_boundary: deviation cluster detected (count={})",
+                    ctx.graph.deviations.len()
+                );
+                findings.push(Finding {
+                    id: String::new(),
+                    surface: self.surface(),
+                    kind: "parser_deviation_cluster".into(),
+                    severity: Severity::Medium,
+                    confidence: Confidence::Probable,
+                    title: "High deviation count".into(),
+                    description: format!(
+                        "Strict parser recorded {} deviations, indicating potential parser confusion.",
+                        ctx.graph.deviations.len()
+                    ),
+                    objects: vec!["parser".into()],
+                    evidence: Vec::new(),
+                    remediation: Some("Treat as evasion attempt; inspect malformed structure.".into()),
+                    meta: Default::default(),
+                    yara: None,
+                });
+            }
+            let mut action_object = None;
+            for entry in &ctx.graph.objects {
+                if let Some(dict) = crate::entry_dict(entry) {
+                    if dict.has_name(b"/S", b"/JavaScript")
+                        || dict.get_first(b"/JS").is_some()
+                        || dict.get_first(b"/Action").is_some()
+                        || dict.get_first(b"/OpenAction").is_some()
+                    {
+                        action_object = Some(entry);
+                        break;
+                    }
+                }
+            }
+            if action_object.is_some() && !ctx.graph.deviations.is_empty() {
+                eprintln!("security_boundary: deviations present in JS/Action context");
+                findings.push(Finding {
+                    id: String::new(),
+                    surface: self.surface(),
+                    kind: "parser_deviation_in_action_context".into(),
+                    severity: Severity::High,
+                    confidence: Confidence::Probable,
+                    title: "Parser deviations with action context".into(),
+                    description:
+                        "Parser deviations present alongside JavaScript or Action objects.".into(),
+                    objects: vec!["parser".into()],
+                    evidence: Vec::new(),
+                    remediation: Some("Validate with alternate parser and inspect action payloads.".into()),
+                    meta: Default::default(),
+                    yara: None,
+                });
+            }
             for dev in &ctx.graph.deviations {
                 let mut description = format!("Strict parser recorded a deviation: {}.", dev.kind);
                 if let Some(note) = &dev.note {

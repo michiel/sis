@@ -6,6 +6,13 @@ use serde::Deserialize;
 
 use crate::scan::ScanOptions;
 
+const MAX_CONFIG_BYTES: u64 = 1 * 1024 * 1024;
+const MAX_OBJECTS: usize = 10_000_000;
+const MAX_DECODE_BYTES: usize = 512 * 1024 * 1024;
+const MAX_TOTAL_DECODE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const MAX_RECURSION_DEPTH: usize = 512;
+const MAX_FOCUS_DEPTH: usize = 64;
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub profiles: Option<HashMap<String, Profile>>,
@@ -38,6 +45,15 @@ pub struct ScanConfig {
 
 impl Config {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
+        if let Ok(meta) = fs::metadata(path) {
+            if meta.len() > MAX_CONFIG_BYTES {
+                return Err(anyhow::anyhow!(
+                    "config {} exceeds {} bytes",
+                    path.display(),
+                    MAX_CONFIG_BYTES
+                ));
+            }
+        }
         let data = fs::read_to_string(path)?;
         let cfg = serde_yaml::from_str::<Config>(&data)?;
         Ok(cfg)
@@ -64,10 +80,32 @@ fn apply_scan(scan: &ScanConfig, opts: &mut ScanOptions) {
         opts.deep = v;
     }
     if let Some(v) = scan.max_decode_bytes {
-        opts.max_decode_bytes = v;
+        if v == 0 || v > MAX_DECODE_BYTES {
+            eprintln!(
+                "security_boundary: invalid max_decode_bytes {} (limit {})",
+                v, MAX_DECODE_BYTES
+            );
+        } else {
+            eprintln!(
+                "security_boundary: config override max_decode_bytes {}",
+                v
+            );
+            opts.max_decode_bytes = v;
+        }
     }
     if let Some(v) = scan.max_total_decoded_bytes {
-        opts.max_total_decoded_bytes = v;
+        if v == 0 || v > MAX_TOTAL_DECODE_BYTES {
+            eprintln!(
+                "security_boundary: invalid max_total_decoded_bytes {} (limit {})",
+                v, MAX_TOTAL_DECODE_BYTES
+            );
+        } else {
+            eprintln!(
+                "security_boundary: config override max_total_decoded_bytes {}",
+                v
+            );
+            opts.max_total_decoded_bytes = v;
+        }
     }
     if let Some(v) = scan.recover_xref {
         opts.recover_xref = v;
@@ -79,10 +117,32 @@ fn apply_scan(scan: &ScanConfig, opts: &mut ScanOptions) {
         opts.diff_parser = v;
     }
     if let Some(v) = scan.max_objects {
-        opts.max_objects = v;
+        if v == 0 || v > MAX_OBJECTS {
+            eprintln!(
+                "security_boundary: invalid max_objects {} (limit {})",
+                v, MAX_OBJECTS
+            );
+        } else {
+            eprintln!(
+                "security_boundary: config override max_objects {}",
+                v
+            );
+            opts.max_objects = v;
+        }
     }
     if let Some(v) = scan.max_recursion_depth {
-        opts.max_recursion_depth = v;
+        if v == 0 || v > MAX_RECURSION_DEPTH {
+            eprintln!(
+                "security_boundary: invalid max_recursion_depth {} (limit {})",
+                v, MAX_RECURSION_DEPTH
+            );
+        } else {
+            eprintln!(
+                "security_boundary: config override max_recursion_depth {}",
+                v
+            );
+            opts.max_recursion_depth = v;
+        }
     }
     if let Some(v) = scan.fast {
         opts.fast = v;
@@ -91,7 +151,14 @@ fn apply_scan(scan: &ScanConfig, opts: &mut ScanOptions) {
         opts.focus_trigger = Some(v.clone());
     }
     if let Some(v) = scan.focus_depth {
-        opts.focus_depth = v;
+        if v > MAX_FOCUS_DEPTH {
+            eprintln!(
+                "security_boundary: invalid focus_depth {} (limit {})",
+                v, MAX_FOCUS_DEPTH
+            );
+        } else {
+            opts.focus_depth = v;
+        }
     }
     if let Some(v) = &scan.yara_scope {
         opts.yara_scope = Some(v.clone());
@@ -101,12 +168,23 @@ fn apply_scan(scan: &ScanConfig, opts: &mut ScanOptions) {
     }
     if let Some(model) = &scan.ml_model {
         let threshold = scan.ml_threshold.unwrap_or(0.9);
+        if !(0.0..=1.0).contains(&threshold) {
+            eprintln!(
+                "security_boundary: invalid ml_threshold {} (expected 0.0..=1.0)",
+                threshold
+            );
+        }
         opts.ml_config = Some(crate::ml::MlConfig {
             model_path: model.into(),
             threshold,
         });
     } else if let Some(v) = scan.ml_threshold {
-        if let Some(cfg) = &mut opts.ml_config {
+        if !(0.0..=1.0).contains(&v) {
+            eprintln!(
+                "security_boundary: invalid ml_threshold {} (expected 0.0..=1.0)",
+                v
+            );
+        } else if let Some(cfg) = &mut opts.ml_config {
             cfg.threshold = v;
         }
     }

@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use boa_engine::object::ObjectInitializer;
@@ -14,6 +16,9 @@ use sis_pdf_core::scan::span_to_evidence;
 use crate::{entry_dict, resolve_payload};
 
 pub struct JavaScriptSandboxDetector;
+
+const JS_WALLCLOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const JS_WALLCLOCK_WARN: Duration = Duration::from_secs(1);
 
 impl Detector for JavaScriptSandboxDetector {
     fn id(&self) -> &'static str {
@@ -45,17 +50,45 @@ impl Detector for JavaScriptSandboxDetector {
             if info.bytes.len() > 256 * 1024 {
                 continue;
             }
-            let log = Rc::new(RefCell::new(Vec::<String>::new()));
-            let mut context = Context::default();
-            let mut limits = RuntimeLimits::default();
-            limits.set_loop_iteration_limit(100_000);
-            limits.set_recursion_limit(128);
-            limits.set_stack_size_limit(512 * 1024);
-            context.set_runtime_limits(limits);
-            register_app(&mut context, log.clone());
-            let source = Source::from_bytes(&info.bytes);
-            let _ = context.eval(source);
-            let calls = log.borrow().clone();
+            let bytes = info.bytes.clone();
+            let (tx, rx) = mpsc::channel();
+            let start = Instant::now();
+            std::thread::spawn(move || {
+                let log = Rc::new(RefCell::new(Vec::<String>::new()));
+                let mut context = Context::default();
+                let mut limits = RuntimeLimits::default();
+                limits.set_loop_iteration_limit(100_000);
+                limits.set_recursion_limit(128);
+                limits.set_stack_size_limit(512 * 1024);
+                context.set_runtime_limits(limits);
+                register_app(&mut context, log.clone());
+                let source = Source::from_bytes(&bytes);
+                let _ = context.eval(source);
+                let calls = log.borrow().clone();
+                let _ = tx.send(calls);
+            });
+            let calls = match rx.recv_timeout(JS_WALLCLOCK_TIMEOUT) {
+                Ok(calls) => calls,
+                Err(RecvTimeoutError::Timeout) => {
+                    eprintln!(
+                        "security_boundary: JS sandbox timed out after {:?} (obj {} {})",
+                        JS_WALLCLOCK_TIMEOUT,
+                        entry.obj,
+                        entry.gen
+                    );
+                    continue;
+                }
+                Err(_) => continue,
+            };
+            let elapsed = start.elapsed();
+            if elapsed > JS_WALLCLOCK_WARN {
+                eprintln!(
+                    "security_boundary: JS sandbox slow execution {:?} (obj {} {})",
+                    elapsed,
+                    entry.obj,
+                    entry.gen
+                );
+            }
             if calls.is_empty() {
                 continue;
             }
@@ -64,6 +97,11 @@ impl Detector for JavaScriptSandboxDetector {
             let has_network = calls.iter().any(|c| matches!(c.as_str(), "launchURL" | "getURL" | "submitForm"));
             let has_file = calls.iter().any(|c| matches!(c.as_str(), "browseForDoc" | "saveAs" | "exportDataObject"));
             if has_network {
+                eprintln!(
+                    "security_boundary: JS sandbox network-capable API invoked (obj {} {})",
+                    entry.obj,
+                    entry.gen
+                );
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),
@@ -80,6 +118,11 @@ impl Detector for JavaScriptSandboxDetector {
                 });
             }
             if has_file {
+                eprintln!(
+                    "security_boundary: JS sandbox file-capable API invoked (obj {} {})",
+                    entry.obj,
+                    entry.gen
+                );
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),

@@ -11,6 +11,9 @@ pub struct Parser<'a> {
     deviations: Vec<Deviation>,
 }
 
+const MAX_ARRAY_ELEMENTS: usize = 100_000;
+const MAX_DICT_ENTRIES: usize = 10_000;
+
 impl<'a> Parser<'a> {
     pub fn new(bytes: &'a [u8], pos: usize, strict: bool) -> Self {
         Self {
@@ -42,6 +45,10 @@ impl<'a> Parser<'a> {
 
     fn record_deviation(&mut self, kind: &str, span: Span, note: Option<String>) {
         if self.strict {
+            eprintln!(
+                "security_boundary: strict parser deviation kind={} span={}..{}",
+                kind, span.start, span.end
+            );
             self.deviations.push(Deviation {
                 kind: kind.to_string(),
                 span,
@@ -190,6 +197,21 @@ impl<'a> Parser<'a> {
                 );
                 break;
             }
+            if out.len() >= MAX_ARRAY_ELEMENTS {
+                self.record_deviation(
+                    "array_size_limit_exceeded",
+                    Span {
+                        start: self.cur.pos as u64,
+                        end: self.cur.pos as u64,
+                    },
+                    Some(format!("max_elements={}", MAX_ARRAY_ELEMENTS)),
+                );
+                eprintln!(
+                    "security_boundary: array size limit exceeded (max={})",
+                    MAX_ARRAY_ELEMENTS
+                );
+                return Err(anyhow!("array size limit exceeded"));
+            }
             out.push(self.parse_object()?);
         }
         Ok(out)
@@ -233,6 +255,21 @@ impl<'a> Parser<'a> {
                         atom: PdfAtom::Null,
                     },
                 ));
+            }
+            if entries.len() >= MAX_DICT_ENTRIES {
+                self.record_deviation(
+                    "dict_size_limit_exceeded",
+                    Span {
+                        start: start as u64,
+                        end: self.cur.pos as u64,
+                    },
+                    Some(format!("max_entries={}", MAX_DICT_ENTRIES)),
+                );
+                eprintln!(
+                    "security_boundary: dict size limit exceeded (max={})",
+                    MAX_DICT_ENTRIES
+                );
+                return Err(anyhow!("dict size limit exceeded"));
             }
         }
         let end = self.cur.pos;
@@ -287,7 +324,7 @@ impl<'a> Parser<'a> {
                 start: start as u64,
                 end: raw_end as u64,
             },
-            raw,
+            raw: std::borrow::Cow::Borrowed(raw),
             decoded,
         })
     }
@@ -379,7 +416,7 @@ impl<'a> Parser<'a> {
                 start: start as u64,
                 end: end as u64,
             },
-            raw: &self.cur.bytes[start..end],
+            raw: std::borrow::Cow::Borrowed(&self.cur.bytes[start..end]),
             decoded: out,
         })
     }
@@ -449,7 +486,7 @@ impl<'a> Parser<'a> {
                 start: start as u64,
                 end: end as u64,
             },
-            raw: &self.cur.bytes[start..end],
+            raw: std::borrow::Cow::Borrowed(&self.cur.bytes[start..end]),
             decoded: out,
         })
     }
@@ -533,7 +570,24 @@ impl<'a> Parser<'a> {
         let data_start = self.cur.pos;
         let length = stream_length_from_dict(&dict);
         let data_end = if let Some(len) = length {
-            let end = data_start.saturating_add(len as usize);
+            let end = match data_start.checked_add(len as usize) {
+                Some(v) => v,
+                None => {
+                    self.record_deviation(
+                        "stream_length_overflow",
+                        Span {
+                            start: data_start as u64,
+                            end: data_start as u64,
+                        },
+                        None,
+                    );
+                    eprintln!(
+                        "security_boundary: stream length overflow at start={} len={}",
+                        data_start, len
+                    );
+                    return Err(anyhow!("stream length overflow"));
+                }
+            };
             if end > self.cur.bytes.len() {
                 self.record_deviation(
                     "truncated_stream_data",
@@ -738,6 +792,10 @@ pub fn scan_indirect_objects<'a>(
                     note: None,
                 });
             }
+            eprintln!(
+                "security_boundary: max_objects {} reached during indirect scan",
+                max_objects
+            );
             break;
         }
         if !bytes[i].is_ascii_digit() {

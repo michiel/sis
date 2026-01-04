@@ -20,6 +20,8 @@ struct DecodeParms {
     columns: u32,
 }
 
+const MAX_DECODE_PARMS: u32 = 100_000;
+
 pub fn decode_stream(bytes: &[u8], stream: &PdfStream<'_>, max_out: usize) -> Result<DecodedStream> {
     let span = stream.data_span;
     let start = span.start as usize;
@@ -129,6 +131,7 @@ fn is_flate_filter(filter: &str) -> bool {
 }
 
 fn apply_predictor(data: &[u8], parms: DecodeParms) -> Result<Vec<u8>> {
+    validate_decode_parms(parms)?;
     if parms.bits_per_component != 8 || parms.columns == 0 {
         return Ok(data.to_vec());
     }
@@ -142,8 +145,8 @@ fn apply_predictor(data: &[u8], parms: DecodeParms) -> Result<Vec<u8>> {
 }
 
 fn apply_tiff_predictor(data: &[u8], parms: DecodeParms) -> Result<Vec<u8>> {
-    let bpp = ((parms.colors * parms.bits_per_component + 7) / 8) as usize;
-    let row_len = parms.columns as usize * bpp;
+    let bpp = checked_bpp(parms)?;
+    let row_len = checked_row_len(parms, bpp)?;
     if row_len == 0 {
         return Ok(data.to_vec());
     }
@@ -159,8 +162,8 @@ fn apply_tiff_predictor(data: &[u8], parms: DecodeParms) -> Result<Vec<u8>> {
 }
 
 fn apply_png_predictor(data: &[u8], parms: DecodeParms) -> Result<Vec<u8>> {
-    let bpp = ((parms.colors * parms.bits_per_component + 7) / 8) as usize;
-    let row_len = parms.columns as usize * bpp;
+    let bpp = checked_bpp(parms)?;
+    let row_len = checked_row_len(parms, bpp)?;
     if row_len == 0 {
         return Ok(data.to_vec());
     }
@@ -234,6 +237,38 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
 
 fn name_to_string(n: &PdfName<'_>) -> String {
     String::from_utf8_lossy(&n.decoded).to_string()
+}
+
+fn validate_decode_parms(parms: DecodeParms) -> Result<()> {
+    if parms.colors > MAX_DECODE_PARMS
+        || parms.bits_per_component > MAX_DECODE_PARMS
+        || parms.columns > MAX_DECODE_PARMS
+    {
+        eprintln!(
+            "security_boundary: decode parms out of range (colors={}, bits={}, columns={})",
+            parms.colors, parms.bits_per_component, parms.columns
+        );
+        return Err(anyhow!("decode parms exceed safe limits"));
+    }
+    Ok(())
+}
+
+fn checked_bpp(parms: DecodeParms) -> Result<usize> {
+    let bpp_bits = (parms.colors as u64)
+        .checked_mul(parms.bits_per_component as u64)
+        .ok_or_else(|| anyhow!("decode parms overflow"))?;
+    let bpp = bpp_bits
+        .checked_add(7)
+        .ok_or_else(|| anyhow!("decode parms overflow"))?
+        / 8;
+    usize::try_from(bpp).map_err(|_| anyhow!("decode parms overflow"))
+}
+
+fn checked_row_len(parms: DecodeParms, bpp: usize) -> Result<usize> {
+    let row_len = (parms.columns as u64)
+        .checked_mul(bpp as u64)
+        .ok_or_else(|| anyhow!("decode parms overflow"))?;
+    usize::try_from(row_len).map_err(|_| anyhow!("decode parms overflow"))
 }
 
 fn decode_filter(data: &[u8], filter: &str, max_out: usize) -> Result<(Vec<u8>, bool)> {

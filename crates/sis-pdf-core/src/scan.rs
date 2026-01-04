@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use sis_pdf_pdf::decode::{decode_stream, DecodedStream};
@@ -36,7 +37,7 @@ pub struct DecodedCache {
     max_decode_bytes: usize,
     max_total_decoded_bytes: usize,
     cache: Mutex<HashMap<(u64, u64), DecodedStream>>,
-    total_decoded: Mutex<usize>,
+    total_decoded: AtomicUsize,
 }
 
 impl DecodedCache {
@@ -45,7 +46,7 @@ impl DecodedCache {
             max_decode_bytes,
             max_total_decoded_bytes,
             cache: Mutex::new(HashMap::new()),
-            total_decoded: Mutex::new(0),
+            total_decoded: AtomicUsize::new(0),
         }
     }
 
@@ -58,17 +59,88 @@ impl DecodedCache {
         if let Some(v) = self.cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
             return Ok(v);
         }
+        let reservation = self.reserve_budget(self.max_decode_bytes)?;
         let decoded = decode_stream(bytes, stream, self.max_decode_bytes)?;
-        if let Ok(mut total) = self.total_decoded.lock() {
-            if *total + decoded.data.len() > self.max_total_decoded_bytes {
-                return Err(anyhow::anyhow!("total decoded bytes budget exceeded"));
-            }
-            *total += decoded.data.len();
-        }
+        reservation.commit(decoded.data.len(), self.max_total_decoded_bytes, &self.total_decoded)?;
         if let Ok(mut c) = self.cache.lock() {
             c.insert(key, decoded.clone());
         }
         Ok(decoded)
+    }
+
+    fn reserve_budget(&self, amount: usize) -> anyhow::Result<BudgetReservation<'_>> {
+        if self.max_total_decoded_bytes == 0 {
+            return Ok(BudgetReservation {
+                reserved: 0,
+                committed: true,
+                total: &self.total_decoded,
+            });
+        }
+        let mut current = self.total_decoded.load(Ordering::SeqCst);
+        loop {
+            let next = current.saturating_add(amount);
+            if next > self.max_total_decoded_bytes {
+                eprintln!(
+                    "security_boundary: decode budget exceeded (current={} reserve={} limit={})",
+                    current, amount, self.max_total_decoded_bytes
+                );
+                return Err(anyhow::anyhow!("total decoded bytes budget exceeded"));
+            }
+            match self.total_decoded.compare_exchange(
+                current,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    return Ok(BudgetReservation {
+                        reserved: amount,
+                        committed: false,
+                        total: &self.total_decoded,
+                    });
+                }
+                Err(updated) => current = updated,
+            }
+        }
+    }
+}
+
+struct BudgetReservation<'a> {
+    reserved: usize,
+    committed: bool,
+    total: &'a AtomicUsize,
+}
+
+impl<'a> BudgetReservation<'a> {
+    fn commit(
+        mut self,
+        actual: usize,
+        limit: usize,
+        total: &AtomicUsize,
+    ) -> anyhow::Result<()> {
+        if self.reserved > 0 {
+            total.fetch_sub(self.reserved, Ordering::SeqCst);
+        }
+        if limit > 0 {
+            let current = total.fetch_add(actual, Ordering::SeqCst) + actual;
+            if current > limit {
+                eprintln!(
+                    "security_boundary: decode budget exceeded after decode (total={} limit={})",
+                    current, limit
+                );
+                return Err(anyhow::anyhow!("total decoded bytes budget exceeded"));
+            }
+        }
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for BudgetReservation<'_> {
+    fn drop(&mut self) {
+        if !self.committed && self.reserved > 0 {
+            self.total.fetch_sub(self.reserved, Ordering::SeqCst);
+        }
     }
 }
 
