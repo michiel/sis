@@ -125,6 +125,7 @@ pub struct StructuralSummary {
     pub polyglot_signatures: Vec<String>,
     pub secondary_parser: Option<SecondaryParserSummary>,
     pub secondary_parser_error: Option<String>,
+    pub ir_summary: Option<IrSummary>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -148,6 +149,15 @@ pub struct MlRunSummary {
     pub threshold: f32,
     pub label: bool,
     pub kind: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct IrSummary {
+    pub object_count: usize,
+    pub line_count: usize,
+    pub action_object_count: usize,
+    pub payload_object_count: usize,
+    pub edge_count: usize,
 }
 
 pub fn print_human(report: &Report) {
@@ -199,6 +209,16 @@ pub fn print_human(report: &Report) {
             println!("  Polyglot risk: yes ({})", sigs);
         } else {
             println!("  Polyglot risk: no");
+        }
+        if let Some(ir) = &summary.ir_summary {
+            println!(
+                "  IR/ORG: objects={} lines={} actions={} payloads={} edges={}",
+                ir.object_count,
+                ir.line_count,
+                ir.action_object_count,
+                ir.payload_object_count,
+                ir.edge_count
+            );
         }
         if let Some(sec) = &summary.secondary_parser {
             println!(
@@ -845,6 +865,16 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             out.push_str(&format!("- Polyglot risk: yes ({})\n", escape_markdown(&sigs)));
         } else {
             out.push_str("- Polyglot risk: no\n");
+        }
+        if let Some(ir) = &summary.ir_summary {
+            out.push_str(&format!(
+                "- IR/ORG: objects={} lines={} actions={} payloads={} edges={}\n",
+                ir.object_count,
+                ir.line_count,
+                ir.action_object_count,
+                ir.payload_object_count,
+                ir.edge_count
+            ));
         }
         if let Some(sec) = &summary.secondary_parser {
             out.push_str(&format!(

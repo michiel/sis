@@ -457,6 +457,20 @@ fn build_structural_summary(
         missing_in_primary: s.missing_in_primary,
     });
     let secondary_parser_error = diff.and_then(|d| d.error.clone());
+    let ir_summary = if ctx.options.ir {
+        let ir_opts = sis_pdf_pdf::ir::IrOptions::default();
+        let ir_graph = crate::ir_pipeline::build_ir_graph(&ctx.graph, &ir_opts);
+        let summary = crate::ir_pipeline::summarize_ir_graph(&ir_graph);
+        Some(crate::report::IrSummary {
+            object_count: summary.object_count,
+            line_count: summary.line_count,
+            action_object_count: summary.action_object_count,
+            payload_object_count: summary.payload_object_count,
+            edge_count: summary.edge_count,
+        })
+    } else {
+        None
+    };
     StructuralSummary {
         startxref_count: ctx.graph.startxrefs.len(),
         trailer_count: ctx.graph.trailers.len(),
@@ -472,6 +486,7 @@ fn build_structural_summary(
         polyglot_signatures,
         secondary_parser,
         secondary_parser_error,
+        ir_summary,
     }
 }
 

@@ -8,6 +8,8 @@ use sis_pdf_pdf::object::{PdfAtom, PdfDict};
 
 pub struct IrGraphStaticDetector;
 
+const ACTION_PATH_DEPTH: usize = 4;
+
 impl Detector for IrGraphStaticDetector {
     fn id(&self) -> &'static str {
         "ir_graph_static"
@@ -53,7 +55,9 @@ struct NodeFlags {
     has_payload: bool,
 }
 
-fn classify_nodes(ir_objects: &[sis_pdf_pdf::ir::PdfIrObject]) -> std::collections::HashMap<ObjRef, NodeFlags> {
+fn classify_nodes(
+    ir_objects: &[sis_pdf_pdf::ir::PdfIrObject],
+) -> std::collections::HashMap<ObjRef, NodeFlags> {
     let mut map = std::collections::HashMap::new();
     for obj in ir_objects {
         let mut flags = NodeFlags::default();
@@ -102,7 +106,7 @@ fn find_action_payload_paths(
     if action_nodes.is_empty() {
         return findings;
     }
-    let reachable = reachable_from(adjacency, &action_nodes, 4);
+    let reachable = reachable_from(adjacency, &action_nodes, ACTION_PATH_DEPTH);
     for target in reachable {
         if flags.get(&target).map(|f| f.has_payload).unwrap_or(false) {
             if action_nodes.contains(&target) {
@@ -112,6 +116,16 @@ fn find_action_payload_paths(
             if let Some(entry) = ctx.graph.get_object(target.obj, target.gen) {
                 evidence.push(span_to_evidence(entry.full_span, "Payload object"));
             }
+            let mut meta = std::collections::HashMap::new();
+            meta.insert("ir.path_depth".into(), ACTION_PATH_DEPTH.to_string());
+            meta.insert(
+                "ir.action_objects".into(),
+                action_nodes
+                    .iter()
+                    .map(|n| format!("{} {}", n.obj, n.gen))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
             findings.push(Finding {
                 id: String::new(),
                 surface: AttackSurface::Actions,
@@ -126,7 +140,7 @@ fn find_action_payload_paths(
                 objects: vec![format!("{} {} obj", target.obj, target.gen)],
                 evidence,
                 remediation: Some("Inspect referenced payload chain for malicious intent.".into()),
-                meta: Default::default(),
+                meta,
                 yara: None,
             });
         }
@@ -151,6 +165,8 @@ fn find_orphan_payloads(
             if let Some(entry) = ctx.graph.get_object(obj.obj, obj.gen) {
                 evidence.push(span_to_evidence(entry.full_span, "Orphan payload"));
             }
+            let mut meta = std::collections::HashMap::new();
+            meta.insert("ir.orphan_root_count".into(), roots.len().to_string());
             findings.push(Finding {
                 id: String::new(),
                 surface: AttackSurface::FileStructure,
@@ -165,7 +181,7 @@ fn find_orphan_payloads(
                 objects: vec![format!("{} {} obj", obj.obj, obj.gen)],
                 evidence,
                 remediation: Some("Inspect for hidden or shadowed revisions.".into()),
-                meta: Default::default(),
+                meta,
                 yara: None,
             });
         }
@@ -190,6 +206,8 @@ fn find_shadow_payloads(
                     evidence.push(span_to_evidence(entry.full_span, "Shadowed object span"));
                 }
             }
+            let mut meta = std::collections::HashMap::new();
+            meta.insert("ir.shadow_count".into(), idxs.len().to_string());
             findings.push(Finding {
                 id: String::new(),
                 surface: AttackSurface::FileStructure,
@@ -204,7 +222,7 @@ fn find_shadow_payloads(
                 objects: vec![format!("{} {} obj", obj, gen)],
                 evidence,
                 remediation: Some("Review incremental updates for hidden payloads.".into()),
-                meta: Default::default(),
+                meta,
                 yara: None,
             });
         }
@@ -235,6 +253,8 @@ fn find_objstm_payloads(
         if let Some(entry) = ctx.graph.get_object(obj.obj, obj.gen) {
             let span = (entry.full_span.start, entry.full_span.end);
             if objstm_spans.iter().any(|s| *s == span) {
+                let mut meta = std::collections::HashMap::new();
+                meta.insert("ir.objstm_count".into(), objstm_spans.len().to_string());
                 findings.push(Finding {
                     id: String::new(),
                     surface: AttackSurface::ObjectStreams,
@@ -249,7 +269,7 @@ fn find_objstm_payloads(
                     objects: vec![format!("{} {} obj", obj.obj, obj.gen)],
                     evidence: vec![span_to_evidence(entry.full_span, "ObjStm span")],
                     remediation: Some("Use deep scan to inspect embedded objects.".into()),
-                    meta: Default::default(),
+                    meta,
                     yara: None,
                 });
             }

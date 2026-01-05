@@ -155,6 +155,14 @@ enum Command {
         #[arg(short, long)]
         out: PathBuf,
     },
+    #[command(about = "Export PDFObj IR as text or JSON")]
+    ExportIr {
+        pdf: String,
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+        #[arg(short, long)]
+        out: PathBuf,
+    },
     #[command(about = "Export feature vectors for ML pipelines")]
     ExportFeatures {
         #[arg(value_name = "PDF", required_unless_present = "path")]
@@ -335,6 +343,7 @@ fn main() -> Result<()> {
             out,
         } => run_export_graph(&pdf, chains_only, &format, &out),
         Command::ExportOrg { pdf, format, out } => run_export_org(&pdf, &format, &out),
+        Command::ExportIr { pdf, format, out } => run_export_ir(&pdf, &format, &out),
         Command::ExportFeatures {
             pdf,
             path,
@@ -845,6 +854,34 @@ fn run_export_org(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
         _ => {
             let dot = sis_pdf_core::org_export::export_org_dot(&org);
             fs::write(out, dot)?;
+        }
+    }
+    Ok(())
+}
+
+fn run_export_ir(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
+    let mmap = mmap_file(pdf)?;
+    let graph = sis_pdf_pdf::parse_pdf(
+        &mmap,
+        sis_pdf_pdf::ParseOptions {
+            recover_xref: true,
+            deep: false,
+            strict: false,
+            max_objstm_bytes: 32 * 1024 * 1024,
+            max_objects: 500_000,
+            max_objstm_total_bytes: 256 * 1024 * 1024,
+        },
+    )?;
+    let ir_opts = sis_pdf_pdf::ir::IrOptions::default();
+    let ir_objects = sis_pdf_pdf::ir::ir_for_graph(&graph.objects, &ir_opts);
+    match format {
+        "json" => {
+            let v = sis_pdf_core::ir_export::export_ir_json(&ir_objects);
+            fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+        }
+        _ => {
+            let text = sis_pdf_core::ir_export::export_ir_text(&ir_objects);
+            fs::write(out, text)?;
         }
     }
     Ok(())

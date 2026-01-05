@@ -28,6 +28,7 @@ pub mod graph_walk;
 pub mod org;
 pub mod ir_pipeline;
 pub mod org_export;
+pub mod ir_export;
 pub mod intent;
 pub mod page_tree;
 pub mod cache;

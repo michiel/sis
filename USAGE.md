@@ -311,7 +311,27 @@ Notes:
 - Graph ML expects `graph_model.json` in the model directory.
 - Graph ML emits `ml_graph_score_high` when it exceeds the threshold.
 
-## 12b) Export object reference graph (ORG)
+## 12b) IR/ORG static analysis (no ML)
+
+Enable IR extraction and static IR/ORG detectors:
+
+```
+sis scan suspicious.pdf --ir
+```
+
+Include IR/ORG summary in a report:
+
+```
+sis report suspicious.pdf --ir -o report.md
+```
+
+Static IR/ORG finding kinds:
+- `action_payload_path`
+- `orphan_payload_object`
+- `shadow_payload_chain`
+- `objstm_action_chain`
+
+## 12c) Export object reference graph (ORG)
 
 DOT export:
 
@@ -323,6 +343,20 @@ JSON export:
 
 ```
 sis export-org suspicious.pdf --format json -o org.json
+```
+
+## 12d) Export PDFObj IR
+
+Text export:
+
+```
+sis export-ir suspicious.pdf --format text -o ir.txt
+```
+
+JSON export:
+
+```
+sis export-ir suspicious.pdf --format json -o ir.json
 ```
 
 ## 13) Export features for datasets
