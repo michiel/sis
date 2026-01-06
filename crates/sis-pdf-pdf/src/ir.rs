@@ -263,10 +263,16 @@ fn string_preview(s: &PdfStr<'_>, max_len: usize) -> String {
         PdfStr::Literal { decoded, .. } => decoded,
         PdfStr::Hex { decoded, .. } => decoded,
     };
-    let mut out = String::from_utf8_lossy(raw).to_string();
-    if out.len() > max_len {
-        out.truncate(max_len);
-        out.push_str("...");
-    }
-    out
+    let truncated = raw.len() > max_len;
+    let end = std::cmp::min(raw.len(), max_len);
+    let hex = raw[..end]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
+    format!(
+        "len_bytes={} hex={} truncated={}",
+        raw.len(),
+        hex,
+        truncated
+    )
 }
