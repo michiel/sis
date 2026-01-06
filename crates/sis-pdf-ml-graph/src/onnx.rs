@@ -289,12 +289,30 @@ fn pick_output_tensor(
         let model_ref = model.model();
         let output_outlets = model_ref.output_outlets()?;
         for (idx, outlet) in output_outlets.iter().enumerate() {
+            if let Some(label) = model_ref.outlet_label(*outlet) {
+                if label == name {
+                    return Ok(outputs[idx].clone().into_tensor());
+                }
+            }
             let node = &model_ref.node(outlet.node);
-            if node.name == name {
+            if node.name == name || format!("{}:{}", node.name, outlet.slot) == name {
                 return Ok(outputs[idx].clone().into_tensor());
             }
         }
-        return Err(anyhow!("output name not found: {}", name));
+        let mut available = std::collections::BTreeSet::new();
+        for outlet in output_outlets.iter() {
+            if let Some(label) = model_ref.outlet_label(*outlet) {
+                available.insert(label.to_string());
+            }
+            let node = &model_ref.node(outlet.node);
+            available.insert(node.name.to_string());
+            available.insert(format!("{}:{}", node.name, outlet.slot));
+        }
+        return Err(anyhow!(
+            "output name not found: {} (available: {})",
+            name,
+            available.into_iter().collect::<Vec<_>>().join(", ")
+        ));
     }
     outputs
         .get(0)
