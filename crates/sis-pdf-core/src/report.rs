@@ -553,6 +553,8 @@ fn render_chain_notes(chain: &ExploitChain) -> Vec<(String, String)> {
 fn render_finding_context(f: &Finding) -> String {
     let mut parts = Vec::new();
     parts.push(format!("kind `{}`", f.kind));
+    parts.push(format!("severity {:?}", f.severity));
+    parts.push(format!("impact {}", impact_rating_for_finding(f)));
     if let Some(target) = f.meta.get("action.target") {
         parts.push(format!("action_target {}", target));
     }
@@ -631,6 +633,144 @@ fn render_payload_behaviour(f: &Finding) -> Option<String> {
         return None;
     }
     Some(notes.join("; "))
+}
+
+fn impact_rating_for_finding(f: &Finding) -> &'static str {
+    if let Some(r) = f.meta.get("impact.rating") {
+        return if r.eq_ignore_ascii_case("high") {
+            "High"
+        } else if r.eq_ignore_ascii_case("medium") {
+            "Medium"
+        } else if r.eq_ignore_ascii_case("low") {
+            "Low"
+        } else {
+            "Low"
+        };
+    }
+    match f.severity {
+        Severity::Critical | Severity::High => "High",
+        Severity::Medium => "Medium",
+        Severity::Low | Severity::Info => "Low",
+    }
+}
+
+fn runtime_effect_for_finding(f: &Finding) -> String {
+    if let Some(action) = f.meta.get("action.s") {
+        if action == "/JavaScript" {
+            return "Viewer executes JavaScript in the document context; may access APIs, user data, or trigger further actions.".into();
+        }
+        if action == "/URI" {
+            return "Viewer can open an external URL or prompt the user to navigate to a remote resource.".into();
+        }
+        if action == "/Launch" {
+            return "Viewer may launch an external application or file, which can lead to user compromise.".into();
+        }
+        if action == "/SubmitForm" {
+            return "Form submission can transmit data to external endpoints.".into();
+        }
+    }
+    match f.kind.as_str() {
+        "open_action_present" => "Automatic execution occurs on document open; downstream actions may run without user intent.".into(),
+        "aa_present" | "aa_event_present" => "Event-driven actions can fire during viewing or interaction, enabling automatic execution.".into(),
+        "js_present" => "JavaScript runs in the viewer context and can influence document behavior or user actions.".into(),
+        "uri_present" => "User may be redirected to external resources, enabling phishing or data exfiltration.".into(),
+        "launch_action_present" => "External application launch is possible, increasing risk of system compromise.".into(),
+        "submitform_present" => "Form data may be transmitted to remote endpoints.".into(),
+        "embedded_file_present" | "filespec_present" => "Embedded files can be extracted or opened by the user or viewer.".into(),
+        "decoder_risk_present" | "decompression_ratio_suspicious" | "huge_image_dimensions" => {
+            "Decoding may trigger resource exhaustion or vulnerable parser paths during rendering.".into()
+        }
+        "xref_conflict"
+        | "incremental_update_chain"
+        | "object_id_shadowing"
+        | "objstm_density_high"
+        | "stream_length_mismatch"
+        | "missing_pdf_header"
+        | "missing_eof_marker"
+        | "parser_diff_structural" => {
+            "No direct runtime behavior inferred; structural anomalies can alter how viewers parse and execute content.".into()
+        }
+        _ => "No direct runtime behavior inferred; increases attack surface or analysis risk.".into(),
+    }
+}
+
+fn chain_effect_summary(chain: &ExploitChain) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(trigger) = &chain.trigger {
+        if trigger.contains("OpenAction") {
+            parts.push("Document open triggers execution".into());
+        } else if trigger.contains("AA") {
+            parts.push("Viewer event triggers execution".into());
+        }
+    }
+    if let Some(action) = &chain.action {
+        if action.contains("JavaScript") {
+            parts.push("JavaScript executes in viewer context".into());
+        } else if action.contains("URI") {
+            parts.push("External navigation or fetch occurs".into());
+        } else if action.contains("Launch") {
+            parts.push("External application launch possible".into());
+        }
+    }
+    if let Some(payload) = &chain.payload {
+        if payload.contains("JS") || payload.contains("JavaScript") {
+            parts.push("Script payload involved".into());
+        } else if payload.contains("URI") {
+            parts.push("External URL payload involved".into());
+        } else if payload.contains("Embedded") {
+            parts.push("Embedded payload involved".into());
+        }
+    }
+    if parts.is_empty() {
+        "Execution path inferred from linked findings; review trigger and payload details.".into()
+    } else {
+        parts.join("; ")
+    }
+}
+
+fn runtime_behavior_summary(findings: &[Finding]) -> Vec<String> {
+    let mut auto_exec = false;
+    let mut js = false;
+    let mut external = false;
+    let mut launch = false;
+    let mut submit = false;
+    let mut embedded = false;
+    let mut decoder = false;
+    for f in findings {
+        match f.kind.as_str() {
+            "open_action_present" | "aa_present" | "aa_event_present" => auto_exec = true,
+            "js_present" => js = true,
+            "uri_present" | "gotor_present" => external = true,
+            "launch_action_present" => launch = true,
+            "submitform_present" => submit = true,
+            "embedded_file_present" | "filespec_present" => embedded = true,
+            "decoder_risk_present" | "decompression_ratio_suspicious" => decoder = true,
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if auto_exec {
+        out.push("Automatic execution triggers detected (OpenAction/AA).".into());
+    }
+    if js {
+        out.push("JavaScript execution likely in viewer context.".into());
+    }
+    if external {
+        out.push("External navigation or remote resource access possible.".into());
+    }
+    if launch {
+        out.push("External application or file launch possible.".into());
+    }
+    if submit {
+        out.push("Form submission can transmit data externally.".into());
+    }
+    if embedded {
+        out.push("Embedded files present; secondary payload delivery possible.".into());
+    }
+    if decoder {
+        out.push("Decoder-heavy streams may trigger vulnerable code paths or resource exhaustion.".into());
+    }
+    out
 }
 
 pub(crate) fn impact_for_finding(f: &Finding) -> String {
@@ -925,6 +1065,15 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         ));
     }
 
+    let runtime_summary = runtime_behavior_summary(&report.findings);
+    if !runtime_summary.is_empty() {
+        out.push_str("## Static Runtime Behavior\n\n");
+        for line in runtime_summary {
+            out.push_str(&format!("- {}\n", escape_markdown(&line)));
+        }
+        out.push('\n');
+    }
+
     if let Some(summary) = &report.intent_summary {
         if !summary.buckets.is_empty() {
             out.push_str("## Intent Summary\n\n");
@@ -1099,6 +1248,10 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             if let Some(payload) = &chain.payload {
                 out.push_str(&format!("- Payload: `{}`\n", escape_markdown(payload)));
             }
+            out.push_str(&format!(
+                "- Effect: {}\n",
+                escape_markdown(&chain_effect_summary(chain))
+            ));
             if let Some(target) = chain.notes.get("action.target") {
                 out.push_str(&format!(
                     "- Action target: {}\n",
@@ -1245,6 +1398,10 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         out.push_str(&format!("- Surface: `{:?}`\n", f.surface));
         out.push_str(&format!("- Kind: `{}`\n", escape_markdown(&f.kind)));
         out.push_str(&format!("- Severity: `{:?}`\n", f.severity));
+        out.push_str(&format!(
+            "- Impact rating: `{}`\n",
+            impact_rating_for_finding(f)
+        ));
         out.push_str(&format!("- Confidence: `{:?}`\n", f.confidence));
         if !f.objects.is_empty() {
             out.push_str(&format!(
@@ -1260,6 +1417,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         }
         out.push_str("\n**Description**\n\n");
         out.push_str(&format!("{}\n\n", escape_markdown(&f.description)));
+        out.push_str("**Runtime Effect**\n\n");
+        out.push_str(&format!(
+            "{}\n\n",
+            escape_markdown(&runtime_effect_for_finding(f))
+        ));
         if let Some(s) = f.meta.get("action.s") {
             out.push_str("**Action Details**\n\n");
             out.push_str(&format!(
