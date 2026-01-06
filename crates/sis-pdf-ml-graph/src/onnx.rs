@@ -209,15 +209,10 @@ impl OnnxGnn {
         }
         let output = pick_output_tensor(&self.model, &outputs, self.output_name.as_deref())?;
         let view = output.to_array_view::<f32>()?;
-        if view.len() == 0 {
-            return Err(anyhow!("empty gnn output (shape={:?})", view.shape()));
-        }
-        let score = if view.len() == 1 {
-            view[0]
-        } else if view.shape().len() == 2 {
-            view[[0, 0]]
-        } else {
-            return Err(anyhow!("unexpected gnn output shape: {:?}", view.shape()));
+        let shape = view.shape().to_vec();
+        let score = match view.iter().next() {
+            Some(v) => *v,
+            None => return Err(anyhow!("empty gnn output (shape={:?})", shape)),
         };
         let mut out = match self.output_kind {
             OutputKind::Logit => score,

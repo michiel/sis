@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
 use crate::model::Finding;
-use crate::report::{Report, SecondaryParserSummary, StructuralSummary};
+use crate::report::{MlRunSummary, MlSummary, Report, SecondaryParserSummary, StructuralSummary};
 use crate::scan::{DecodedCache, ScanContext, ScanOptions};
 use sis_pdf_pdf::{parse_pdf, ObjectGraph, ParseOptions};
 use sis_pdf_pdf::object::{PdfAtom, PdfDict, PdfObj};
@@ -147,7 +147,12 @@ pub fn run_scan_with_detectors(
             });
         }
     }
+    let mut ml_summary_override: Option<MlSummary> = None;
     if let Some(ml_cfg) = &ctx.options.ml_config {
+        ml_summary_override = Some(MlSummary {
+            graph: None,
+            traditional: None,
+        });
         match ml_cfg.mode {
             crate::ml::MlMode::Traditional => {
                 let feature_vec = crate::features::FeatureExtractor::extract(&ctx);
@@ -155,6 +160,14 @@ pub fn run_scan_with_detectors(
                 match crate::ml_models::load_stacking(&ml_cfg.model_path) {
                     Ok(model) => {
                         let prediction = model.predict(&feature_vec, ml_cfg.threshold);
+                        if let Some(summary) = &mut ml_summary_override {
+                            summary.traditional = Some(MlRunSummary {
+                                score: prediction.score,
+                                threshold: prediction.threshold,
+                                label: prediction.label,
+                                kind: "ml_malware_score".into(),
+                            });
+                        }
                         if prediction.label {
                             let mut meta = std::collections::HashMap::new();
                             meta.insert("ml.score".into(), format!("{:.4}", prediction.score));
@@ -244,6 +257,14 @@ pub fn run_scan_with_detectors(
                     );
                     match prediction {
                         Ok(prediction) => {
+                            if let Some(summary) = &mut ml_summary_override {
+                                summary.graph = Some(MlRunSummary {
+                                    score: prediction.score,
+                                    threshold: prediction.threshold,
+                                    label: prediction.label,
+                                    kind: "ml_graph_score".into(),
+                                });
+                            }
                             if prediction.label {
                                 let mut meta = std::collections::HashMap::new();
                                 meta.insert("ml.graph.score".into(), format!("{:.4}", prediction.score));
@@ -357,6 +378,7 @@ pub fn run_scan_with_detectors(
         network_intents,
         response_rules,
         structural_summary,
+        ml_summary_override,
     ))
 }
 
