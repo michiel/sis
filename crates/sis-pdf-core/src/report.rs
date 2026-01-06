@@ -140,6 +140,8 @@ pub struct SecondaryParserSummary {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct MlSummary {
+    #[serde(default)]
+    pub mode: Option<String>,
     pub graph: Option<MlRunSummary>,
     pub traditional: Option<MlRunSummary>,
 }
@@ -247,80 +249,90 @@ pub fn print_human(report: &Report) {
     }
     if let Some(ml) = &report.ml_summary {
         println!();
-        println!("ML summary");
-        if let Some(run) = &ml.graph {
-            println!(
-                "  Graph: score {:.4} threshold {:.4} label {} ({})",
-                run.score,
-                run.threshold,
-                run.label,
-                ml_assessment(run.label)
-            );
+        println!("ML findings");
+        println!("  ML summary");
+        if let Some(mode) = ml_mode_label(ml) {
+            println!("    Mode: {}", mode);
+            if ml_mode_includes_graph(mode) {
+                if let Some(run) = &ml.graph {
+                    println!(
+                        "    Graph: score {:.4} threshold {:.4} label {} ({})",
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    );
+                } else if has_ml_error(&report.findings) {
+                    println!("    Graph: error (see ml_model_error findings)");
+                }
+            }
+            if ml_mode_includes_traditional(mode) {
+                if let Some(run) = &ml.traditional {
+                    println!(
+                        "    Traditional: score {:.4} threshold {:.4} label {} ({})",
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    );
+                } else if has_ml_error(&report.findings) {
+                    println!("    Traditional: error (see ml_model_error findings)");
+                }
+            }
         } else if has_ml_error(&report.findings) {
-            println!("  Graph: error (see ml_model_error findings)");
-        } else {
-            println!("  Graph: not run");
-        }
-        if let Some(run) = &ml.traditional {
-            println!(
-                "  Traditional: score {:.4} threshold {:.4} label {} ({})",
-                run.score,
-                run.threshold,
-                run.label,
-                ml_assessment(run.label)
-            );
-        } else if has_ml_error(&report.findings) {
-            println!("  Traditional: error (see ml_model_error findings)");
-        } else {
-            println!("  Traditional: not run");
+            println!("    Status: error (see ml_model_error findings)");
         }
         println!();
-        println!("ML details");
-        if let Some(run) = &ml.graph {
-            println!(
-                "  Graph: kind={} score {:.4} threshold {:.4} label {} ({})",
-                run.kind,
-                run.score,
-                run.threshold,
-                run.label,
-                ml_assessment(run.label)
-            );
-            if let Some(nodes) = &run.top_nodes {
-                println!("  Graph top nodes:");
-                for node in nodes {
+        println!("  ML details");
+        if let Some(mode) = ml_mode_label(ml) {
+            if ml_mode_includes_graph(mode) {
+                if let Some(run) = &ml.graph {
                     println!(
-                        "    - {} score {:.4} ({})",
-                        node.obj_ref, node.score, node.summary
+                        "    Graph: kind={} score {:.4} threshold {:.4} label {} ({})",
+                        run.kind,
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
                     );
+                    if let Some(nodes) = &run.top_nodes {
+                        println!("    Graph top nodes:");
+                        for node in nodes {
+                            println!(
+                                "      - {} score {:.4} ({})",
+                                node.obj_ref, node.score, node.summary
+                            );
+                        }
+                    }
+                } else if has_ml_error(&report.findings) {
+                    println!("    Graph: error (see ml_model_error findings)");
+                }
+            }
+            if ml_mode_includes_traditional(mode) {
+                if let Some(run) = &ml.traditional {
+                    println!(
+                        "    Traditional: kind={} score {:.4} threshold {:.4} label {} ({})",
+                        run.kind,
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    );
+                    if let Some(nodes) = &run.top_nodes {
+                        println!("    Traditional top nodes:");
+                        for node in nodes {
+                            println!(
+                                "      - {} score {:.4} ({})",
+                                node.obj_ref, node.score, node.summary
+                            );
+                        }
+                    }
+                } else if has_ml_error(&report.findings) {
+                    println!("    Traditional: error (see ml_model_error findings)");
                 }
             }
         } else if has_ml_error(&report.findings) {
-            println!("  Graph: error (see ml_model_error findings)");
-        } else {
-            println!("  Graph: not run");
-        }
-        if let Some(run) = &ml.traditional {
-            println!(
-                "  Traditional: kind={} score {:.4} threshold {:.4} label {} ({})",
-                run.kind,
-                run.score,
-                run.threshold,
-                run.label,
-                ml_assessment(run.label)
-            );
-            if let Some(nodes) = &run.top_nodes {
-                println!("  Traditional top nodes:");
-                for node in nodes {
-                    println!(
-                        "    - {} score {:.4} ({})",
-                        node.obj_ref, node.score, node.summary
-                    );
-                }
-            }
-        } else if has_ml_error(&report.findings) {
-            println!("  Traditional: error (see ml_model_error findings)");
-        } else {
-            println!("  Traditional: not run");
+            println!("    Status: error (see ml_model_error findings)");
         }
     }
     if let Some(resource) = resource_risk_summary(&report.findings) {
@@ -509,12 +521,48 @@ fn ml_summary_from_findings(findings: &[Finding]) -> Option<MlSummary> {
     if graph.is_none() && traditional.is_none() {
         None
     } else {
-        Some(MlSummary { graph, traditional })
+        let mode = if graph.is_some() && traditional.is_some() {
+            Some("graph+traditional".to_string())
+        } else if graph.is_some() {
+            Some("graph".to_string())
+        } else if traditional.is_some() {
+            Some("traditional".to_string())
+        } else {
+            None
+        };
+        Some(MlSummary {
+            mode,
+            graph,
+            traditional,
+        })
     }
 }
 
 fn has_ml_error(findings: &[Finding]) -> bool {
     findings.iter().any(|f| f.kind == "ml_model_error")
+}
+
+fn ml_mode_label(summary: &MlSummary) -> Option<&str> {
+    if let Some(mode) = summary.mode.as_deref() {
+        return Some(mode);
+    }
+    if summary.graph.is_some() && summary.traditional.is_some() {
+        Some("graph+traditional")
+    } else if summary.graph.is_some() {
+        Some("graph")
+    } else if summary.traditional.is_some() {
+        Some("traditional")
+    } else {
+        None
+    }
+}
+
+fn ml_mode_includes_graph(mode: &str) -> bool {
+    mode == "graph" || mode == "graph+traditional"
+}
+
+fn ml_mode_includes_traditional(mode: &str) -> bool {
+    mode == "traditional" || mode == "graph+traditional"
 }
 
 fn ml_assessment(label: bool) -> &'static str {
@@ -1184,87 +1232,100 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
     }
 
     if let Some(ml) = &report.ml_summary {
-        out.push_str("## ML Summary\n\n");
-        if let Some(run) = &ml.graph {
+        out.push_str("## ML Findings\n\n");
+        out.push_str("### ML Summary\n\n");
+        if let Some(mode) = ml_mode_label(ml) {
             out.push_str(&format!(
-                "- Graph: score {:.4} threshold {:.4} label {} ({})\n",
-                run.score,
-                run.threshold,
-                run.label,
-                ml_assessment(run.label)
+                "- Mode: `{}`\n",
+                escape_markdown(mode)
             ));
+            if ml_mode_includes_graph(mode) {
+                if let Some(run) = &ml.graph {
+                    out.push_str(&format!(
+                        "- Graph: score {:.4} threshold {:.4} label {} ({})\n",
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    ));
+                } else if has_ml_error(&report.findings) {
+                    out.push_str("- Graph: error (see ml_model_error findings)\n");
+                }
+            }
+            if ml_mode_includes_traditional(mode) {
+                if let Some(run) = &ml.traditional {
+                    out.push_str(&format!(
+                        "- Traditional: score {:.4} threshold {:.4} label {} ({})\n",
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    ));
+                } else if has_ml_error(&report.findings) {
+                    out.push_str("- Traditional: error (see ml_model_error findings)\n");
+                }
+            }
         } else if has_ml_error(&report.findings) {
-            out.push_str("- Graph: error (see ml_model_error findings)\n");
-        } else {
-            out.push_str("- Graph: not run\n");
-        }
-        if let Some(run) = &ml.traditional {
-            out.push_str(&format!(
-                "- Traditional: score {:.4} threshold {:.4} label {} ({})\n",
-                run.score,
-                run.threshold,
-                run.label,
-                ml_assessment(run.label)
-            ));
-        } else if has_ml_error(&report.findings) {
-            out.push_str("- Traditional: error (see ml_model_error findings)\n");
-        } else {
-            out.push_str("- Traditional: not run\n");
+            out.push_str("- Status: error (see ml_model_error findings)\n");
         }
         out.push('\n');
 
-        out.push_str("## ML Details\n\n");
-        if let Some(run) = &ml.graph {
-            out.push_str(&format!(
-                "### Graph ML\n\n- Kind: `{}`\n- Score: {:.4}\n- Threshold: {:.4}\n- Label: {} ({})\n\n",
-                escape_markdown(&run.kind),
-                run.score,
-                run.threshold,
-                run.label,
-                ml_assessment(run.label)
-            ));
-            if let Some(nodes) = &run.top_nodes {
-                out.push_str("**Top contributing nodes**\n\n");
-                for node in nodes {
+        out.push_str("### ML Details\n\n");
+        if let Some(mode) = ml_mode_label(ml) {
+            if ml_mode_includes_graph(mode) {
+                if let Some(run) = &ml.graph {
                     out.push_str(&format!(
-                        "- `{}` score {:.4} — {}\n",
-                        escape_markdown(&node.obj_ref),
-                        node.score,
-                        escape_markdown(&node.summary)
+                        "**Graph ML**\n\n- Kind: `{}`\n- Score: {:.4}\n- Threshold: {:.4}\n- Label: {} ({})\n\n",
+                        escape_markdown(&run.kind),
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
                     ));
+                    if let Some(nodes) = &run.top_nodes {
+                        out.push_str("**Top contributing nodes**\n\n");
+                        for node in nodes {
+                            out.push_str(&format!(
+                                "- `{}` score {:.4} — {}\n",
+                                escape_markdown(&node.obj_ref),
+                                node.score,
+                                escape_markdown(&node.summary)
+                            ));
+                        }
+                        out.push('\n');
+                    }
+                } else if has_ml_error(&report.findings) {
+                    out.push_str("**Graph ML**\n\n- Status: error (see ml_model_error findings)\n\n");
                 }
-                out.push('\n');
+            }
+            if ml_mode_includes_traditional(mode) {
+                if let Some(run) = &ml.traditional {
+                    out.push_str(&format!(
+                        "**Traditional ML**\n\n- Kind: `{}`\n- Score: {:.4}\n- Threshold: {:.4}\n- Label: {} ({})\n\n",
+                        escape_markdown(&run.kind),
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    ));
+                    if let Some(nodes) = &run.top_nodes {
+                        out.push_str("**Top contributing nodes**\n\n");
+                        for node in nodes {
+                            out.push_str(&format!(
+                                "- `{}` score {:.4} — {}\n",
+                                escape_markdown(&node.obj_ref),
+                                node.score,
+                                escape_markdown(&node.summary)
+                            ));
+                        }
+                        out.push('\n');
+                    }
+                } else if has_ml_error(&report.findings) {
+                    out.push_str("**Traditional ML**\n\n- Status: error (see ml_model_error findings)\n\n");
+                }
             }
         } else if has_ml_error(&report.findings) {
-            out.push_str("### Graph ML\n\n- Status: error (see ml_model_error findings)\n\n");
-        } else {
-            out.push_str("### Graph ML\n\n- Status: not run\n\n");
-        }
-        if let Some(run) = &ml.traditional {
-            out.push_str(&format!(
-                "### Traditional ML\n\n- Kind: `{}`\n- Score: {:.4}\n- Threshold: {:.4}\n- Label: {} ({})\n\n",
-                escape_markdown(&run.kind),
-                run.score,
-                run.threshold,
-                run.label,
-                ml_assessment(run.label)
-            ));
-            if let Some(nodes) = &run.top_nodes {
-                out.push_str("**Top contributing nodes**\n\n");
-                for node in nodes {
-                    out.push_str(&format!(
-                        "- `{}` score {:.4} — {}\n",
-                        escape_markdown(&node.obj_ref),
-                        node.score,
-                        escape_markdown(&node.summary)
-                    ));
-                }
-                out.push('\n');
-            }
-        } else if has_ml_error(&report.findings) {
-            out.push_str("### Traditional ML\n\n- Status: error (see ml_model_error findings)\n\n");
-        } else {
-            out.push_str("### Traditional ML\n\n- Status: not run\n\n");
+            out.push_str("- Status: error (see ml_model_error findings)\n\n");
         }
     }
 

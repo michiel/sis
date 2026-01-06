@@ -153,6 +153,10 @@ pub fn run_scan_with_detectors(
     let mut ml_summary_override: Option<MlSummary> = None;
     if let Some(ml_cfg) = &ctx.options.ml_config {
         ml_summary_override = Some(MlSummary {
+            mode: Some(match ml_cfg.mode {
+                crate::ml::MlMode::Traditional => "traditional",
+                crate::ml::MlMode::Graph => "graph",
+            }.to_string()),
             graph: None,
             traditional: None,
         });
