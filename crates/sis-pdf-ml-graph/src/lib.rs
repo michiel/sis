@@ -119,7 +119,16 @@ impl GraphModelRunner {
         let score = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.gnn.infer(&embeddings, &edges)
         })) {
-            Ok(result) => result?,
+            Ok(result) => match result {
+                Ok(score) => score,
+                Err(err) => {
+                    eprintln!(
+                        "error: ml_graph: gnn inference failed (nodes={} feat_dim={} edges={} max_edge_node={}): {}",
+                        node_count, feature_dim, edge_count, max_node, err
+                    );
+                    return Err(err);
+                }
+            },
             Err(_) => {
                 eprintln!(
                     "error: ml_graph: gnn inference panicked (nodes={} feat_dim={} edges={} max_edge_node={})",
