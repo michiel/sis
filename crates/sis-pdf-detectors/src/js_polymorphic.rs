@@ -5,7 +5,7 @@ use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
 use sis_pdf_core::scan::span_to_evidence;
 
 use crate::{entry_dict, resolve_payload};
-use crate::js_signals::{decode_layers, extract_js_signals_with_ast};
+use js_analysis::static_analysis::{decode_layers, extract_js_signals_with_ast};
 
 pub struct JsPolymorphicDetector {
     pub(crate) enable_ast: bool,

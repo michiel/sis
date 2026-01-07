@@ -125,28 +125,27 @@ fn decode_js_escapes(data: &[u8]) -> Option<Vec<u8>> {
     let mut i = 0usize;
     let mut changed = false;
     while i < data.len() {
-        if data[i] == b'\\' && i + 3 < data.len() && data[i + 1] == b'x' {
-            if let (Some(a), Some(b)) = (from_hex(data[i + 2]), from_hex(data[i + 3])) {
-                out.push((a << 4) | b);
-                i += 4;
-                changed = true;
-                continue;
-            }
-        }
-        if data[i] == b'\\' && i + 5 < data.len() && (data[i + 1] == b'u' || data[i + 1] == b'U') {
-            if let (Some(a), Some(b), Some(c), Some(d)) = (
-                from_hex(data[i + 2]),
-                from_hex(data[i + 3]),
-                from_hex(data[i + 4]),
-                from_hex(data[i + 5]),
-            ) {
-                let code = ((a as u16) << 12) | ((b as u16) << 8) | ((c as u16) << 4) | (d as u16);
-                if code <= 0x7f {
-                    out.push(code as u8);
-                    i += 6;
-                    changed = true;
-                    continue;
+        if data[i] == b'\\' && i + 1 < data.len() {
+            match data[i + 1] {
+                b'x' if i + 3 < data.len() => {
+                    if let Ok(v) = u8::from_str_radix(&String::from_utf8_lossy(&data[i + 2..i + 4]), 16) {
+                        out.push(v);
+                        i += 4;
+                        changed = true;
+                        continue;
+                    }
                 }
+                b'u' if i + 5 < data.len() => {
+                    if let Ok(v) = u16::from_str_radix(&String::from_utf8_lossy(&data[i + 2..i + 6]), 16) {
+                        if let Some(s) = std::char::from_u32(v as u32) {
+                            out.push(s as u8);
+                            i += 6;
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         out.push(data[i]);
@@ -156,203 +155,79 @@ fn decode_js_escapes(data: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn decode_hex_string(data: &[u8]) -> Option<Vec<u8>> {
-    let trimmed = data.iter().filter(|b| !b.is_ascii_whitespace()).cloned().collect::<Vec<_>>();
-    if trimmed.len() < 32 || trimmed.len() % 2 != 0 {
+    let mut cleaned = Vec::new();
+    for &b in data {
+        if (b as char).is_ascii_hexdigit() {
+            cleaned.push(b);
+        } else if !b.is_ascii_whitespace() {
+            return None;
+        }
+    }
+    if cleaned.len() < 16 || cleaned.len() % 2 != 0 {
         return None;
     }
-    if !trimmed.iter().all(|b| is_hex(*b)) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(trimmed.len() / 2);
-    let mut i = 0usize;
-    while i + 1 < trimmed.len() {
-        let hi = from_hex(trimmed[i])?;
-        let lo = from_hex(trimmed[i + 1])?;
-        out.push((hi << 4) | lo);
-        i += 2;
+    let mut out = Vec::with_capacity(cleaned.len() / 2);
+    for i in (0..cleaned.len()).step_by(2) {
+        let s = String::from_utf8_lossy(&cleaned[i..i + 2]);
+        if let Ok(v) = u8::from_str_radix(&s, 16) {
+            out.push(v);
+        } else {
+            return None;
+        }
     }
     Some(out)
 }
 
-fn from_hex(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(10 + b - b'a'),
-        b'A'..=b'F' => Some(10 + b - b'A'),
-        _ => None,
-    }
-}
-
 fn is_base64_like(data: &[u8]) -> bool {
-    if data.len() < 40 {
-        return false;
-    }
-    data.iter().all(|b| is_b64_char(*b))
-}
-
-fn bool_str(v: bool) -> String {
-    if v { "true".into() } else { "false".into() }
-}
-
-fn shannon_entropy(data: &[u8]) -> f64 {
-    if data.is_empty() {
-        return 0.0;
-    }
-    let mut counts = [0u32; 256];
-    for &b in data {
-        counts[b as usize] += 1;
-    }
-    let len = data.len() as f64;
-    let mut ent = 0.0;
-    for &c in &counts {
-        if c == 0 {
-            continue;
-        }
-        let p = c as f64 / len;
-        ent -= p * p.log2();
-    }
-    ent
-}
-
-fn contains_hex_escape(data: &[u8]) -> bool {
-    let mut i = 0;
-    while i + 3 < data.len() {
-        if data[i] == b'\\' && data[i + 1] == b'x' {
-            if is_hex(data[i + 2]) && is_hex(data[i + 3]) {
-                return true;
-            }
-        }
-        i += 1;
-    }
-    false
-}
-
-fn contains_unicode_escape(data: &[u8]) -> bool {
-    let mut i = 0;
-    while i + 5 < data.len() {
-        if data[i] == b'\\' && (data[i + 1] == b'u' || data[i + 1] == b'U') {
-            if is_hex(data[i + 2])
-                && is_hex(data[i + 3])
-                && is_hex(data[i + 4])
-                && is_hex(data[i + 5])
-            {
-                return true;
-            }
-        }
-        i += 1;
-    }
-    false
-}
-
-fn is_hex(b: u8) -> bool {
-    matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
-}
-
-fn longest_token_run(data: &[u8]) -> usize {
-    let mut best = 0usize;
-    let mut cur = 0usize;
-    for &b in data {
-        if is_token_char(b) {
-            cur += 1;
-            best = best.max(cur);
-        } else {
-            cur = 0;
-        }
-    }
-    best
-}
-
-fn is_token_char(b: u8) -> bool {
-    matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$')
+    data.iter()
+        .all(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/' || *b == b'=' || b.is_ascii_whitespace())
 }
 
 fn count_base64_like_runs(data: &[u8], min_len: usize) -> usize {
-    let mut runs = 0usize;
-    let mut cur = 0usize;
+    let mut count = 0usize;
+    let mut run = 0usize;
     for &b in data {
-        if is_b64_char(b) {
-            cur += 1;
+        if b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=' {
+            run += 1;
         } else {
-            if cur >= min_len {
-                runs += 1;
+            if run >= min_len {
+                count += 1;
             }
-            cur = 0;
+            run = 0;
         }
     }
-    if cur >= min_len {
-        runs += 1;
+    if run >= min_len {
+        count += 1;
     }
-    runs
+    count
 }
 
-fn is_b64_char(b: u8) -> bool {
-    matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'+' | b'/' | b'=')
-}
-
-fn find_token(data: &[u8], token: &[u8]) -> bool {
-    data.windows(token.len()).any(|w| w == token)
-}
-
-fn is_obfuscationish(m: &HashMap<String, String>) -> bool {
-    let ent: f64 = m.get("js.entropy").and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    let has_b64 = m
-        .get("js.has_base64_like")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-    let long_tok = m
-        .get("js.long_token_run")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-    let hexesc = m
-        .get("js.contains_hex_escapes")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-    let uniesc = m
-        .get("js.contains_unicode_escapes")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-    let eval_ = m
-        .get("js.contains_eval")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-    let unesc = m
-        .get("js.contains_unescape")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-    let fcc = m
-        .get("js.contains_fromcharcode")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-
-    (ent >= 5.2 && (has_b64 || long_tok || hexesc || uniesc)) || (eval_ && (unesc || fcc || has_b64))
-}
-
-fn byte_density(data: &[u8], needle: u8) -> f64 {
-    if data.is_empty() {
-        return 0.0;
+fn longest_token_run(data: &[u8]) -> usize {
+    let mut max = 0usize;
+    let mut current = 0usize;
+    for &b in data {
+        if b.is_ascii_alphanumeric() || b == b'_' {
+            current += 1;
+        } else {
+            if current > max {
+                max = current;
+            }
+            current = 0;
+        }
     }
-    let count = data.iter().filter(|&&b| b == needle).count();
-    count as f64 / data.len() as f64
+    max.max(current)
+}
+
+fn contains_hex_escape(data: &[u8]) -> bool {
+    find_token(data, b"\\x")
+}
+
+fn contains_unicode_escape(data: &[u8]) -> bool {
+    find_token(data, b"\\u")
 }
 
 fn contains_regex_packing(data: &[u8]) -> bool {
-    let mut i = 0usize;
-    while i < data.len() {
-        if data[i] == b'/' {
-            let start = i + 1;
-            let mut j = start;
-            while j < data.len() && data[j] != b'/' {
-                j += 1;
-            }
-            if j < data.len() && j > start + 30 {
-                return true;
-            }
-            i = j + 1;
-        } else {
-            i += 1;
-        }
-    }
-    false
+    find_token(data, b"/" ) && find_token(data, b".replace")
 }
 
 fn contains_suspicious_api(data: &[u8]) -> bool {
@@ -366,6 +241,52 @@ fn contains_suspicious_api(data: &[u8]) -> bool {
         b"app.mailMsg",
     ];
     apis.iter().any(|pat| find_token(data, pat))
+}
+
+fn find_token(data: &[u8], token: &[u8]) -> bool {
+    data.windows(token.len()).any(|w| w.eq_ignore_ascii_case(token))
+}
+
+fn byte_density(data: &[u8], byte: u8) -> f64 {
+    if data.is_empty() {
+        return 0.0;
+    }
+    let count = data.iter().filter(|b| **b == byte).count();
+    count as f64 / data.len() as f64
+}
+
+fn shannon_entropy(data: &[u8]) -> f64 {
+    if data.is_empty() {
+        return 0.0;
+    }
+    let mut freq = [0usize; 256];
+    for &b in data {
+        freq[b as usize] += 1;
+    }
+    let len = data.len() as f64;
+    let mut out = 0.0;
+    for &c in freq.iter() {
+        if c == 0 {
+            continue;
+        }
+        let p = c as f64 / len;
+        out -= p * p.log2();
+    }
+    out
+}
+
+fn bool_str(val: bool) -> String {
+    if val { "true".into() } else { "false".into() }
+}
+
+fn is_obfuscationish(meta: &HashMap<String, String>) -> bool {
+    let base64_like = meta.get("js.has_base64_like").map(|v| v == "true").unwrap_or(false);
+    let has_eval = meta.get("js.contains_eval").map(|v| v == "true").unwrap_or(false);
+    let has_fcc = meta.get("js.contains_fromcharcode").map(|v| v == "true").unwrap_or(false);
+    let has_unescape = meta.get("js.contains_unescape").map(|v| v == "true").unwrap_or(false);
+    let has_hex = meta.get("js.contains_hex_escapes").map(|v| v == "true").unwrap_or(false);
+    let has_unicode = meta.get("js.contains_unicode_escapes").map(|v| v == "true").unwrap_or(false);
+    base64_like || (has_eval && (has_fcc || has_unescape)) || has_hex || has_unicode
 }
 
 #[cfg(feature = "js-ast")]
@@ -568,7 +489,10 @@ fn domain_from_url(value: &str) -> Option<String> {
     let lower = value.to_ascii_lowercase();
     if lower.starts_with("mailto:") {
         let rest = &value[7..];
-        return rest.split('@').nth(1).map(|s| s.split('?').next().unwrap_or(s).to_string());
+        return rest
+            .split('@')
+            .nth(1)
+            .map(|s| s.split('?').next().unwrap_or(s).to_string());
     }
     if lower.starts_with("http://") || lower.starts_with("https://") {
         let trimmed = value.split("://").nth(1)?;

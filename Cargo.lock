@@ -1329,6 +1329,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
+name = "js-analysis"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "boa_ast",
+ "boa_engine",
+ "boa_interner",
+ "boa_parser",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2459,11 +2470,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "boa_ast",
- "boa_engine",
- "boa_interner",
- "boa_parser",
  "hex",
+ "js-analysis",
  "sha2",
  "sis-pdf-core",
  "sis-pdf-pdf",

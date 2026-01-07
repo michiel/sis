@@ -9,7 +9,6 @@ use sis_pdf_pdf::graph::ObjEntry;
 use sis_pdf_pdf::object::{PdfAtom, PdfDict};
 use sha2::{Digest, Sha256};
 
-pub mod js_signals;
 pub mod content_phishing;
 pub mod strict;
 pub mod linearization;
@@ -576,14 +575,17 @@ impl Detector for JavaScriptDetector {
                                     "Decoded JS payload",
                                 ));
                             }
-                            let sig = js_signals::extract_js_signals_with_ast(
+                            let sig = js_analysis::static_analysis::extract_js_signals_with_ast(
                                 &payload.bytes,
                                 self.enable_ast,
                             );
                             for (k, v) in sig {
                                 meta.insert(k, v);
                             }
-                            let decoded = js_signals::decode_layers(&payload.bytes, 3);
+                            let decoded = js_analysis::static_analysis::decode_layers(
+                                &payload.bytes,
+                                3,
+                            );
                             meta.insert(
                                 "payload.decode_layers".into(),
                                 decoded.layers.to_string(),

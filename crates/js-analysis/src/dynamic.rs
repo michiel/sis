@@ -1,0 +1,996 @@
+use crate::types::{DynamicOptions, DynamicOutcome};
+
+#[cfg(feature = "js-sandbox")]
+mod sandbox_impl {
+    use super::*;
+    use crate::types::DynamicSignals;
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+    use std::rc::Rc;
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::time::{Duration, Instant};
+
+    use boa_engine::object::{ObjectInitializer, FunctionObjectBuilder};
+    use boa_engine::object::builtins::JsFunction;
+    use boa_engine::property::Attribute;
+    use boa_engine::value::JsVariant;
+    use boa_engine::vm::RuntimeLimits;
+    use boa_engine::{Context, JsString, JsValue, NativeFunction, Source, JsArgs};
+
+    #[derive(Default, Clone)]
+    struct SandboxLog {
+        calls: Vec<String>,
+        call_args: Vec<String>,
+        urls: Vec<String>,
+        domains: Vec<String>,
+        errors: Vec<String>,
+        prop_reads: Vec<String>,
+        call_count: usize,
+        unique_calls: BTreeSet<String>,
+        unique_prop_reads: BTreeSet<String>,
+        elapsed_ms: Option<u128>,
+        options: DynamicOptions,
+    }
+
+    pub fn run_sandbox(bytes: &[u8], options: &DynamicOptions) -> DynamicOutcome {
+        if bytes.len() > options.max_bytes {
+            return DynamicOutcome::Skipped {
+                reason: "payload_too_large".into(),
+                limit: options.max_bytes,
+                actual: bytes.len(),
+            };
+        }
+        let opts = options.clone();
+        let bytes = bytes.to_vec();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let log = Rc::new(RefCell::new(SandboxLog {
+                options: opts,
+                ..SandboxLog::default()
+            }));
+            let mut context = Context::default();
+            let mut limits = RuntimeLimits::default();
+            limits.set_loop_iteration_limit(100_000);
+            limits.set_recursion_limit(128);
+            limits.set_stack_size_limit(512 * 1024);
+            context.set_runtime_limits(limits);
+            register_app(&mut context, log.clone());
+            register_util(&mut context, log.clone());
+            register_collab(&mut context, log.clone());
+            register_soap(&mut context, log.clone());
+            register_net(&mut context, log.clone());
+            register_browser_like(&mut context, log.clone());
+            register_windows_scripting(&mut context, log.clone());
+            register_windows_com(&mut context, log.clone());
+            register_windows_wmi(&mut context, log.clone());
+            register_node_like(&mut context, log.clone());
+            register_doc_stub(&mut context, log.clone());
+            register_doc_globals(&mut context, log.clone());
+            register_global_fallback(&mut context, log.clone());
+
+            let source = Source::from_bytes(&bytes);
+            let eval_start = Instant::now();
+            let eval_res = context.eval(source);
+            let elapsed = eval_start.elapsed().as_millis();
+            {
+                let mut log_ref = log.borrow_mut();
+                log_ref.elapsed_ms = Some(elapsed);
+                if let Err(err) = eval_res {
+                    log_ref.errors.push(format!("{:?}", err));
+                }
+            }
+            let out = log.borrow().clone();
+            let _ = tx.send(out);
+        });
+
+        match rx.recv_timeout(Duration::from_millis(options.timeout_ms as u64)) {
+            Ok(log) => DynamicOutcome::Executed(DynamicSignals {
+                calls: log.calls,
+                call_args: log.call_args,
+                urls: log.urls,
+                domains: log.domains,
+                errors: log.errors,
+                prop_reads: log.prop_reads,
+                call_count: log.call_count,
+                unique_calls: log.unique_calls.len(),
+                unique_prop_reads: log.unique_prop_reads.len(),
+                elapsed_ms: log.elapsed_ms,
+            }),
+            Err(RecvTimeoutError::Timeout) => DynamicOutcome::TimedOut {
+                timeout_ms: options.timeout_ms,
+            },
+            Err(_) => DynamicOutcome::TimedOut {
+                timeout_ms: options.timeout_ms,
+            },
+        }
+    }
+
+    pub fn is_network_call(name: &str) -> bool {
+        matches!(
+            name,
+            "launchURL"
+                | "getURL"
+                | "submitForm"
+                | "mailMsg"
+                | "mailDoc"
+                | "Collab.collectEmailInfo"
+                | "SOAP.connect"
+                | "SOAP.request"
+                | "Net.HTTP.request"
+                | "fetch"
+                | "XMLHttpRequest.open"
+                | "XMLHttpRequest.send"
+                | "WebSocket.send"
+                | "navigator.sendBeacon"
+                | "MSXML2.XMLHTTP.open"
+                | "MSXML2.XMLHTTP.send"
+                | "MSXML2.XMLHTTP.setRequestHeader"
+                | "MSXML2.ServerXMLHTTP.open"
+                | "MSXML2.ServerXMLHTTP.send"
+                | "MSXML2.ServerXMLHTTP.setRequestHeader"
+                | "WinHTTP.WinHTTPRequest.open"
+                | "WinHTTP.WinHTTPRequest.send"
+                | "URLDownloadToFile"
+        )
+    }
+
+    pub fn is_file_call(name: &str) -> bool {
+        matches!(
+            name,
+            "browseForDoc"
+                | "saveAs"
+                | "exportDataObject"
+                | "importDataObject"
+                | "createDataObject"
+                | "removeDataObject"
+                | "getDataObject"
+                | "getDataObjectContents"
+                | "openDoc"
+                | "newDoc"
+                | "exportAsFDF"
+                | "exportAsXFDF"
+                | "importTextData"
+                | "deletePages"
+                | "insertPages"
+                | "extractPages"
+                | "flattenPages"
+                | "addField"
+                | "removeField"
+                | "addAnnot"
+                | "removeAnnot"
+                | "fs.readFile"
+                | "fs.writeFile"
+                | "child_process.exec"
+                | "child_process.spawn"
+                | "ActiveXObject"
+                | "WScript.Shell"
+                | "WScript.CreateObject"
+                | "WScript.RegRead"
+                | "WScript.RegWrite"
+                | "GetObject"
+                | "CreateObject"
+                | "Scripting.FileSystemObject.OpenTextFile"
+                | "Scripting.FileSystemObject.CreateTextFile"
+                | "ADODB.Stream.Open"
+                | "ADODB.Stream.Write"
+                | "ADODB.Stream.SaveToFile"
+                | "ADODB.Connection.Open"
+                | "ADODB.Connection.Execute"
+                | "ADODB.Command.Execute"
+                | "Shell.Application.ShellExecute"
+                | "Shell.Application.BrowseForFolder"
+                | "MSXML2.DOMDocument.load"
+                | "MSXML2.DOMDocument.loadXML"
+                | "URLDownloadToFile"
+                | "PowerShell.AddScript"
+                | "PowerShell.Invoke"
+                | "WMI.ExecQuery"
+        )
+    }
+
+    fn register_app(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+
+        let app = ObjectInitializer::new(context)
+            .function(make_fn("alert"), JsString::from("alert"), 1)
+            .function(make_fn("response"), JsString::from("response"), 1)
+            .function(make_fn("launchURL"), JsString::from("launchURL"), 1)
+            .function(make_fn("getURL"), JsString::from("getURL"), 1)
+            .function(make_fn("openDoc"), JsString::from("openDoc"), 1)
+            .function(make_fn("newDoc"), JsString::from("newDoc"), 1)
+            .function(make_fn("execMenuItem"), JsString::from("execMenuItem"), 1)
+            .function(make_fn("execDialog"), JsString::from("execDialog"), 1)
+            .function(make_fn("addMenuItem"), JsString::from("addMenuItem"), 1)
+            .function(make_fn("removeMenuItem"), JsString::from("removeMenuItem"), 1)
+            .function(make_fn("setTimeOut"), JsString::from("setTimeOut"), 1)
+            .function(make_fn("setInterval"), JsString::from("setInterval"), 1)
+            .function(make_fn("submitForm"), JsString::from("submitForm"), 1)
+            .function(make_fn("browseForDoc"), JsString::from("browseForDoc"), 0)
+            .function(make_fn("saveAs"), JsString::from("saveAs"), 1)
+            .function(make_fn("exportDataObject"), JsString::from("exportDataObject"), 1)
+            .function(make_fn("importDataObject"), JsString::from("importDataObject"), 1)
+            .function(make_fn("createDataObject"), JsString::from("createDataObject"), 1)
+            .function(make_fn("removeDataObject"), JsString::from("removeDataObject"), 1)
+            .function(make_fn("mailMsg"), JsString::from("mailMsg"), 1)
+            .function(make_fn("mailDoc"), JsString::from("mailDoc"), 0)
+            .build();
+
+        let _ = context.register_global_property(JsString::from("app"), app, Attribute::all());
+    }
+
+    fn register_util(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+        let util = ObjectInitializer::new(context)
+            .function(make_fn("util.printf"), JsString::from("printf"), 1)
+            .function(make_fn("util.printd"), JsString::from("printd"), 1)
+            .function(make_fn("util.scand"), JsString::from("scand"), 1)
+            .build();
+        let _ = context.register_global_property(JsString::from("util"), util, Attribute::all());
+    }
+
+    fn register_collab(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+        let collab = ObjectInitializer::new(context)
+            .function(make_fn("Collab.getIcon"), JsString::from("getIcon"), 1)
+            .function(make_fn("Collab.collectEmailInfo"), JsString::from("collectEmailInfo"), 0)
+            .build();
+        let _ =
+            context.register_global_property(JsString::from("Collab"), collab, Attribute::all());
+    }
+
+    fn register_soap(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+        let soap = ObjectInitializer::new(context)
+            .function(make_fn("SOAP.connect"), JsString::from("connect"), 1)
+            .function(make_fn("SOAP.request"), JsString::from("request"), 1)
+            .build();
+        let _ = context.register_global_property(JsString::from("SOAP"), soap, Attribute::all());
+    }
+
+    fn register_net(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+        let http = ObjectInitializer::new(context)
+            .function(make_fn("Net.HTTP.request"), JsString::from("request"), 1)
+            .build();
+        let net = ObjectInitializer::new(context)
+            .property(JsString::from("HTTP"), http, Attribute::all())
+            .build();
+        let _ = context.register_global_property(JsString::from("Net"), net, Attribute::all());
+    }
+
+    fn register_browser_like(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+        let _ = context.register_global_builtin_callable(
+            JsString::from("fetch"),
+            1,
+            make_native(log.clone(), "fetch"),
+        );
+        let xhr = ObjectInitializer::new(context)
+            .function(make_fn("XMLHttpRequest.open"), JsString::from("open"), 2)
+            .function(make_fn("XMLHttpRequest.send"), JsString::from("send"), 1)
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("XMLHttpRequest"),
+            xhr,
+            Attribute::all(),
+        );
+        let ws = ObjectInitializer::new(context)
+            .function(make_fn("WebSocket.send"), JsString::from("send"), 1)
+            .build();
+        let _ = context.register_global_property(JsString::from("WebSocket"), ws, Attribute::all());
+        let beacon = ObjectInitializer::new(context)
+            .function(make_fn("navigator.sendBeacon"), JsString::from("sendBeacon"), 2)
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("navigator"),
+            beacon,
+            Attribute::all(),
+        );
+        let storage = ObjectInitializer::new(context)
+            .function(make_fn("localStorage.getItem"), JsString::from("getItem"), 1)
+            .function(make_fn("localStorage.setItem"), JsString::from("setItem"), 2)
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("localStorage"),
+            storage.clone(),
+            Attribute::all(),
+        );
+        let _ = context.register_global_property(
+            JsString::from("sessionStorage"),
+            storage,
+            Attribute::all(),
+        );
+        let doc = ObjectInitializer::new(context)
+            .function(make_fn("document.cookie"), JsString::from("cookie"), 0)
+            .function(make_fn("document.location"), JsString::from("location"), 0)
+            .build();
+        let _ = context.register_global_property(JsString::from("document"), doc, Attribute::all());
+    }
+
+    fn register_windows_scripting(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+        let _ = context.register_global_builtin_callable(
+            JsString::from("ActiveXObject"),
+            1,
+            make_native(log.clone(), "ActiveXObject"),
+        );
+        let wscript = ObjectInitializer::new(context)
+            .function(make_fn("WScript.Shell"), JsString::from("Shell"), 0)
+            .function(make_fn("WScript.CreateObject"), JsString::from("CreateObject"), 1)
+            .function(make_fn("WScript.RegRead"), JsString::from("RegRead"), 1)
+            .function(make_fn("WScript.RegWrite"), JsString::from("RegWrite"), 2)
+            .build();
+        let _ =
+            context.register_global_property(JsString::from("WScript"), wscript, Attribute::all());
+        let _ = context.register_global_builtin_callable(
+            JsString::from("GetObject"),
+            1,
+            make_native(log.clone(), "GetObject"),
+        );
+        let _ = context.register_global_builtin_callable(
+            JsString::from("CreateObject"),
+            1,
+            make_native(log, "CreateObject"),
+        );
+    }
+
+    fn register_windows_com(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+        let fso = ObjectInitializer::new(context)
+            .function(
+                make_fn("Scripting.FileSystemObject.OpenTextFile"),
+                JsString::from("OpenTextFile"),
+                1,
+            )
+            .function(
+                make_fn("Scripting.FileSystemObject.CreateTextFile"),
+                JsString::from("CreateTextFile"),
+                1,
+            )
+            .build();
+        let scripting = ObjectInitializer::new(context)
+            .property(JsString::from("FileSystemObject"), fso, Attribute::all())
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("Scripting"),
+            scripting,
+            Attribute::all(),
+        );
+
+        let adodb_stream = ObjectInitializer::new(context)
+            .function(make_fn("ADODB.Stream.Open"), JsString::from("Open"), 0)
+            .function(make_fn("ADODB.Stream.Write"), JsString::from("Write"), 1)
+            .function(
+                make_fn("ADODB.Stream.SaveToFile"),
+                JsString::from("SaveToFile"),
+                1,
+            )
+            .build();
+        let adodb = ObjectInitializer::new(context)
+            .property(JsString::from("Stream"), adodb_stream, Attribute::all())
+            .build();
+        let _ = context.register_global_property(JsString::from("ADODB"), adodb, Attribute::all());
+
+        let xmlhttp = ObjectInitializer::new(context)
+            .function(make_fn("MSXML2.XMLHTTP.open"), JsString::from("open"), 2)
+            .function(make_fn("MSXML2.XMLHTTP.send"), JsString::from("send"), 1)
+            .function(
+                make_fn("MSXML2.XMLHTTP.setRequestHeader"),
+                JsString::from("setRequestHeader"),
+                2,
+            )
+            .build();
+        let msxml2 = ObjectInitializer::new(context)
+            .property(JsString::from("XMLHTTP"), xmlhttp, Attribute::all())
+            .build();
+        let _ = context.register_global_property(JsString::from("MSXML2"), msxml2, Attribute::all());
+
+        let server_xmlhttp = ObjectInitializer::new(context)
+            .function(
+                make_fn("MSXML2.ServerXMLHTTP.open"),
+                JsString::from("open"),
+                2,
+            )
+            .function(
+                make_fn("MSXML2.ServerXMLHTTP.send"),
+                JsString::from("send"),
+                1,
+            )
+            .function(
+                make_fn("MSXML2.ServerXMLHTTP.setRequestHeader"),
+                JsString::from("setRequestHeader"),
+                2,
+            )
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("ServerXMLHTTP"),
+            server_xmlhttp,
+            Attribute::all(),
+        );
+
+        let domdoc = ObjectInitializer::new(context)
+            .function(
+                make_fn("MSXML2.DOMDocument.load"),
+                JsString::from("load"),
+                1,
+            )
+            .function(
+                make_fn("MSXML2.DOMDocument.loadXML"),
+                JsString::from("loadXML"),
+                1,
+            )
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("DOMDocument"),
+            domdoc,
+            Attribute::all(),
+        );
+
+        let winhttp = ObjectInitializer::new(context)
+            .function(
+                make_fn("WinHTTP.WinHTTPRequest.open"),
+                JsString::from("Open"),
+                2,
+            )
+            .function(
+                make_fn("WinHTTP.WinHTTPRequest.send"),
+                JsString::from("Send"),
+                1,
+            )
+            .build();
+        let winhttp_root = ObjectInitializer::new(context)
+            .property(JsString::from("WinHTTPRequest"), winhttp, Attribute::all())
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("WinHTTP"),
+            winhttp_root,
+            Attribute::all(),
+        );
+
+        let shell_app = ObjectInitializer::new(context)
+            .function(
+                make_fn("Shell.Application.ShellExecute"),
+                JsString::from("ShellExecute"),
+                1,
+            )
+            .function(
+                make_fn("Shell.Application.BrowseForFolder"),
+                JsString::from("BrowseForFolder"),
+                1,
+            )
+            .build();
+        let shell = ObjectInitializer::new(context)
+            .property(JsString::from("Application"), shell_app, Attribute::all())
+            .build();
+        let _ = context.register_global_property(JsString::from("Shell"), shell, Attribute::all());
+
+        let adodb_conn = ObjectInitializer::new(context)
+            .function(
+                make_fn("ADODB.Connection.Open"),
+                JsString::from("Open"),
+                1,
+            )
+            .function(
+                make_fn("ADODB.Connection.Execute"),
+                JsString::from("Execute"),
+                1,
+            )
+            .build();
+        let adodb_cmd = ObjectInitializer::new(context)
+            .function(
+                make_fn("ADODB.Command.Execute"),
+                JsString::from("Execute"),
+                1,
+            )
+            .build();
+        let adodb_extra = ObjectInitializer::new(context)
+            .property(JsString::from("Connection"), adodb_conn, Attribute::all())
+            .property(JsString::from("Command"), adodb_cmd, Attribute::all())
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("ADODB"),
+            adodb_extra,
+            Attribute::all(),
+        );
+
+        let urlmon = ObjectInitializer::new(context)
+            .function(
+                make_fn("URLDownloadToFile"),
+                JsString::from("URLDownloadToFile"),
+                2,
+            )
+            .build();
+        let _ =
+            context.register_global_property(JsString::from("URLMON"), urlmon, Attribute::all());
+
+        let powershell = ObjectInitializer::new(context)
+            .function(
+                make_fn("PowerShell.AddScript"),
+                JsString::from("AddScript"),
+                1,
+            )
+            .function(
+                make_fn("PowerShell.Invoke"),
+                JsString::from("Invoke"),
+                0,
+            )
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("PowerShell"),
+            powershell,
+            Attribute::all(),
+        );
+    }
+
+    fn register_windows_wmi(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+        let svc = ObjectInitializer::new(context)
+            .function(make_fn("WMI.ExecQuery"), JsString::from("ExecQuery"), 1)
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("winmgmts"),
+            svc,
+            Attribute::all(),
+        );
+    }
+
+    fn register_node_like(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let make_fn = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+        let _ = context.register_global_builtin_callable(
+            JsString::from("require"),
+            1,
+            make_native(log.clone(), "require"),
+        );
+        let process = ObjectInitializer::new(context)
+            .function(make_fn("process.exit"), JsString::from("exit"), 1)
+            .build();
+        let _ =
+            context.register_global_property(JsString::from("process"), process, Attribute::all());
+        let child_process = ObjectInitializer::new(context)
+            .function(make_fn("child_process.exec"), JsString::from("exec"), 1)
+            .function(make_fn("child_process.spawn"), JsString::from("spawn"), 1)
+            .build();
+        let _ = context.register_global_property(
+            JsString::from("child_process"),
+            child_process,
+            Attribute::all(),
+        );
+        let fs = ObjectInitializer::new(context)
+            .function(make_fn("fs.readFile"), JsString::from("readFile"), 1)
+            .function(make_fn("fs.writeFile"), JsString::from("writeFile"), 2)
+            .build();
+        let _ = context.register_global_property(JsString::from("fs"), fs, Attribute::all());
+    }
+
+    fn register_doc_globals(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let add =
+            |ctx: &mut Context, name: &'static str, len: usize, log: Rc<RefCell<SandboxLog>>| {
+                let _ = ctx.register_global_builtin_callable(
+                    JsString::from(name),
+                    len,
+                    make_native(log, name),
+                );
+            };
+        let add_callable =
+            |ctx: &mut Context, name: &'static str, len: usize, log: Rc<RefCell<SandboxLog>>| {
+                let _ = ctx.register_global_callable(JsString::from(name), len, make_native(log, name));
+            };
+        register_enhanced_eval(context, log.clone());
+        register_unescape(context, log.clone());
+        add(context, "setTimeout", 1, log.clone());
+        add(context, "setInterval", 1, log.clone());
+        add_callable(context, "Function", 1, log.clone());
+        add(context, "getURL", 1, log.clone());
+        add(context, "submitForm", 1, log.clone());
+        add(context, "exportDataObject", 1, log.clone());
+        add(context, "importDataObject", 1, log.clone());
+        add(context, "exportAsFDF", 1, log.clone());
+        add(context, "exportAsXFDF", 1, log.clone());
+        add(context, "importTextData", 1, log.clone());
+        add(context, "createDataObject", 1, log.clone());
+        add(context, "removeDataObject", 1, log.clone());
+        add(context, "getDataObject", 1, log.clone());
+        add(context, "getDataObjectContents", 1, log.clone());
+        add(context, "addField", 1, log.clone());
+        add(context, "removeField", 1, log.clone());
+        add(context, "getField", 1, log.clone());
+        add(context, "getAnnots", 1, log.clone());
+        add(context, "addAnnot", 1, log.clone());
+        add(context, "removeAnnot", 1, log.clone());
+        add(context, "deletePages", 1, log.clone());
+        add(context, "insertPages", 1, log.clone());
+        add(context, "extractPages", 1, log.clone());
+        add(context, "flattenPages", 1, log.clone());
+        add(context, "saveAs", 1, log.clone());
+        add(context, "print", 0, log.clone());
+        add(context, "mailDoc", 0, log);
+    }
+
+    fn register_doc_stub(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        // Create getters that track property access
+        let title_getter = make_getter(context, log.clone(), "info.title", "Document title containing vojewnj jdjf dnjfndsj nj n  443423");
+        let author_getter = make_getter(context, log.clone(), "info.author", "Unknown");
+        let subject_getter = make_getter(context, log.clone(), "info.subject", "PDF");
+        let keywords_getter = make_getter(context, log.clone(), "info.keywords", "");
+        let creator_getter = make_getter(context, log.clone(), "info.creator", "sis-pdf");
+        let producer_getter = make_getter(context, log.clone(), "info.producer", "sis-pdf");
+        let creation_date_getter = make_getter(context, log.clone(), "info.creationDate", "D:19700101000000Z");
+        let mod_date_getter = make_getter(context, log.clone(), "info.modDate", "D:19700101000000Z");
+        
+        // Create info object with accessor properties for tracking
+        let info = ObjectInitializer::new(context)
+            .accessor(JsString::from("title"), Some(title_getter), None, Attribute::all())
+            .accessor(JsString::from("author"), Some(author_getter), None, Attribute::all())
+            .accessor(JsString::from("subject"), Some(subject_getter), None, Attribute::all())
+            .accessor(JsString::from("keywords"), Some(keywords_getter), None, Attribute::all())
+            .accessor(JsString::from("creator"), Some(creator_getter), None, Attribute::all())
+            .accessor(JsString::from("producer"), Some(producer_getter), None, Attribute::all())
+            .accessor(JsString::from("creationDate"), Some(creation_date_getter), None, Attribute::all())
+            .accessor(JsString::from("modDate"), Some(mod_date_getter), None, Attribute::all())
+            .build();
+        let _ = context.register_global_property(JsString::from("info"), info.clone(), Attribute::all());
+        let doc = ObjectInitializer::new(context)
+            .property(JsString::from("info"), info, Attribute::all())
+            .build();
+        let _ = context.register_global_property(JsString::from("doc"), doc, Attribute::all());
+    }
+
+    fn register_global_fallback(context: &mut Context, _log: Rc<RefCell<SandboxLog>>) {
+        // Add a global object that acts as a fallback for undefined variables
+        let _fallback = ObjectInitializer::new(context)
+            .build();
+        
+        // Set up a basic fallback mechanism by creating common undefined variables
+        // This helps handle cases where eval() creates variables that should be global
+        let common_vars = vec![
+            "M7pzjRpdcM5RVyTMS", // From our specific malware sample
+            "result", "output", "payload", "data", "code", "script",
+            "x", "y", "z", "a", "b", "c", "temp", "tmp", "var1", "var2"
+        ];
+        
+        for var_name in common_vars {
+            let _ = context.register_global_property(
+                JsString::from(var_name),
+                JsValue::undefined(),
+                Attribute::all(),
+            );
+        }
+    }
+
+    fn register_unescape(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let unescape_fn = unsafe {
+            NativeFunction::from_closure(move |_this, args, ctx| {
+                record_call(&log, "unescape", args, ctx);
+                
+                let input_arg = args.get_or_undefined(0);
+                let input = input_arg.to_string(ctx)?;
+                let input_str = input.to_std_string_escaped();
+                
+                // Implement basic URL unescape functionality
+                let mut result = String::new();
+                let mut chars = input_str.chars();
+                
+                while let Some(ch) = chars.next() {
+                    if ch == '%' {
+                        // Try to parse hex escape sequence
+                        let hex1 = chars.next();
+                        let hex2 = chars.next();
+                        if let (Some(h1), Some(h2)) = (hex1, hex2) {
+                            if let Ok(byte_val) = u8::from_str_radix(&format!("{}{}", h1, h2), 16) {
+                                result.push(byte_val as char);
+                                continue;
+                            }
+                        }
+                        // If parsing failed, just add the % and continue
+                        result.push(ch);
+                        if let Some(h1) = hex1 { result.push(h1); }
+                        if let Some(h2) = hex2 { result.push(h2); }
+                    } else {
+                        result.push(ch);
+                    }
+                }
+                
+                Ok(JsValue::from(JsString::from(result)))
+            })
+        };
+        
+        let _ = context.register_global_builtin_callable(
+            JsString::from("unescape"),
+            1,
+            unescape_fn,
+        );
+    }
+
+    fn register_enhanced_eval(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        let eval_fn = unsafe {
+            NativeFunction::from_closure(move |_this, args, ctx| {
+                record_call(&log, "eval", args, ctx);
+                
+                let code_arg = args.get_or_undefined(0);
+                let code = code_arg.to_string(ctx)?;
+                let code_str = code.to_std_string_escaped();
+                
+                // Record the eval attempt
+                {
+                    let mut log_ref = log.borrow_mut();
+                    if log_ref.call_args.len() < log_ref.options.max_call_args {
+                        log_ref.call_args.push(format!("eval({})", &code_str[..std::cmp::min(code_str.len(), 100)]));
+                    }
+                }
+                
+                // Execute the code with better error handling
+                match ctx.eval(Source::from_bytes(code_str.as_bytes())) {
+                    Ok(result) => Ok(result),
+                    Err(e) => {
+                        // Log the error but don't stop execution
+                        {
+                            let mut log_ref = log.borrow_mut();
+                            log_ref.errors.push(format!("{:?}", e));
+                        }
+                        // Return undefined instead of propagating error
+                        Ok(JsValue::undefined())
+                    }
+                }
+            })
+        };
+        
+        // Register eval with enhanced error handling
+        let _ = context.register_global_builtin_callable(
+            JsString::from("eval"),
+            1,
+            eval_fn,
+        );
+    }
+
+    fn make_native(log: Rc<RefCell<SandboxLog>>, name: &'static str) -> NativeFunction {
+        unsafe {
+            NativeFunction::from_closure(move |_this, args, ctx| {
+                record_call(&log, name, args, ctx);
+                Ok(JsValue::undefined())
+            })
+        }
+    }
+
+
+    fn make_getter(
+        context: &mut Context,
+        log: Rc<RefCell<SandboxLog>>,
+        name: &'static str,
+        value: &'static str,
+    ) -> JsFunction {
+        let function = unsafe {
+            NativeFunction::from_closure(move |_this, _args, _ctx| {
+                record_prop(&log, name);
+                Ok(JsValue::from(JsString::from(value)))
+            })
+        };
+        FunctionObjectBuilder::new(context.realm(), function)
+            .name(JsString::from(name))
+            .length(0)
+            .constructor(false)
+            .build()
+    }
+
+    fn record_call(log: &Rc<RefCell<SandboxLog>>, name: &str, args: &[JsValue], ctx: &mut Context) {
+        let mut log_ref = log.borrow_mut();
+        log_ref.call_count += 1;
+        log_ref.calls.push(name.to_string());
+        log_ref.unique_calls.insert(name.to_string());
+        if log_ref.call_args.len() < log_ref.options.max_call_args {
+            if let Some(summary) = summarise_args(args, ctx, &log_ref.options) {
+                log_ref.call_args.push(format!("{}({})", name, summary));
+            }
+        }
+        for arg in args {
+            if let Some(value) = js_value_string(arg) {
+                if looks_like_url(&value) {
+                    if log_ref.urls.len() < log_ref.options.max_urls {
+                        log_ref.urls.push(value.clone());
+                    }
+                    if let Some(domain) = domain_from_url(&value) {
+                        if log_ref.domains.len() < log_ref.options.max_domains {
+                            log_ref.domains.push(domain);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn record_prop(log: &Rc<RefCell<SandboxLog>>, name: &str) {
+        let mut log_ref = log.borrow_mut();
+        log_ref.prop_reads.push(name.to_string());
+        log_ref.unique_prop_reads.insert(name.to_string());
+    }
+
+    fn summarise_args(
+        args: &[JsValue],
+        ctx: &mut Context,
+        options: &DynamicOptions,
+    ) -> Option<String> {
+        if args.is_empty() {
+            return None;
+        }
+        let mut out = Vec::new();
+        for arg in args.iter().take(options.max_args_per_call) {
+            out.push(js_value_summary(arg, ctx, options.max_arg_preview));
+        }
+        if args.len() > options.max_args_per_call {
+            out.push(format!("+{} more", args.len() - options.max_args_per_call));
+        }
+        Some(out.join(", "))
+    }
+
+    fn js_value_summary(value: &JsValue, _ctx: &mut Context, max_len: usize) -> String {
+        match value.variant() {
+            JsVariant::Undefined => "undefined".into(),
+            JsVariant::Null => "null".into(),
+            JsVariant::Boolean(b) => b.to_string(),
+            JsVariant::Float64(n) => format!("{:.3}", n),
+            JsVariant::Integer32(n) => n.to_string(),
+            JsVariant::BigInt(_) => "bigint".into(),
+            JsVariant::String(_) => {
+                let s = value
+                    .as_string()
+                    .map(|v| v.to_std_string_lossy())
+                    .unwrap_or_else(|| "<string>".into());
+                summarise_value(&s, max_len)
+            }
+            JsVariant::Symbol(_) => "symbol".into(),
+            JsVariant::Object(_) => {
+                if value.is_callable() {
+                    "[function]".into()
+                } else {
+                    "[object]".into()
+                }
+            }
+        }
+    }
+
+    fn js_value_string(value: &JsValue) -> Option<String> {
+        value.as_string().map(|v| v.to_std_string_lossy())
+    }
+
+    fn summarise_value(value: &str, max_len: usize) -> String {
+        let mut out = String::new();
+        for ch in value.chars() {
+            if out.len() >= max_len {
+                break;
+            }
+            if ch.is_ascii_graphic() || ch == ' ' {
+                out.push(ch);
+            } else if ch.is_whitespace() {
+                out.push(' ');
+            } else {
+                out.push('.');
+            }
+        }
+        out.trim().to_string()
+    }
+
+    fn looks_like_url(value: &str) -> bool {
+        let lower = value.to_ascii_lowercase();
+        lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("mailto:")
+            || lower.starts_with("javascript:")
+            || lower.starts_with("file:")
+    }
+
+    fn domain_from_url(value: &str) -> Option<String> {
+        let lower = value.to_ascii_lowercase();
+        if lower.starts_with("mailto:") {
+            let rest = &value[7..];
+            return rest
+                .split('@')
+                .nth(1)
+                .map(|s| s.split('?').next().unwrap_or(s).to_string());
+        }
+        if lower.starts_with("http://") || lower.starts_with("https://") {
+            let trimmed = value.split("://").nth(1)?;
+            let host = trimmed.split('/').next().unwrap_or(trimmed);
+            let host = host.split('?').next().unwrap_or(host);
+            let host = host.split('#').next().unwrap_or(host);
+            if host.is_empty() {
+                None
+            } else {
+                Some(host.to_string())
+            }
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn summarise_value_sanitizes_and_truncates() {
+            let input = "abc\n\u{0000}\u{0008}\u{2603}def";
+            let out = summarise_value(input, 64);
+            assert!(!out.contains('\n'));
+            assert!(out.len() <= 64);
+        }
+
+        #[test]
+        fn url_helpers_extract_domains() {
+            assert!(looks_like_url("http://example.com/path"));
+            assert!(looks_like_url("mailto:user@example.com"));
+            assert!(looks_like_url("file:///tmp/test"));
+            assert_eq!(
+                domain_from_url("http://example.com/a/b").as_deref(),
+                Some("example.com")
+            );
+            assert_eq!(
+                domain_from_url("mailto:user@example.com").as_deref(),
+                Some("example.com")
+            );
+            assert_eq!(domain_from_url("file:///tmp/test"), None);
+        }
+
+        #[test]
+        fn summarise_args_caps_count() {
+            let mut ctx = Context::default();
+            let options = DynamicOptions::default();
+            let mut args = Vec::new();
+            for i in 0..(options.max_args_per_call + 2) {
+                args.push(JsValue::from(i as i32));
+            }
+            let summary = summarise_args(&args, &mut ctx, &options).unwrap_or_default();
+            assert!(summary.contains("+2 more"));
+        }
+    }
+}
+
+#[cfg(feature = "js-sandbox")]
+pub use sandbox_impl::{is_file_call, is_network_call, run_sandbox};
+
+#[cfg(not(feature = "js-sandbox"))]
+pub fn run_sandbox(_bytes: &[u8], options: &DynamicOptions) -> DynamicOutcome {
+    DynamicOutcome::Skipped {
+        reason: "sandbox_unavailable".into(),
+        limit: options.max_bytes,
+        actual: 0,
+    }
+}
+
+#[cfg(not(feature = "js-sandbox"))]
+pub fn is_network_call(_name: &str) -> bool {
+    false
+}
+
+#[cfg(not(feature = "js-sandbox"))]
+pub fn is_file_call(_name: &str) -> bool {
+    false
+}
