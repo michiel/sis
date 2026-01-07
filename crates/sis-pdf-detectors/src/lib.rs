@@ -32,7 +32,26 @@ pub mod ir_graph_static;
 #[cfg(feature = "js-sandbox")]
 pub mod js_sandbox;
 
+#[derive(Clone, Copy)]
+pub struct DetectorSettings {
+    pub js_ast: bool,
+    pub js_sandbox: bool,
+}
+
+impl Default for DetectorSettings {
+    fn default() -> Self {
+        Self {
+            js_ast: true,
+            js_sandbox: true,
+        }
+    }
+}
+
 pub fn default_detectors() -> Vec<Box<dyn Detector>> {
+    default_detectors_with_settings(DetectorSettings::default())
+}
+
+pub fn default_detectors_with_settings(settings: DetectorSettings) -> Vec<Box<dyn Detector>> {
     #[allow(unused_mut)]
     let mut detectors: Vec<Box<dyn Detector>> = vec![
         Box::new(polyglot::PolyglotDetector),
@@ -45,8 +64,12 @@ pub fn default_detectors() -> Vec<Box<dyn Detector>> {
         Box::new(OpenActionDetector),
         Box::new(AAPresentDetector),
         Box::new(AAEventDetector),
-        Box::new(JavaScriptDetector),
-        Box::new(js_polymorphic::JsPolymorphicDetector),
+        Box::new(JavaScriptDetector {
+            enable_ast: settings.js_ast,
+        }),
+        Box::new(js_polymorphic::JsPolymorphicDetector {
+            enable_ast: settings.js_ast,
+        }),
         Box::new(evasion_time::TimingEvasionDetector),
         Box::new(evasion_env::EnvProbeDetector),
         Box::new(supply_chain::SupplyChainDetector),
@@ -81,9 +104,34 @@ pub fn default_detectors() -> Vec<Box<dyn Detector>> {
         Box::new(strict::StrictParseDeviationDetector),
         Box::new(ir_graph_static::IrGraphStaticDetector),
     ];
-    #[cfg(feature = "js-sandbox")]
-    detectors.push(Box::new(js_sandbox::JavaScriptSandboxDetector));
+    if settings.js_sandbox {
+        #[cfg(feature = "js-sandbox")]
+        detectors.push(Box::new(js_sandbox::JavaScriptSandboxDetector));
+    }
     detectors
+}
+
+pub fn sandbox_available() -> bool {
+    cfg!(feature = "js-sandbox")
+}
+
+pub fn sandbox_summary(requested: bool) -> sis_pdf_core::report::SandboxSummary {
+    if !requested {
+        return sis_pdf_core::report::SandboxSummary {
+            enabled: false,
+            disabled_reason: Some("disabled by --no-js-sandbox".into()),
+        };
+    }
+    if !sandbox_available() {
+        return sis_pdf_core::report::SandboxSummary {
+            enabled: false,
+            disabled_reason: Some("not compiled (js-sandbox feature disabled)".into()),
+        };
+    }
+    sis_pdf_core::report::SandboxSummary {
+        enabled: true,
+        disabled_reason: None,
+    }
 }
 
 struct XrefConflictDetector;
@@ -466,7 +514,9 @@ fn aa_event_value(ctx: &sis_pdf_core::scan::ScanContext, obj: &sis_pdf_pdf::obje
     }
 }
 
-struct JavaScriptDetector;
+struct JavaScriptDetector {
+    enable_ast: bool,
+}
 
 impl Detector for JavaScriptDetector {
     fn id(&self) -> &'static str {
@@ -526,7 +576,10 @@ impl Detector for JavaScriptDetector {
                                     "Decoded JS payload",
                                 ));
                             }
-                            let sig = js_signals::extract_js_signals(&payload.bytes);
+                            let sig = js_signals::extract_js_signals_with_ast(
+                                &payload.bytes,
+                                self.enable_ast,
+                            );
                             for (k, v) in sig {
                                 meta.insert(k, v);
                             }

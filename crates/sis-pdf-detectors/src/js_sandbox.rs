@@ -7,7 +7,7 @@ use anyhow::Result;
 use boa_engine::object::ObjectInitializer;
 use boa_engine::property::Attribute;
 use boa_engine::vm::RuntimeLimits;
-use boa_engine::{Context, JsValue, NativeFunction, Source};
+use boa_engine::{Context, JsString, JsValue, NativeFunction, Source};
 
 use sis_pdf_core::detect::{Cost, Detector, Needs};
 use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
@@ -19,6 +19,7 @@ pub struct JavaScriptSandboxDetector;
 
 const JS_WALLCLOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const JS_WALLCLOCK_WARN: Duration = Duration::from_secs(1);
+const JS_SANDBOX_MAX_BYTES: usize = 256 * 1024;
 
 impl Detector for JavaScriptSandboxDetector {
     fn id(&self) -> &'static str {
@@ -47,7 +48,26 @@ impl Detector for JavaScriptSandboxDetector {
             let Some((_, obj)) = dict.get_first(b"/JS") else { continue };
             let payload = resolve_payload(ctx, obj);
             let Some(info) = payload.payload else { continue };
-            if info.bytes.len() > 256 * 1024 {
+            if info.bytes.len() > JS_SANDBOX_MAX_BYTES {
+                let mut meta = std::collections::HashMap::new();
+                meta.insert("js.sandbox_exec".into(), "false".into());
+                meta.insert("js.sandbox_skip_reason".into(), "payload_too_large".into());
+                meta.insert("payload.decoded_len".into(), info.bytes.len().to_string());
+                meta.insert("js.sandbox_limit_bytes".into(), JS_SANDBOX_MAX_BYTES.to_string());
+                findings.push(Finding {
+                    id: String::new(),
+                    surface: self.surface(),
+                    kind: "js_sandbox_skipped".into(),
+                    severity: Severity::Info,
+                    confidence: Confidence::Probable,
+                    title: "JavaScript sandbox skipped".into(),
+                    description: "Sandbox skipped because the JS payload exceeds the size limit.".into(),
+                    objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
+                    evidence: vec![span_to_evidence(dict.span, "JavaScript dict")],
+                    remediation: Some("Inspect the JS payload size and consider manual analysis.".into()),
+                    meta,
+                    yara: None,
+                });
                 continue;
             }
             let bytes = info.bytes.clone();
@@ -76,6 +96,27 @@ impl Detector for JavaScriptSandboxDetector {
                         entry.obj,
                         entry.gen
                     );
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert("js.sandbox_exec".into(), "true".into());
+                    meta.insert("js.sandbox_timeout".into(), "true".into());
+                    meta.insert(
+                        "js.sandbox_timeout_ms".into(),
+                        JS_WALLCLOCK_TIMEOUT.as_millis().to_string(),
+                    );
+                    findings.push(Finding {
+                        id: String::new(),
+                        surface: self.surface(),
+                        kind: "js_sandbox_timeout".into(),
+                        severity: Severity::Low,
+                        confidence: Confidence::Probable,
+                        title: "JavaScript sandbox timeout".into(),
+                        description: "Sandbox execution exceeded the time limit.".into(),
+                        objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
+                        evidence: vec![span_to_evidence(dict.span, "JavaScript dict")],
+                        remediation: Some("Inspect the JS payload for long-running loops.".into()),
+                        meta,
+                        yara: None,
+                    });
                     continue;
                 }
                 Err(_) => continue,
@@ -90,6 +131,22 @@ impl Detector for JavaScriptSandboxDetector {
                 );
             }
             if calls.is_empty() {
+                let mut meta = std::collections::HashMap::new();
+                meta.insert("js.sandbox_exec".into(), "true".into());
+                findings.push(Finding {
+                    id: String::new(),
+                    surface: self.surface(),
+                    kind: "js_sandbox_exec".into(),
+                    severity: Severity::Info,
+                    confidence: Confidence::Probable,
+                    title: "JavaScript sandbox executed".into(),
+                    description: "Sandbox executed JS; no monitored API calls observed.".into(),
+                    objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
+                    evidence: vec![span_to_evidence(dict.span, "JavaScript dict")],
+                    remediation: Some("Review JS payload for non-API behavior.".into()),
+                    meta,
+                    yara: None,
+                });
                 continue;
             }
             let mut meta = std::collections::HashMap::new();
@@ -102,6 +159,7 @@ impl Detector for JavaScriptSandboxDetector {
                     entry.obj,
                     entry.gen
                 );
+                meta.insert("js.sandbox_exec".into(), "true".into());
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),
@@ -123,6 +181,7 @@ impl Detector for JavaScriptSandboxDetector {
                     entry.obj,
                     entry.gen
                 );
+                meta.insert("js.sandbox_exec".into(), "true".into());
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),
@@ -146,20 +205,22 @@ impl Detector for JavaScriptSandboxDetector {
 fn register_app(context: &mut Context, log: Rc<RefCell<Vec<String>>>) {
     let make_fn = |name: &'static str| {
         let log = log.clone();
-        NativeFunction::from_closure(move |_this, _args, _ctx| {
-            log.borrow_mut().push(name.to_string());
-            Ok(JsValue::Undefined)
-        })
+        unsafe {
+            NativeFunction::from_closure(move |_this, _args, _ctx| {
+                log.borrow_mut().push(name.to_string());
+                Ok(JsValue::undefined())
+            })
+        }
     };
 
     let app = ObjectInitializer::new(context)
-        .function(make_fn("launchURL"), "launchURL", 1)
-        .function(make_fn("getURL"), "getURL", 1)
-        .function(make_fn("submitForm"), "submitForm", 1)
-        .function(make_fn("browseForDoc"), "browseForDoc", 0)
-        .function(make_fn("saveAs"), "saveAs", 1)
-        .function(make_fn("exportDataObject"), "exportDataObject", 1)
+        .function(make_fn("launchURL"), JsString::from("launchURL"), 1)
+        .function(make_fn("getURL"), JsString::from("getURL"), 1)
+        .function(make_fn("submitForm"), JsString::from("submitForm"), 1)
+        .function(make_fn("browseForDoc"), JsString::from("browseForDoc"), 0)
+        .function(make_fn("saveAs"), JsString::from("saveAs"), 1)
+        .function(make_fn("exportDataObject"), JsString::from("exportDataObject"), 1)
         .build();
 
-    context.register_global_property("app", app, Attribute::all());
+    let _ = context.register_global_property(JsString::from("app"), app, Attribute::all());
 }

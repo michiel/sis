@@ -10,6 +10,10 @@ pub struct DecodedLayers {
 }
 
 pub fn extract_js_signals(data: &[u8]) -> HashMap<String, String> {
+    extract_js_signals_with_ast(data, true)
+}
+
+pub fn extract_js_signals_with_ast(data: &[u8], enable_ast: bool) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let entropy = shannon_entropy(data);
     out.insert("js.entropy".into(), format!("{:.3}", entropy));
@@ -55,21 +59,24 @@ pub fn extract_js_signals(data: &[u8]) -> HashMap<String, String> {
         bool_str(contains_suspicious_api(data)),
     );
     out.insert("js.ast_parsed".into(), "false".into());
+    out.insert("js.sandbox_exec".into(), "false".into());
     #[cfg(feature = "js-ast")]
     {
-        if let Some(summary) = ast_behaviour_summary(data) {
-            out.insert("js.ast_parsed".into(), "true".into());
-            if let Some(summary) = summary.summary {
-                out.insert("js.behaviour_summary".into(), summary);
-            }
-            if !summary.call_args.is_empty() {
-                out.insert("js.ast_call_args".into(), summary.call_args.join("; "));
-            }
-            if !summary.urls.is_empty() {
-                out.insert("js.ast_urls".into(), summary.urls.join(", "));
-            }
-            if !summary.domains.is_empty() {
-                out.insert("js.ast_domains".into(), summary.domains.join(", "));
+        if enable_ast {
+            if let Some(summary) = ast_behaviour_summary(data) {
+                out.insert("js.ast_parsed".into(), "true".into());
+                if let Some(summary) = summary.summary {
+                    out.insert("js.behaviour_summary".into(), summary);
+                }
+                if !summary.call_args.is_empty() {
+                    out.insert("js.ast_call_args".into(), summary.call_args.join("; "));
+                }
+                if !summary.urls.is_empty() {
+                    out.insert("js.ast_urls".into(), summary.urls.join(", "));
+                }
+                if !summary.domains.is_empty() {
+                    out.insert("js.ast_domains".into(), summary.domains.join(", "));
+                }
             }
         }
     }
@@ -371,9 +378,11 @@ struct AstSummary {
 
 #[cfg(feature = "js-ast")]
 fn ast_behaviour_summary(data: &[u8]) -> Option<AstSummary> {
-    use boa_ast::expression::{Call, Literal};
+    use boa_ast::expression::literal::Literal;
+    use boa_ast::expression::Call;
+    use boa_ast::scope::Scope;
     use boa_ast::visitor::{VisitWith, Visitor};
-    use boa_interner::Interner;
+    use boa_interner::{Interner, ToInternedString};
     use boa_parser::{Parser, Source};
     use std::collections::{BTreeMap, BTreeSet, HashMap as Map};
 
@@ -381,7 +390,8 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<AstSummary> {
     let mut interner = Interner::default();
     let source = Source::from_bytes(src);
     let mut parser = Parser::new(source);
-    let script = parser.parse_script(&mut interner).ok()?;
+    let scope = Scope::new_global();
+    let script = parser.parse_script(&scope, &mut interner).ok()?;
 
     struct JsAstVisitor<'a> {
         interner: &'a Interner,
@@ -395,27 +405,28 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<AstSummary> {
         type BreakTy = ();
 
         fn visit_call(&mut self, node: &'ast Call) -> std::ops::ControlFlow<Self::BreakTy> {
-            use boa_interner::ToInternedString;
             let name = node.function().to_interned_string(self.interner);
             if !name.is_empty() {
-                *self.calls.entry(name).or_insert(0) += 1;
+                *self.calls.entry(name.clone()).or_insert(0) += 1;
             }
             if !name.is_empty() {
                 for arg in node.args() {
-                    if let boa_ast::expression::Expression::Literal(Literal::String(sym)) = arg {
-                        let value = self
-                            .interner
-                            .resolve_expect(*sym)
-                            .join(|s| s.to_string(), String::from_utf16_lossy, true);
-                        let summary = summarise_arg_value(&value, 60);
-                        self.call_args
-                            .entry(name.clone())
-                            .or_default()
-                            .insert(summary);
-                        if looks_like_url(&value) {
-                            self.urls.insert(value.clone());
-                            if let Some(domain) = domain_from_url(&value) {
-                                self.domains.insert(domain);
+                    if let boa_ast::expression::Expression::Literal(literal) = arg {
+                        if let Some(sym) = literal.as_string() {
+                            let value = self
+                                .interner
+                                .resolve_expect(sym)
+                                .join(|s: &str| s.to_string(), String::from_utf16_lossy, true);
+                            let summary = summarise_arg_value(&value, 60);
+                            self.call_args
+                                .entry(name.clone())
+                                .or_default()
+                                .insert(summary);
+                            if looks_like_url(&value) {
+                                self.urls.insert(value.clone());
+                                if let Some(domain) = domain_from_url(&value) {
+                                    self.domains.insert(domain);
+                                }
                             }
                         }
                     }
@@ -425,13 +436,13 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<AstSummary> {
         }
 
         fn visit_literal(&mut self, node: &'ast Literal) -> std::ops::ControlFlow<Self::BreakTy> {
-            if let Literal::String(sym) = node {
+            if let Some(sym) = node.as_string() {
                 let value = self
                     .interner
-                    .resolve_expect(*sym)
-                    .join(|s| s.to_string(), String::from_utf16_lossy, true);
+                    .resolve_expect(sym)
+                    .join(|s: &str| s.to_string(), String::from_utf16_lossy, true);
                 if looks_like_url(&value) {
-                    self.urls.insert(value);
+                    self.urls.insert(value.clone());
                     if let Some(domain) = domain_from_url(&value) {
                         self.domains.insert(domain);
                     }
@@ -467,8 +478,9 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<AstSummary> {
     if !visitor.urls.is_empty() {
         let summary = visitor
             .urls
-            .into_iter()
+            .iter()
             .take(5)
+            .cloned()
             .collect::<Vec<_>>()
             .join(", ");
         if !summary.is_empty() {
@@ -478,8 +490,9 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<AstSummary> {
     if !visitor.domains.is_empty() {
         let summary = visitor
             .domains
-            .into_iter()
+            .iter()
             .take(5)
+            .cloned()
             .collect::<Vec<_>>()
             .join(", ");
         if !summary.is_empty() {
@@ -487,8 +500,8 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<AstSummary> {
         }
     }
     let call_args = render_call_args(visitor.call_args, 6, 3);
-    let urls = visitor.urls.into_iter().take(5).collect::<Vec<_>>();
-    let domains = visitor.domains.into_iter().take(5).collect::<Vec<_>>();
+    let urls = visitor.urls.iter().take(5).cloned().collect::<Vec<_>>();
+    let domains = visitor.domains.iter().take(5).cloned().collect::<Vec<_>>();
     let summary = if parts.is_empty() {
         None
     } else {
