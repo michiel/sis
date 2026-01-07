@@ -310,6 +310,7 @@ cargo run -p sis-pdf --features ml-graph --bin sis -- scan suspicious.pdf --ml -
 Notes:
 - Graph ML expects `graph_model.json` in the model directory.
 - Graph ML emits `ml_graph_score_high` when it exceeds the threshold.
+- Graph ML schema reference: `docs/graph-model-schema.md`.
 
 ## 12b) IR/ORG static analysis (no ML)
 

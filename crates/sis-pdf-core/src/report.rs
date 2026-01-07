@@ -72,6 +72,7 @@ impl Report {
         network_intents: Vec<crate::campaign::NetworkIntent>,
         response_rules: Vec<crate::yara::YaraRule>,
         structural_summary: Option<StructuralSummary>,
+        ml_summary_override: Option<MlSummary>,
     ) -> Self {
         let mut grouped: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
         for f in &findings {
@@ -84,7 +85,7 @@ impl Report {
                 .push(f.id.clone());
         }
         let summary = summary_from_findings(&findings);
-        let ml_summary = ml_summary_from_findings(&findings);
+        let ml_summary = ml_summary_override.or_else(|| ml_summary_from_findings(&findings));
         Self {
             summary,
             findings,
@@ -139,8 +140,17 @@ pub struct SecondaryParserSummary {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct MlSummary {
+    #[serde(default)]
+    pub mode: Option<String>,
     pub graph: Option<MlRunSummary>,
     pub traditional: Option<MlRunSummary>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct MlNodeAttribution {
+    pub obj_ref: String,
+    pub summary: String,
+    pub score: f32,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -149,6 +159,8 @@ pub struct MlRunSummary {
     pub threshold: f32,
     pub label: bool,
     pub kind: String,
+    #[serde(default)]
+    pub top_nodes: Option<Vec<MlNodeAttribution>>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -237,18 +249,90 @@ pub fn print_human(report: &Report) {
     }
     if let Some(ml) = &report.ml_summary {
         println!();
-        println!("ML summary");
-        if let Some(run) = &ml.graph {
-            println!(
-                "  Graph: score {:.4} threshold {:.4} label {}",
-                run.score, run.threshold, run.label
-            );
+        println!("ML findings");
+        println!("  ML summary");
+        if let Some(mode) = ml_mode_label(ml) {
+            println!("    Mode: {}", mode);
+            if ml_mode_includes_graph(mode) {
+                if let Some(run) = &ml.graph {
+                    println!(
+                        "    Graph: score {:.4} threshold {:.4} label {} ({})",
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    );
+                } else if has_ml_error(&report.findings) {
+                    println!("    Graph: error (see ml_model_error findings)");
+                }
+            }
+            if ml_mode_includes_traditional(mode) {
+                if let Some(run) = &ml.traditional {
+                    println!(
+                        "    Traditional: score {:.4} threshold {:.4} label {} ({})",
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    );
+                } else if has_ml_error(&report.findings) {
+                    println!("    Traditional: error (see ml_model_error findings)");
+                }
+            }
+        } else if has_ml_error(&report.findings) {
+            println!("    Status: error (see ml_model_error findings)");
         }
-        if let Some(run) = &ml.traditional {
-            println!(
-                "  Traditional: score {:.4} threshold {:.4} label {}",
-                run.score, run.threshold, run.label
-            );
+        println!();
+        println!("  ML details");
+        if let Some(mode) = ml_mode_label(ml) {
+            if ml_mode_includes_graph(mode) {
+                if let Some(run) = &ml.graph {
+                    println!(
+                        "    Graph: kind={} score {:.4} threshold {:.4} label {} ({})",
+                        run.kind,
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    );
+                    if let Some(nodes) = &run.top_nodes {
+                        println!("    Graph top nodes:");
+                        for node in nodes {
+                            println!(
+                                "      - {} score {:.4} ({})",
+                                node.obj_ref, node.score, node.summary
+                            );
+                        }
+                    }
+                } else if has_ml_error(&report.findings) {
+                    println!("    Graph: error (see ml_model_error findings)");
+                }
+            }
+            if ml_mode_includes_traditional(mode) {
+                if let Some(run) = &ml.traditional {
+                    println!(
+                        "    Traditional: kind={} score {:.4} threshold {:.4} label {} ({})",
+                        run.kind,
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    );
+                    if let Some(nodes) = &run.top_nodes {
+                        println!("    Traditional top nodes:");
+                        for node in nodes {
+                            println!(
+                                "      - {} score {:.4} ({})",
+                                node.obj_ref, node.score, node.summary
+                            );
+                        }
+                    }
+                } else if has_ml_error(&report.findings) {
+                    println!("    Traditional: error (see ml_model_error findings)");
+                }
+            }
+        } else if has_ml_error(&report.findings) {
+            println!("    Status: error (see ml_model_error findings)");
         }
     }
     if let Some(resource) = resource_risk_summary(&report.findings) {
@@ -412,6 +496,7 @@ fn ml_summary_from_findings(findings: &[Finding]) -> Option<MlSummary> {
                 threshold,
                 label: true,
                 kind: f.kind.clone(),
+                top_nodes: None,
             });
         } else if f.kind == "ml_malware_score_high" {
             let score = f
@@ -429,13 +514,62 @@ fn ml_summary_from_findings(findings: &[Finding]) -> Option<MlSummary> {
                 threshold,
                 label: true,
                 kind: f.kind.clone(),
+                top_nodes: None,
             });
         }
     }
     if graph.is_none() && traditional.is_none() {
         None
     } else {
-        Some(MlSummary { graph, traditional })
+        let mode = if graph.is_some() && traditional.is_some() {
+            Some("graph+traditional".to_string())
+        } else if graph.is_some() {
+            Some("graph".to_string())
+        } else if traditional.is_some() {
+            Some("traditional".to_string())
+        } else {
+            None
+        };
+        Some(MlSummary {
+            mode,
+            graph,
+            traditional,
+        })
+    }
+}
+
+fn has_ml_error(findings: &[Finding]) -> bool {
+    findings.iter().any(|f| f.kind == "ml_model_error")
+}
+
+fn ml_mode_label(summary: &MlSummary) -> Option<&str> {
+    if let Some(mode) = summary.mode.as_deref() {
+        return Some(mode);
+    }
+    if summary.graph.is_some() && summary.traditional.is_some() {
+        Some("graph+traditional")
+    } else if summary.graph.is_some() {
+        Some("graph")
+    } else if summary.traditional.is_some() {
+        Some("traditional")
+    } else {
+        None
+    }
+}
+
+fn ml_mode_includes_graph(mode: &str) -> bool {
+    mode == "graph" || mode == "graph+traditional"
+}
+
+fn ml_mode_includes_traditional(mode: &str) -> bool {
+    mode == "traditional" || mode == "graph+traditional"
+}
+
+fn ml_assessment(label: bool) -> &'static str {
+    if label {
+        "above threshold (flagged)"
+    } else {
+        "below threshold (not flagged)"
     }
 }
 
@@ -553,6 +687,8 @@ fn render_chain_notes(chain: &ExploitChain) -> Vec<(String, String)> {
 fn render_finding_context(f: &Finding) -> String {
     let mut parts = Vec::new();
     parts.push(format!("kind `{}`", f.kind));
+    parts.push(format!("severity {:?}", f.severity));
+    parts.push(format!("impact {}", impact_rating_for_finding(f)));
     if let Some(target) = f.meta.get("action.target") {
         parts.push(format!("action_target {}", target));
     }
@@ -631,6 +767,205 @@ fn render_payload_behaviour(f: &Finding) -> Option<String> {
         return None;
     }
     Some(notes.join("; "))
+}
+
+fn impact_rating_for_finding(f: &Finding) -> &'static str {
+    if let Some(r) = f.meta.get("impact.rating") {
+        return if r.eq_ignore_ascii_case("high") {
+            "High"
+        } else if r.eq_ignore_ascii_case("medium") {
+            "Medium"
+        } else if r.eq_ignore_ascii_case("low") {
+            "Low"
+        } else {
+            "Low"
+        };
+    }
+    match f.severity {
+        Severity::Critical | Severity::High => "High",
+        Severity::Medium => "Medium",
+        Severity::Low | Severity::Info => "Low",
+    }
+}
+
+fn runtime_effect_for_finding(f: &Finding) -> String {
+    if let Some(action) = f.meta.get("action.s") {
+        if action == "/JavaScript" {
+            return "Viewer executes JavaScript in the document context; may access APIs, user data, or trigger further actions.".into();
+        }
+        if action == "/URI" {
+            return "Viewer can open an external URL or prompt the user to navigate to a remote resource.".into();
+        }
+        if action == "/Launch" {
+            return "Viewer may launch an external application or file, which can lead to user compromise.".into();
+        }
+        if action == "/SubmitForm" {
+            return "Form submission can transmit data to external endpoints.".into();
+        }
+    }
+    match f.kind.as_str() {
+        "open_action_present" => "Automatic execution occurs on document open; downstream actions may run without user intent.".into(),
+        "aa_present" | "aa_event_present" => "Event-driven actions can fire during viewing or interaction, enabling automatic execution.".into(),
+        "js_present" => "JavaScript runs in the viewer context and can influence document behavior or user actions.".into(),
+        "uri_present" => "User may be redirected to external resources, enabling phishing or data exfiltration.".into(),
+        "launch_action_present" => "External application launch is possible, increasing risk of system compromise.".into(),
+        "submitform_present" => "Form data may be transmitted to remote endpoints.".into(),
+        "embedded_file_present" | "filespec_present" => "Embedded files can be extracted or opened by the user or viewer.".into(),
+        "decoder_risk_present" | "decompression_ratio_suspicious" | "huge_image_dimensions" => {
+            "Decoding may trigger resource exhaustion or vulnerable parser paths during rendering.".into()
+        }
+        "xref_conflict"
+        | "incremental_update_chain"
+        | "object_id_shadowing"
+        | "objstm_density_high"
+        | "stream_length_mismatch"
+        | "missing_pdf_header"
+        | "missing_eof_marker"
+        | "parser_diff_structural" => {
+            "No direct runtime behavior inferred; structural anomalies can alter how viewers parse and execute content.".into()
+        }
+        _ => "No direct runtime behavior inferred; increases attack surface or analysis risk.".into(),
+    }
+}
+
+fn chain_effect_summary(chain: &ExploitChain) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(trigger) = &chain.trigger {
+        if trigger.contains("OpenAction") {
+            parts.push("Document open triggers execution".into());
+        } else if trigger.contains("AA") {
+            parts.push("Viewer event triggers execution".into());
+        }
+    }
+    if let Some(action) = &chain.action {
+        if action.contains("JavaScript") {
+            parts.push("JavaScript executes in viewer context".into());
+        } else if action.contains("URI") {
+            parts.push("External navigation or fetch occurs".into());
+        } else if action.contains("Launch") {
+            parts.push("External application launch possible".into());
+        }
+    }
+    if let Some(payload) = &chain.payload {
+        if payload.contains("JS") || payload.contains("JavaScript") {
+            parts.push("Script payload involved".into());
+        } else if payload.contains("URI") {
+            parts.push("External URL payload involved".into());
+        } else if payload.contains("Embedded") {
+            parts.push("Embedded payload involved".into());
+        }
+    }
+    if parts.is_empty() {
+        "Execution path inferred from linked findings; review trigger and payload details.".into()
+    } else {
+        parts.join("; ")
+    }
+}
+
+fn chain_execution_narrative(chain: &ExploitChain, findings: &[Finding]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(trigger) = &chain.trigger {
+        if trigger.contains("OpenAction") {
+            lines.push("Execution starts automatically when the document opens.".into());
+        } else if trigger.contains("AA") {
+            lines.push("Execution is tied to viewer events (Additional Actions).".into());
+        }
+    }
+    if let Some(action) = &chain.action {
+        if action.contains("JavaScript") {
+            lines.push("JavaScript runs in the viewer context and can access document APIs.".into());
+        } else if action.contains("URI") {
+            lines.push("Viewer may navigate to an external URL or fetch remote content.".into());
+        } else if action.contains("Launch") {
+            lines.push("Viewer may launch an external application or file.".into());
+        } else if action.contains("SubmitForm") {
+            lines.push("Form data can be transmitted to external endpoints.".into());
+        }
+    }
+    if let Some(payload) = &chain.payload {
+        if payload.contains("JS") || payload.contains("JavaScript") {
+            lines.push("Chain contains a script payload that can alter viewer behavior.".into());
+        } else if payload.contains("URI") {
+            lines.push("Chain references external URL payloads.".into());
+        } else if payload.contains("Embedded") {
+            lines.push("Chain involves embedded file payloads.".into());
+        }
+    }
+    if let Some(target) = chain.notes.get("action.target") {
+        lines.push(format!("Action target: {}.", target));
+    }
+    let mut js_notes: Vec<String> = Vec::new();
+    for fid in &chain.findings {
+        if let Some(f) = findings.iter().find(|f| &f.id == fid) {
+            if let Some(summary) = f.meta.get("js.behaviour_summary") {
+                js_notes.push(summary.clone());
+            }
+            if f.meta.get("js.obfuscation_suspected").map(|v| v == "true").unwrap_or(false) {
+                js_notes.push("Obfuscation suspected in script payloads.".into());
+            }
+            if f.kind == "uri_present" {
+                if let Some(url) = f.meta.get("uri.value") {
+                    js_notes.push(format!("External URL observed: {}", url));
+                }
+            }
+        }
+    }
+    if !js_notes.is_empty() {
+        let mut uniq = js_notes;
+        uniq.sort();
+        uniq.dedup();
+        lines.push(format!("Observed behavior signals: {}.", uniq.join("; ")));
+    }
+    if lines.is_empty() {
+        "Insufficient context for a detailed narrative; review chain findings and payload details.".into()
+    } else {
+        lines.join(" ")
+    }
+}
+
+fn runtime_behavior_summary(findings: &[Finding]) -> Vec<String> {
+    let mut auto_exec = false;
+    let mut js = false;
+    let mut external = false;
+    let mut launch = false;
+    let mut submit = false;
+    let mut embedded = false;
+    let mut decoder = false;
+    for f in findings {
+        match f.kind.as_str() {
+            "open_action_present" | "aa_present" | "aa_event_present" => auto_exec = true,
+            "js_present" => js = true,
+            "uri_present" | "gotor_present" => external = true,
+            "launch_action_present" => launch = true,
+            "submitform_present" => submit = true,
+            "embedded_file_present" | "filespec_present" => embedded = true,
+            "decoder_risk_present" | "decompression_ratio_suspicious" => decoder = true,
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if auto_exec {
+        out.push("Automatic execution triggers detected (OpenAction/AA).".into());
+    }
+    if js {
+        out.push("JavaScript execution likely in viewer context.".into());
+    }
+    if external {
+        out.push("External navigation or remote resource access possible.".into());
+    }
+    if launch {
+        out.push("External application or file launch possible.".into());
+    }
+    if submit {
+        out.push("Form submission can transmit data externally.".into());
+    }
+    if embedded {
+        out.push("Embedded files present; secondary payload delivery possible.".into());
+    }
+    if decoder {
+        out.push("Decoder-heavy streams may trigger vulnerable code paths or resource exhaustion.".into());
+    }
+    out
 }
 
 pub(crate) fn impact_for_finding(f: &Finding) -> String {
@@ -897,20 +1232,101 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
     }
 
     if let Some(ml) = &report.ml_summary {
-        out.push_str("## ML Summary\n\n");
-        if let Some(run) = &ml.graph {
+        out.push_str("## ML Findings\n\n");
+        out.push_str("### ML Summary\n\n");
+        if let Some(mode) = ml_mode_label(ml) {
             out.push_str(&format!(
-                "- Graph: score {:.4} threshold {:.4} label {}\n",
-                run.score, run.threshold, run.label
+                "- Mode: `{}`\n",
+                escape_markdown(mode)
             ));
-        }
-        if let Some(run) = &ml.traditional {
-            out.push_str(&format!(
-                "- Traditional: score {:.4} threshold {:.4} label {}\n",
-                run.score, run.threshold, run.label
-            ));
+            if ml_mode_includes_graph(mode) {
+                if let Some(run) = &ml.graph {
+                    out.push_str(&format!(
+                        "- Graph: score {:.4} threshold {:.4} label {} ({})\n",
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    ));
+                } else if has_ml_error(&report.findings) {
+                    out.push_str("- Graph: error (see ml_model_error findings)\n");
+                }
+            }
+            if ml_mode_includes_traditional(mode) {
+                if let Some(run) = &ml.traditional {
+                    out.push_str(&format!(
+                        "- Traditional: score {:.4} threshold {:.4} label {} ({})\n",
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    ));
+                } else if has_ml_error(&report.findings) {
+                    out.push_str("- Traditional: error (see ml_model_error findings)\n");
+                }
+            }
+        } else if has_ml_error(&report.findings) {
+            out.push_str("- Status: error (see ml_model_error findings)\n");
         }
         out.push('\n');
+
+        out.push_str("### ML Details\n\n");
+        if let Some(mode) = ml_mode_label(ml) {
+            if ml_mode_includes_graph(mode) {
+                if let Some(run) = &ml.graph {
+                    out.push_str(&format!(
+                        "**Graph ML**\n\n- Kind: `{}`\n- Score: {:.4}\n- Threshold: {:.4}\n- Label: {} ({})\n\n",
+                        escape_markdown(&run.kind),
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    ));
+                    if let Some(nodes) = &run.top_nodes {
+                        out.push_str("**Top contributing nodes**\n\n");
+                        for node in nodes {
+                            out.push_str(&format!(
+                                "- `{}` score {:.4} — {}\n",
+                                escape_markdown(&node.obj_ref),
+                                node.score,
+                                escape_markdown(&node.summary)
+                            ));
+                        }
+                        out.push('\n');
+                    }
+                } else if has_ml_error(&report.findings) {
+                    out.push_str("**Graph ML**\n\n- Status: error (see ml_model_error findings)\n\n");
+                }
+            }
+            if ml_mode_includes_traditional(mode) {
+                if let Some(run) = &ml.traditional {
+                    out.push_str(&format!(
+                        "**Traditional ML**\n\n- Kind: `{}`\n- Score: {:.4}\n- Threshold: {:.4}\n- Label: {} ({})\n\n",
+                        escape_markdown(&run.kind),
+                        run.score,
+                        run.threshold,
+                        run.label,
+                        ml_assessment(run.label)
+                    ));
+                    if let Some(nodes) = &run.top_nodes {
+                        out.push_str("**Top contributing nodes**\n\n");
+                        for node in nodes {
+                            out.push_str(&format!(
+                                "- `{}` score {:.4} — {}\n",
+                                escape_markdown(&node.obj_ref),
+                                node.score,
+                                escape_markdown(&node.summary)
+                            ));
+                        }
+                        out.push('\n');
+                    }
+                } else if has_ml_error(&report.findings) {
+                    out.push_str("**Traditional ML**\n\n- Status: error (see ml_model_error findings)\n\n");
+                }
+            }
+        } else if has_ml_error(&report.findings) {
+            out.push_str("- Status: error (see ml_model_error findings)\n\n");
+        }
     }
 
     if let Some(resource) = resource_risk_summary(&report.findings) {
@@ -923,6 +1339,15 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             resource.three_d,
             resource.sound_movie
         ));
+    }
+
+    let runtime_summary = runtime_behavior_summary(&report.findings);
+    if !runtime_summary.is_empty() {
+        out.push_str("## Static Runtime Behavior\n\n");
+        for line in runtime_summary {
+            out.push_str(&format!("- {}\n", escape_markdown(&line)));
+        }
+        out.push('\n');
     }
 
     if let Some(summary) = &report.intent_summary {
@@ -1099,6 +1524,14 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             if let Some(payload) = &chain.payload {
                 out.push_str(&format!("- Payload: `{}`\n", escape_markdown(payload)));
             }
+            out.push_str(&format!(
+                "- Effect: {}\n",
+                escape_markdown(&chain_effect_summary(chain))
+            ));
+            out.push_str(&format!(
+                "- Narrative: {}\n",
+                escape_markdown(&chain_execution_narrative(chain, &report.findings))
+            ));
             if let Some(target) = chain.notes.get("action.target") {
                 out.push_str(&format!(
                     "- Action target: {}\n",
@@ -1245,6 +1678,10 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         out.push_str(&format!("- Surface: `{:?}`\n", f.surface));
         out.push_str(&format!("- Kind: `{}`\n", escape_markdown(&f.kind)));
         out.push_str(&format!("- Severity: `{:?}`\n", f.severity));
+        out.push_str(&format!(
+            "- Impact rating: `{}`\n",
+            impact_rating_for_finding(f)
+        ));
         out.push_str(&format!("- Confidence: `{:?}`\n", f.confidence));
         if !f.objects.is_empty() {
             out.push_str(&format!(
@@ -1260,6 +1697,11 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         }
         out.push_str("\n**Description**\n\n");
         out.push_str(&format!("{}\n\n", escape_markdown(&f.description)));
+        out.push_str("**Runtime Effect**\n\n");
+        out.push_str(&format!(
+            "{}\n\n",
+            escape_markdown(&runtime_effect_for_finding(f))
+        ));
         if let Some(s) = f.meta.get("action.s") {
             out.push_str("**Action Details**\n\n");
             out.push_str(&format!(

@@ -147,6 +147,7 @@ Focus: textual cues and overlay links.
 
 ### ML Summary
 - `ml_summary` provides score/threshold/label for traditional or graph ML.
+- Graph ML packaging schema: `docs/graph-model-schema.md`.
 
 ## 6) Operator Workflow
 
@@ -154,6 +155,8 @@ Focus: textual cues and overlay links.
 1) `sis scan file.pdf`
 2) Review grouped findings and high severity alerts.
 3) If structural anomalies or ObjStm density is present, run deep scan.
+
+For complete end-to-end workflows, see `docs/scenarios.md`.
 
 ### Deep Analysis
 1) `sis scan file.pdf --deep --diff-parser`

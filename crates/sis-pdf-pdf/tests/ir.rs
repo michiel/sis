@@ -32,3 +32,36 @@ fn ir_emits_nested_dict_paths() {
     assert!(found_openaction);
     assert!(found_openaction_s);
 }
+
+#[test]
+fn ir_string_preview_truncates_on_char_boundary() {
+    let bytes = b"%PDF-1.7\n1 0 obj\n(A\xc3\xa9B)\nendobj\n%%EOF";
+    let graph = parse_pdf(
+        bytes,
+        ParseOptions {
+            recover_xref: true,
+            deep: false,
+            strict: false,
+            max_objstm_bytes: 5_000_000,
+            max_objects: 500_000,
+            max_objstm_total_bytes: 256 * 1024 * 1024,
+        },
+    )
+    .expect("parse pdf");
+    let mut opts = IrOptions::default();
+    opts.max_string_len = 2;
+    let ir = ir_for_graph(&graph.objects, &opts);
+    let mut found = false;
+    for obj in ir {
+        for line in obj.lines {
+            if line.value_type == "str" {
+                found = true;
+                assert_eq!(
+                    line.value,
+                    "len_bytes=4 hex=41c3 ascii=A\\xc3 truncated=true"
+                );
+            }
+        }
+    }
+    assert!(found);
+}

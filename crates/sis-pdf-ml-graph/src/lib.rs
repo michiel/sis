@@ -1,80 +1,193 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{anyhow, Result};
-use blake3::Hasher;
-use serde::Deserialize;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct GraphModelSpec {
-    pub embed_dim: usize,
-    pub gnn: GnnSpec,
-    pub threshold: Option<f32>,
-}
+mod config;
+mod normalize;
+mod onnx;
+mod tokenizer;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct GnnSpec {
-    pub layers: Vec<GnnLayer>,
-    pub readout: LinearLayer,
-}
+pub use config::{
+    embedding_input_names, embedding_timeout_ms, graph_input_names, inference_timeout_ms,
+    max_batch_size, max_ir_string_len, GraphModelConfig,
+};
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct GnnLayer {
-    pub eps: f32,
-    pub weight: Vec<Vec<f32>>,
-    pub bias: Vec<f32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LinearLayer {
-    pub weight: Vec<f32>,
-    pub bias: f32,
-}
-
-#[derive(Debug, Clone)]
-pub struct GraphModel {
-    pub spec: GraphModelSpec,
-}
+use config::ResolvedModelPaths;
+use config::validate_onnx_safety;
+use onnx::{OnnxEmbedder, OnnxGnn, OutputKind, PoolingStrategy};
+use tokenizer::TokenizerWrapper;
 
 #[derive(Debug, Clone)]
 pub struct GraphPrediction {
     pub score: f32,
     pub label: bool,
     pub threshold: f32,
+    pub node_scores: Option<Vec<f32>>,
 }
 
-impl GraphModel {
+pub struct GraphModelRunner {
+    config: GraphModelConfig,
+    _paths: ResolvedModelPaths,
+    tokenizer: TokenizerWrapper,
+    embedder: OnnxEmbedder,
+    gnn: OnnxGnn,
+}
+
+const CHARS_PER_TOKEN: usize = 4;
+const TAIL_MARKER: &str = " <TAIL> ";
+
+impl GraphModelRunner {
     pub fn load(model_dir: &Path) -> Result<Self> {
-        let spec_path = model_dir.join("graph_model.json");
-        let data = fs::read(&spec_path)
-            .map_err(|e| anyhow!("failed to read {}: {}", spec_path.display(), e))?;
-        let spec: GraphModelSpec = serde_json::from_slice(&data)
-            .map_err(|e| anyhow!("invalid graph_model.json: {}", e))?;
-        Ok(Self { spec })
+        let config = GraphModelConfig::load(model_dir)?;
+        let paths = config.resolve_paths(model_dir)?;
+        validate_onnx_safety(&paths.embedding_model)?;
+        validate_onnx_safety(&paths.graph_model)?;
+        let tokenizer = TokenizerWrapper::from_path(&paths.tokenizer, config.embedding.max_length)?;
+        let pooling = match config.embedding.pooling.as_str() {
+            "cls" => PoolingStrategy::Cls,
+            "mean" => PoolingStrategy::Mean,
+            other => return Err(anyhow!("unsupported pooling strategy {}", other)),
+        };
+        let embedder = OnnxEmbedder::from_path(
+            &paths.embedding_model,
+            embedding_input_names(&config),
+            config.embedding.output_name.clone(),
+            pooling,
+            embedding_timeout_ms(&config),
+        )?;
+        let output_kind = match config.graph.output.kind.as_str() {
+            "logit" => OutputKind::Logit,
+            "probability" => OutputKind::Probability,
+            other => return Err(anyhow!("unsupported graph output kind {}", other)),
+        };
+        let gnn = OnnxGnn::from_path(
+            &paths.graph_model,
+            graph_input_names(&config),
+            config.graph.output_name.clone(),
+            config.graph.node_scores_name.clone(),
+            output_kind,
+            config.graph.output.apply_sigmoid,
+            inference_timeout_ms(&config),
+        )?;
+        Ok(Self {
+            config,
+            _paths: paths,
+            tokenizer,
+            embedder,
+            gnn,
+        })
     }
 
     pub fn predict(
         &self,
         node_texts: &[String],
         edge_index: &[(usize, usize)],
-        threshold: f32,
+        threshold_override: f32,
     ) -> Result<GraphPrediction> {
-        let embed_dim = self.spec.embed_dim;
-        let mut node_features: Vec<Vec<f32>> = node_texts
-            .iter()
-            .map(|t| hash_embed(t, embed_dim))
-            .collect();
-        let neighbors = build_neighbors(node_features.len(), edge_index);
-        for layer in &self.spec.gnn.layers {
-            node_features = gin_layer(&node_features, &neighbors, layer)?;
+        if node_texts.is_empty() {
+            return Err(anyhow!("no node texts provided"));
         }
-        let graph_vec = readout_sum(&node_features);
-        let score = sigmoid(linear(&graph_vec, &self.spec.gnn.readout));
-        let label = score >= threshold;
+        let mut texts = node_texts.to_vec();
+        let original_node_count = texts.len();
+        let mut unresolved_edges = 0usize;
+        let mut sentinel_idx: Option<usize> = None;
+        let mut edges: Vec<(usize, usize)> = Vec::with_capacity(edge_index.len());
+        for (s, t) in edge_index.iter().cloned() {
+            let mut src = s;
+            let mut dst = t;
+            if src >= original_node_count || dst >= original_node_count {
+                unresolved_edges += 1;
+                if sentinel_idx.is_none() {
+                    sentinel_idx = Some(texts.len());
+                    texts.push("path=$meta\tvalue_type=unresolved_edges\tvalue=1".into());
+                }
+                let sentinel = sentinel_idx.unwrap();
+                if src >= original_node_count {
+                    src = sentinel;
+                }
+                if dst >= original_node_count {
+                    dst = sentinel;
+                }
+            }
+            edges.push((src, dst));
+        }
+        if unresolved_edges > 0 {
+            if let Some(idx) = sentinel_idx {
+                texts[idx] = format!(
+                    "path=$meta\tvalue_type=unresolved_edges\tvalue={}",
+                    unresolved_edges
+                );
+            }
+            eprintln!(
+                "warning: ml_graph: remapped {} edges with out-of-range nodes (nodes={})",
+                unresolved_edges, original_node_count
+            );
+        }
+        if edges.is_empty() {
+            let marker = "path=$meta\tvalue_type=edge_count\tvalue=0";
+            if let Some(first) = texts.first_mut() {
+                first.push_str(" ; ");
+                first.push_str(marker);
+            }
+        }
+        let normalized = normalize::normalize_ir_texts(
+            &texts,
+            &self.config.embedding.normalize,
+            max_ir_string_len(&self.config),
+        );
+        let compressed = compress_texts_for_max_tokens(
+            &normalized,
+            self.tokenizer.max_length(),
+        );
+        let batch_size = max_batch_size(&self.config);
+        let embeddings = embed_in_batches(&self.tokenizer, &self.embedder, &compressed, batch_size)?;
+        let node_count = embeddings.len();
+        edges.retain(|(s, t)| *s < node_count && *t < node_count);
+        if self.config.edge_index.add_reverse_edges {
+            let mut reversed = edges.iter().map(|(s, t)| (*t, *s)).collect::<Vec<_>>();
+            edges.append(&mut reversed);
+        }
+        if edges.is_empty() {
+            edges.push((0, 0));
+        }
+        let edge_count = edges.len();
+        let feature_dim = embeddings.get(0).map(|v| v.len()).unwrap_or(0);
+        let max_node = edges
+            .iter()
+            .flat_map(|(s, t)| [*s, *t])
+            .max()
+            .unwrap_or(0);
+        let inference = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.gnn.infer(&embeddings, &edges)
+        })) {
+            Ok(result) => match result {
+                Ok(result) => result,
+                Err(err) => {
+                    eprintln!(
+                        "error: ml_graph: gnn inference failed (nodes={} feat_dim={} edges={} max_edge_node={}): {}",
+                        node_count, feature_dim, edge_count, max_node, err
+                    );
+                    return Err(err);
+                }
+            },
+            Err(_) => {
+                eprintln!(
+                    "error: ml_graph: gnn inference panicked (nodes={} feat_dim={} edges={} max_edge_node={})",
+                    node_count, feature_dim, edge_count, max_node
+                );
+                return Err(anyhow!("gnn inference panicked"));
+            }
+        };
+        let threshold = if threshold_override > 0.0 {
+            threshold_override
+        } else {
+            self.config.threshold
+        };
         Ok(GraphPrediction {
-            score,
-            label,
+            score: inference.score,
+            label: inference.score >= threshold,
             threshold,
+            node_scores: inference.node_scores,
         })
     }
 }
@@ -85,136 +198,51 @@ pub fn load_and_predict(
     edge_index: &[(usize, usize)],
     threshold: f32,
 ) -> Result<GraphPrediction> {
-    let model = GraphModel::load(model_dir)?;
-    let cfg_threshold = model.spec.threshold.unwrap_or(threshold);
-    model.predict(node_texts, edge_index, cfg_threshold)
+    let runner = GraphModelRunner::load(model_dir)?;
+    runner.predict(node_texts, edge_index, threshold)
 }
 
-fn hash_embed(text: &str, dim: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; dim.max(1)];
-    let mut count = 0u32;
-    for token in tokenize(text) {
-        let mut h = Hasher::new();
-        h.update(token.as_bytes());
-        let hash = h.finalize();
-        let bytes = hash.as_bytes();
-        let idx = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-        let slot = idx % out.len();
-        out[slot] += 1.0;
-        count += 1;
-    }
-    if count > 0 {
-        let scale = 1.0 / (count as f32).sqrt();
-        for v in &mut out {
-            *v *= scale;
-        }
-    }
-    out
-}
-
-fn tokenize(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '/' || ch == '_' || ch == '-' {
-            cur.push(ch);
-        } else if !cur.is_empty() {
-            out.push(cur.clone());
-            cur.clear();
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    out
-}
-
-fn build_neighbors(n: usize, edges: &[(usize, usize)]) -> Vec<Vec<usize>> {
-    let mut neighbors = vec![Vec::new(); n];
-    for (src, dst) in edges {
-        if *src < n && *dst < n {
-            neighbors[*src].push(*dst);
-        }
-    }
-    neighbors
-}
-
-fn gin_layer(
-    inputs: &[Vec<f32>],
-    neighbors: &[Vec<usize>],
-    layer: &GnnLayer,
+fn embed_in_batches(
+    tokenizer: &TokenizerWrapper,
+    embedder: &OnnxEmbedder,
+    texts: &[String],
+    batch_size: usize,
 ) -> Result<Vec<Vec<f32>>> {
-    if inputs.is_empty() {
-        return Ok(Vec::new());
+    if batch_size == 0 {
+        return Err(anyhow!("batch_size must be > 0"));
     }
-    let in_dim = inputs[0].len();
-    let out_dim = layer.weight.len();
-    for row in &layer.weight {
-        if row.len() != in_dim {
-            return Err(anyhow!("gnn layer weight dim mismatch"));
-        }
+    let mut out = Vec::with_capacity(texts.len());
+    for chunk in texts.chunks(batch_size) {
+        let batch = tokenizer.encode_batch(chunk)?;
+        let mut embeddings = embedder.embed_batch(&batch)?;
+        out.append(&mut embeddings);
     }
-    if layer.bias.len() != out_dim {
-        return Err(anyhow!("gnn layer bias dim mismatch"));
-    }
-    let mut outputs = vec![vec![0.0f32; out_dim]; inputs.len()];
-    for (i, h) in inputs.iter().enumerate() {
-        let mut agg = vec![0.0f32; in_dim];
-        for j in 0..in_dim {
-            agg[j] = (1.0 + layer.eps) * h[j];
-        }
-        for n in &neighbors[i] {
-            if let Some(hn) = inputs.get(*n) {
-                for j in 0..in_dim {
-                    agg[j] += hn[j];
-                }
-            }
-        }
-        let mut out = vec![0.0f32; out_dim];
-        for (o, row) in layer.weight.iter().enumerate() {
-            let mut sum = layer.bias[o];
-            for j in 0..in_dim {
-                sum += row[j] * agg[j];
-            }
-            out[o] = relu(sum);
-        }
-        outputs[i] = out;
-    }
-    Ok(outputs)
+    Ok(out)
 }
 
-fn readout_sum(nodes: &[Vec<f32>]) -> Vec<f32> {
-    if nodes.is_empty() {
-        return Vec::new();
+fn compress_texts_for_max_tokens(texts: &[String], max_length: usize) -> Vec<String> {
+    texts
+        .iter()
+        .map(|text| compress_text_for_max_tokens(text, max_length))
+        .collect()
+}
+
+fn compress_text_for_max_tokens(text: &str, max_length: usize) -> String {
+    let max_chars = max_length.saturating_mul(CHARS_PER_TOKEN);
+    if text.len() <= max_chars {
+        return text.to_string();
     }
-    let dim = nodes[0].len();
-    let mut out = vec![0.0f32; dim];
-    for n in nodes {
-        for i in 0..dim {
-            out[i] += n[i];
-        }
+    if max_chars <= TAIL_MARKER.len() + 2 {
+        return text.chars().take(max_chars).collect();
     }
-    out
-}
-
-fn linear(vec: &[f32], layer: &LinearLayer) -> f32 {
-    let mut sum = layer.bias;
-    for (w, x) in layer.weight.iter().zip(vec.iter()) {
-        sum += w * x;
+    let head_len = (max_chars - TAIL_MARKER.len()) / 2;
+    let tail_len = max_chars - TAIL_MARKER.len() - head_len;
+    if tail_len == 0 {
+        return text.chars().take(max_chars).collect();
     }
-    sum
-}
-
-fn relu(v: f32) -> f32 {
-    if v > 0.0 { v } else { 0.0 }
-}
-
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
-}
-
-pub fn graph_model_dir_from_path(path: &Path) -> PathBuf {
-    path.to_path_buf()
+    let head: String = text.chars().take(head_len).collect();
+    let tail: String = text.chars().rev().take(tail_len).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{}{}{}", head, TAIL_MARKER, tail)
 }
 
 #[cfg(test)]
@@ -222,33 +250,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn graph_model_predicts_with_simple_weights() {
-        let layer = GnnLayer {
-            eps: 0.0,
-            weight: vec![
-                vec![1.0, 0.0, 0.0, 0.0],
-                vec![0.0, 1.0, 0.0, 0.0],
-                vec![0.0, 0.0, 1.0, 0.0],
-                vec![0.0, 0.0, 0.0, 1.0],
-            ],
-            bias: vec![0.0, 0.0, 0.0, 0.0],
-        };
-        let spec = GraphModelSpec {
-            embed_dim: 4,
-            gnn: GnnSpec {
-                layers: vec![layer],
-                readout: LinearLayer {
-                    weight: vec![0.5, 0.5, 0.5, 0.5],
-                    bias: 0.0,
+    fn normalize_and_batch_flow() {
+        let cfg = GraphModelConfig {
+            schema_version: 1,
+            name: "test".into(),
+            version: None,
+            embedding: config::EmbeddingConfig {
+                backend: "onnx".into(),
+                model_path: "embedding.onnx".into(),
+                tokenizer_path: "tokenizer.json".into(),
+                max_length: 4,
+                pooling: "cls".into(),
+                output_dim: 4,
+                normalize: config::NormalizeConfig {
+                    normalize_numbers: true,
+                    normalize_strings: true,
+                    collapse_obj_refs: true,
+                    preserve_keywords: vec!["/JS".into()],
+                    hash_strings: false,
+                    include_deviation_markers: false,
                 },
+                input_names: None,
+                output_name: None,
             },
-            threshold: None,
+            graph: config::GraphConfig {
+                backend: "onnx".into(),
+                model_path: "graph.onnx".into(),
+                input_dim: 4,
+                output: config::GraphOutput {
+                    kind: "logit".into(),
+                    apply_sigmoid: true,
+                },
+                input_names: None,
+                output_name: None,
+                node_scores_name: None,
+            },
+            threshold: 0.9,
+            edge_index: config::EdgeIndexConfig {
+                directed: true,
+                add_reverse_edges: true,
+            },
+            integrity: None,
+            limits: None,
         };
-        let model = GraphModel { spec };
-        let node_texts = vec!["/Type /Page".to_string(), "/JS alert".to_string()];
-        let edge_index = vec![(0usize, 1usize)];
-        let pred = model.predict(&node_texts, &edge_index, 0.0).expect("predict");
-        assert!(pred.score >= 0.0);
-        assert!(pred.label);
+        let texts = vec!["/OpenAction name /JS ; $ num 12".into()];
+        let normalized = normalize::normalize_ir_texts(&texts, &cfg.embedding.normalize, None);
+        assert!(normalized[0].contains("/JS"));
     }
 }
