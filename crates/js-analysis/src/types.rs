@@ -10,6 +10,27 @@ pub struct DynamicSignals {
     pub unique_calls: usize,
     pub unique_prop_reads: usize,
     pub elapsed_ms: Option<u128>,
+    pub behavioral_patterns: Vec<BehaviorPattern>,
+    pub execution_stats: ExecutionStats,
+}
+
+#[derive(Debug, Clone)]
+pub struct BehaviorPattern {
+    pub name: String,
+    pub confidence: f64,
+    pub evidence: String,
+    pub severity: String,
+    pub metadata: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionStats {
+    pub total_function_calls: usize,
+    pub unique_function_calls: usize,
+    pub variable_promotions: usize,
+    pub error_recoveries: usize,
+    pub successful_recoveries: usize,
+    pub execution_depth: usize,
 }
 
 #[derive(Debug, Clone)]

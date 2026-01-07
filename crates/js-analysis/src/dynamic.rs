@@ -32,6 +32,8 @@ mod sandbox_impl {
         options: DynamicOptions,
         variable_events: Vec<VariableEvent>,
         scope_transitions: Vec<ScopeTransition>,
+        execution_flow: ExecutionFlow,
+        behavioral_patterns: Vec<BehaviorObservation>,
     }
 
     #[derive(Debug, Clone)]
@@ -91,6 +93,325 @@ mod sandbox_impl {
         UndefinedAccess,
     }
 
+    // Phase 3: Execution Flow Tracking Structures
+    #[derive(Debug, Clone, Default)]
+    struct ExecutionFlow {
+        call_stack: Vec<FunctionCall>,
+        variable_timeline: Vec<VariableEvent>,
+        scope_transitions: Vec<ScopeTransition>,
+        exception_handling: Vec<ExceptionEvent>,
+        start_time: Option<std::time::Instant>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct FunctionCall {
+        name: String,
+        args: Vec<String>, // Serialized args
+        return_value: Option<String>,
+        execution_time: std::time::Duration,
+        scope_id: String,
+        call_depth: usize,
+        timestamp: std::time::Duration,
+    }
+
+    #[derive(Debug, Clone)]
+    struct ExceptionEvent {
+        error_type: String,
+        message: String,
+        recovery_attempted: bool,
+        recovery_successful: bool,
+        context: String,
+        timestamp: std::time::Duration,
+    }
+
+    // Phase 4: Behavioral Pattern Detection Structures
+    #[derive(Debug, Clone)]
+    struct BehaviorObservation {
+        pattern_name: String,
+        confidence: f64,
+        evidence: String,
+        severity: BehaviorSeverity,
+        metadata: std::collections::HashMap<String, String>,
+        timestamp: std::time::Duration,
+    }
+
+    #[derive(Debug, Clone)]
+    enum BehaviorSeverity {
+        Low,
+        Medium,
+        High,
+        Critical,
+    }
+
+    struct BehaviorAnalyzer {
+        patterns: Vec<Box<dyn BehaviorPattern>>,
+        observations: Vec<BehaviorObservation>,
+    }
+
+    trait BehaviorPattern {
+        fn name(&self) -> &str;
+        fn analyze(&self, flow: &ExecutionFlow, log: &SandboxLog) -> Vec<BehaviorObservation>;
+    }
+
+    // Concrete Behavioral Patterns
+    struct ObfuscatedStringConstruction;
+    impl BehaviorPattern for ObfuscatedStringConstruction {
+        fn name(&self) -> &str { "obfuscated_string_construction" }
+        
+        fn analyze(&self, _flow: &ExecutionFlow, log: &SandboxLog) -> Vec<BehaviorObservation> {
+            let mut observations = Vec::new();
+            
+            // Count String.fromCharCode usage
+            let char_code_calls = log.calls.iter()
+                .filter(|call| *call == "String.fromCharCode")
+                .count();
+            
+            if char_code_calls > 5 {
+                let confidence = (char_code_calls as f64 * 0.1).min(0.95);
+                let severity = if char_code_calls > 20 { 
+                    BehaviorSeverity::High 
+                } else if char_code_calls > 10 { 
+                    BehaviorSeverity::Medium 
+                } else { 
+                    BehaviorSeverity::Low 
+                };
+                
+                let mut metadata = std::collections::HashMap::new();
+                metadata.insert("char_code_calls".to_string(), char_code_calls.to_string());
+                
+                observations.push(BehaviorObservation {
+                    pattern_name: self.name().to_string(),
+                    confidence,
+                    evidence: format!("{} String.fromCharCode calls detected", char_code_calls),
+                    severity,
+                    metadata,
+                    timestamp: std::time::Duration::from_millis(0),
+                });
+            }
+            
+            observations
+        }
+    }
+
+    struct DynamicCodeGeneration;
+    impl BehaviorPattern for DynamicCodeGeneration {
+        fn name(&self) -> &str { "dynamic_code_generation" }
+        
+        fn analyze(&self, _flow: &ExecutionFlow, log: &SandboxLog) -> Vec<BehaviorObservation> {
+            let mut observations = Vec::new();
+            
+            let eval_count = log.calls.iter().filter(|call| *call == "eval").count();
+            let function_constructor = log.calls.iter().filter(|call| *call == "Function").count();
+            let timeout_calls = log.calls.iter().filter(|call| call.contains("setTimeout") || call.contains("setInterval")).count();
+            
+            if eval_count > 1 || function_constructor > 0 || timeout_calls > 0 {
+                let total_dynamic = eval_count + function_constructor + timeout_calls;
+                let confidence = (total_dynamic as f64 * 0.2).min(0.9);
+                let severity = if total_dynamic > 10 { 
+                    BehaviorSeverity::Critical 
+                } else if total_dynamic > 5 { 
+                    BehaviorSeverity::High 
+                } else { 
+                    BehaviorSeverity::Medium 
+                };
+                
+                let mut metadata = std::collections::HashMap::new();
+                metadata.insert("eval_calls".to_string(), eval_count.to_string());
+                metadata.insert("function_constructor_calls".to_string(), function_constructor.to_string());
+                metadata.insert("timeout_calls".to_string(), timeout_calls.to_string());
+                
+                observations.push(BehaviorObservation {
+                    pattern_name: self.name().to_string(),
+                    confidence,
+                    evidence: format!("Dynamic code patterns: eval={}, Function={}, timeouts={}", 
+                                    eval_count, function_constructor, timeout_calls),
+                    severity,
+                    metadata,
+                    timestamp: std::time::Duration::from_millis(0),
+                });
+            }
+            
+            observations
+        }
+    }
+
+    struct EnvironmentFingerprinting;
+    impl BehaviorPattern for EnvironmentFingerprinting {
+        fn name(&self) -> &str { "environment_fingerprinting" }
+        
+        fn analyze(&self, _flow: &ExecutionFlow, log: &SandboxLog) -> Vec<BehaviorObservation> {
+            let mut observations = Vec::new();
+            
+            // Look for property reads that indicate environment checking
+            let fingerprint_properties = [
+                "navigator", "screen", "window", "document.location",
+                "info.title", "info.author", "info.subject"
+            ];
+            
+            let fingerprint_count = log.prop_reads.iter()
+                .filter(|prop| fingerprint_properties.iter().any(|fp| prop.contains(fp)))
+                .count();
+            
+            if fingerprint_count > 2 {
+                let confidence = (fingerprint_count as f64 * 0.15).min(0.85);
+                
+                let mut metadata = std::collections::HashMap::new();
+                metadata.insert("fingerprint_reads".to_string(), fingerprint_count.to_string());
+                
+                observations.push(BehaviorObservation {
+                    pattern_name: self.name().to_string(),
+                    confidence,
+                    evidence: format!("{} environment fingerprinting property reads", fingerprint_count),
+                    severity: BehaviorSeverity::Medium,
+                    metadata,
+                    timestamp: std::time::Duration::from_millis(0),
+                });
+            }
+            
+            observations
+        }
+    }
+
+    struct ErrorRecoveryPattern;
+    impl BehaviorPattern for ErrorRecoveryPattern {
+        fn name(&self) -> &str { "error_recovery_patterns" }
+        
+        fn analyze(&self, flow: &ExecutionFlow, log: &SandboxLog) -> Vec<BehaviorObservation> {
+            let mut observations = Vec::new();
+            
+            let error_count = log.errors.len();
+            let recovery_attempts = flow.exception_handling.iter()
+                .filter(|ex| ex.recovery_attempted)
+                .count();
+            
+            if error_count > 0 && recovery_attempts > 0 {
+                let confidence = 0.8; // High confidence when we see error recovery
+                
+                let mut metadata = std::collections::HashMap::new();
+                metadata.insert("total_errors".to_string(), error_count.to_string());
+                metadata.insert("recovery_attempts".to_string(), recovery_attempts.to_string());
+                
+                observations.push(BehaviorObservation {
+                    pattern_name: self.name().to_string(),
+                    confidence,
+                    evidence: format!("Error recovery patterns: {} errors, {} recovery attempts", 
+                                    error_count, recovery_attempts),
+                    severity: BehaviorSeverity::Low,
+                    metadata,
+                    timestamp: std::time::Duration::from_millis(0),
+                });
+            }
+            
+            observations
+        }
+    }
+
+    struct VariablePromotionPattern;
+    impl BehaviorPattern for VariablePromotionPattern {
+        fn name(&self) -> &str { "variable_promotion_detected" }
+        
+        fn analyze(&self, _flow: &ExecutionFlow, log: &SandboxLog) -> Vec<BehaviorObservation> {
+            let mut observations = Vec::new();
+            
+            let promotion_count = log.variable_events.iter()
+                .filter(|ve| matches!(ve.event_type, VariableEventType::Declaration))
+                .count();
+            
+            if promotion_count > 0 {
+                let confidence = 0.9; // High confidence when we see our promotion system working
+                
+                let mut metadata = std::collections::HashMap::new();
+                metadata.insert("promoted_variables".to_string(), promotion_count.to_string());
+                
+                observations.push(BehaviorObservation {
+                    pattern_name: self.name().to_string(),
+                    confidence,
+                    evidence: format!("{} variables promoted to global scope", promotion_count),
+                    severity: BehaviorSeverity::Low,
+                    metadata,
+                    timestamp: std::time::Duration::from_millis(0),
+                });
+            }
+            
+            observations
+        }
+    }
+
+    // Behavioral Analysis Engine
+    fn run_behavioral_analysis(log: &mut SandboxLog) {
+        let patterns: Vec<Box<dyn BehaviorPattern>> = vec![
+            Box::new(ObfuscatedStringConstruction),
+            Box::new(DynamicCodeGeneration),
+            Box::new(EnvironmentFingerprinting),
+            Box::new(ErrorRecoveryPattern),
+            Box::new(VariablePromotionPattern),
+        ];
+        
+        let mut all_observations = Vec::new();
+        
+        for pattern in patterns {
+            let observations = pattern.analyze(&log.execution_flow, log);
+            all_observations.extend(observations);
+        }
+        
+        log.behavioral_patterns = all_observations;
+    }
+
+    // Enhanced function call recording with execution flow tracking
+    fn record_enhanced_call(
+        log: &Rc<RefCell<SandboxLog>>, 
+        name: &str, 
+        args: &[JsValue], 
+        ctx: &mut Context
+    ) {
+        let call_start = std::time::Instant::now();
+        
+        // Standard call recording
+        record_call(log, name, args, ctx);
+        
+        // Enhanced execution flow tracking
+        {
+            let mut log_ref = log.borrow_mut();
+            let execution_time = call_start.elapsed();
+            let current_depth = log_ref.execution_flow.call_stack.len();
+            
+            let function_call = FunctionCall {
+                name: name.to_string(),
+                args: args.iter()
+                    .map(|arg| js_value_summary(arg, ctx, 50))
+                    .collect(),
+                return_value: None, // Could be enhanced to capture return values
+                execution_time,
+                scope_id: "global".to_string(), // Could be enhanced with actual scope tracking
+                call_depth: current_depth,
+                timestamp: log_ref.execution_flow.start_time
+                    .map(|start| start.elapsed())
+                    .unwrap_or_else(|| std::time::Duration::from_millis(0)),
+            };
+            
+            log_ref.execution_flow.call_stack.push(function_call);
+            
+            // Track variable timeline for special functions
+            if name == "eval" {
+                let eval_content = args.get(0)
+                    .map(|arg| js_value_summary(arg, ctx, 100))
+                    .unwrap_or_else(|| "unknown".to_string());
+                
+                let timestamp = log_ref.execution_flow.start_time
+                    .map(|start| start.elapsed())
+                    .unwrap_or_else(|| std::time::Duration::from_millis(0));
+                    
+                log_ref.execution_flow.variable_timeline.push(VariableEvent {
+                    variable: "eval_execution".to_string(),
+                    event_type: VariableEventType::Assignment,
+                    value: eval_content,
+                    scope: "global".to_string(),
+                    timestamp,
+                });
+            }
+        }
+    }
+
     pub fn run_sandbox(bytes: &[u8], options: &DynamicOptions) -> DynamicOutcome {
         if bytes.len() > options.max_bytes {
             return DynamicOutcome::Skipped {
@@ -103,10 +424,13 @@ mod sandbox_impl {
         let bytes = bytes.to_vec();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let log = Rc::new(RefCell::new(SandboxLog {
+            let mut initial_log = SandboxLog {
                 options: opts,
                 ..SandboxLog::default()
-            }));
+            };
+            // Initialize execution flow tracking
+            initial_log.execution_flow.start_time = Some(std::time::Instant::now());
+            let log = Rc::new(RefCell::new(initial_log));
             let scope = Rc::new(RefCell::new(DynamicScope::default()));
             let mut context = Context::default();
             let mut limits = RuntimeLimits::default();
@@ -125,6 +449,8 @@ mod sandbox_impl {
             register_windows_wmi(&mut context, log.clone());
             register_node_like(&mut context, log.clone());
             register_doc_stub(&mut context, log.clone());
+            register_doc_globals(&mut context, log.clone());  // Enable unescape and other globals
+            register_pdf_event_context(&mut context, log.clone());  // Add event object simulation
             register_enhanced_doc_globals(&mut context, log.clone(), scope.clone());
             register_enhanced_eval_v2(&mut context, log.clone(), scope.clone());
             register_enhanced_global_fallback(&mut context, log.clone(), scope.clone());
@@ -139,6 +465,9 @@ mod sandbox_impl {
                 if let Err(err) = eval_res {
                     log_ref.errors.push(format!("{:?}", err));
                 }
+                
+                // Run behavioral pattern analysis
+                run_behavioral_analysis(&mut log_ref);
             }
             let out = log.borrow().clone();
             let _ = tx.send(out);
@@ -146,16 +475,40 @@ mod sandbox_impl {
 
         match rx.recv_timeout(Duration::from_millis(options.timeout_ms as u64)) {
             Ok(log) => DynamicOutcome::Executed(DynamicSignals {
-                calls: log.calls,
-                call_args: log.call_args,
-                urls: log.urls,
-                domains: log.domains,
-                errors: log.errors,
-                prop_reads: log.prop_reads,
+                calls: log.calls.clone(),
+                call_args: log.call_args.clone(),
+                urls: log.urls.clone(),
+                domains: log.domains.clone(),
+                errors: log.errors.clone(),
+                prop_reads: log.prop_reads.clone(),
                 call_count: log.call_count,
                 unique_calls: log.unique_calls.len(),
                 unique_prop_reads: log.unique_prop_reads.len(),
                 elapsed_ms: log.elapsed_ms,
+                behavioral_patterns: log.behavioral_patterns.iter().map(|obs| {
+                    crate::types::BehaviorPattern {
+                        name: obs.pattern_name.clone(),
+                        confidence: obs.confidence,
+                        evidence: obs.evidence.clone(),
+                        severity: format!("{:?}", obs.severity),
+                        metadata: obs.metadata.clone(),
+                    }
+                }).collect(),
+                execution_stats: crate::types::ExecutionStats {
+                    total_function_calls: log.call_count,
+                    unique_function_calls: log.unique_calls.len(),
+                    variable_promotions: log.variable_events.iter()
+                        .filter(|ve| matches!(ve.event_type, VariableEventType::Declaration))
+                        .count(),
+                    error_recoveries: log.execution_flow.exception_handling.len(),
+                    successful_recoveries: log.execution_flow.exception_handling.iter()
+                        .filter(|ex| ex.recovery_successful)
+                        .count(),
+                    execution_depth: log.execution_flow.call_stack.iter()
+                        .map(|call| call.call_depth)
+                        .max()
+                        .unwrap_or(0),
+                },
             }),
             Err(RecvTimeoutError::Timeout) => DynamicOutcome::TimedOut {
                 timeout_ms: options.timeout_ms,
@@ -654,19 +1007,148 @@ mod sandbox_impl {
     }
 
     fn register_doc_globals(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
-        let _add =
-            |ctx: &mut Context, name: &'static str, len: usize, log: Rc<RefCell<SandboxLog>>| {
-                let _ = ctx.register_global_builtin_callable(
-                    JsString::from(name),
-                    len,
-                    make_native(log, name),
-                );
-            };
-        let _add_callable =
-            |ctx: &mut Context, name: &'static str, len: usize, log: Rc<RefCell<SandboxLog>>| {
-                let _ = ctx.register_global_callable(JsString::from(name), len, make_native(log, name));
-            };
+        // Register unescape function
         register_unescape(context, log.clone());
+
+        // Register escape function (URL encoding)
+        let escape_fn = unsafe {
+            let log = log.clone();
+            NativeFunction::from_closure(move |_this, args, ctx| {
+                record_call(&log, "escape", args, ctx);
+
+                let input_arg = args.get_or_undefined(0);
+                let input = input_arg.to_string(ctx)?;
+                let input_str = input.to_std_string_escaped();
+
+                // Implement basic URL escape functionality
+                let mut result = String::new();
+                for ch in input_str.chars() {
+                    if ch.is_ascii_alphanumeric() || "-_.!~*'()".contains(ch) {
+                        result.push(ch);
+                    } else {
+                        result.push_str(&format!("%{:02X}", ch as u8));
+                    }
+                }
+
+                Ok(JsValue::from(JsString::from(result)))
+            })
+        };
+        let _ = context.register_global_builtin_callable(
+            JsString::from("escape"),
+            1,
+            escape_fn,
+        );
+
+        // Register global PDF metadata properties (commonly accessed directly)
+        let _ = context.register_global_property(
+            JsString::from("creator"),
+            JsString::from("Adobe Acrobat 9.0"),
+            Attribute::all(),
+        );
+        let _ = context.register_global_property(
+            JsString::from("producer"),
+            JsString::from("Adobe Acrobat 9.0"),
+            Attribute::all(),
+        );
+        let _ = context.register_global_property(
+            JsString::from("keywords"),
+            JsString::from(""),
+            Attribute::all(),
+        );
+        let _ = context.register_global_property(
+            JsString::from("title"),
+            JsString::from("Document"),
+            Attribute::all(),
+        );
+        let _ = context.register_global_property(
+            JsString::from("author"),
+            JsString::from("Unknown"),
+            Attribute::all(),
+        );
+        let _ = context.register_global_property(
+            JsString::from("subject"),
+            JsString::from("PDF Document"),
+            Attribute::all(),
+        );
+    }
+
+    fn register_pdf_event_context(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+        // Create a mock PDF event object that many malicious scripts expect
+        // This simulates PDF events like page open, document open, etc.
+
+        let target_methods = |name: &'static str| {
+            let log = log.clone();
+            make_native(log, name)
+        };
+
+        // Get the global parseInt function to add to target
+        let global_obj = context.global_object().clone();
+        let parse_int_fn = global_obj
+            .get(JsString::from("parseInt"), context)
+            .unwrap_or(JsValue::undefined());
+
+        // Create eval function for target with tracking
+        let target_eval_fn = unsafe {
+            let log = log.clone();
+            NativeFunction::from_closure(move |_this, args, ctx| {
+                record_call(&log, "event.target.eval", args, ctx);
+                let code_arg = args.get_or_undefined(0);
+                let code = code_arg.to_string(ctx)?;
+                let code_str = code.to_std_string_escaped();
+                let source = boa_engine::Source::from_bytes(code_str.as_bytes());
+                ctx.eval(source)
+            })
+        };
+
+        // Create a mock target object (represents the field or document)
+        let target = ObjectInitializer::new(context)
+            .property(JsString::from("parseInt"), parse_int_fn, Attribute::all())
+            .function(target_eval_fn, JsString::from("eval"), 1)
+            .function(target_methods("event.target.getField"), JsString::from("getField"), 1)
+            .function(target_methods("event.target.getPageNumWords"), JsString::from("getPageNumWords"), 1)
+            .function(target_methods("event.target.print"), JsString::from("print"), 0)
+            .property(JsString::from("value"), JsString::from(""), Attribute::all())
+            .property(JsString::from("name"), JsString::from("TextField"), Attribute::all())
+            .build();
+
+        // Create the event object with common PDF event properties
+        let event_obj = ObjectInitializer::new(context)
+            .property(JsString::from("target"), target, Attribute::all())
+            .property(JsString::from("name"), JsString::from("Open"), Attribute::all())
+            .property(JsString::from("type"), JsString::from("Page"), Attribute::all())
+            .property(JsString::from("value"), JsString::from(""), Attribute::all())
+            .property(JsString::from("willCommit"), JsValue::from(false), Attribute::all())
+            .property(JsString::from("rc"), JsValue::from(true), Attribute::all())
+            .build();
+
+        // Register as global 'event' object
+        let event_clone = event_obj.clone();
+        let _ = context.register_global_property(
+            JsString::from("event"),
+            event_obj,
+            Attribute::all(),
+        );
+
+        // Also create 't' as an alias for event (commonly used pattern)
+        let _ = context.register_global_property(
+            JsString::from("t"),
+            event_clone,
+            Attribute::all(),
+        );
+
+        // Also create 'this' context for PDF scripts (often refers to doc or field)
+        let this_obj = ObjectInitializer::new(context)
+            .property(JsString::from("pageNum"), JsValue::from(0), Attribute::all())
+            .property(JsString::from("numPages"), JsValue::from(1), Attribute::all())
+            .function(target_methods("this.getField"), JsString::from("getField"), 1)
+            .function(target_methods("this.print"), JsString::from("print"), 0)
+            .build();
+
+        let _ = context.register_global_property(
+            JsString::from("thisDoc"),
+            this_obj,
+            Attribute::all(),
+        );
     }
 
     fn register_doc_stub(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
@@ -1110,6 +1592,30 @@ mod sandbox_impl {
         log: &Rc<RefCell<SandboxLog>>
     ) -> Option<JsValue> {
         let error_msg = format!("{:?}", error);
+        let error_type = if error_msg.contains("is not defined") {
+            "ReferenceError"
+        } else if error_msg.contains("Syntax") {
+            "SyntaxError" 
+        } else {
+            "UnknownError"
+        };
+        
+        // Track the exception event
+        {
+            let mut log_ref = log.borrow_mut();
+            let timestamp = log_ref.execution_flow.start_time
+                .map(|start| start.elapsed())
+                .unwrap_or_else(|| std::time::Duration::from_millis(0));
+                
+            log_ref.execution_flow.exception_handling.push(ExceptionEvent {
+                error_type: error_type.to_string(),
+                message: error_msg.clone(),
+                recovery_attempted: true,
+                recovery_successful: false, // Will be updated if recovery succeeds
+                context: "error_recovery".to_string(),
+                timestamp,
+            });
+        }
         
         // Recovery strategy 1: Undefined variable errors
         if error_msg.contains("is not defined") {
@@ -1137,7 +1643,16 @@ mod sandbox_impl {
                 
                 // Retry the code execution
                 match ctx.eval(Source::from_bytes(code.as_bytes())) {
-                    Ok(result) => return Some(result),
+                    Ok(result) => {
+                        // Mark recovery as successful
+                        {
+                            let mut log_ref = log.borrow_mut();
+                            if let Some(last_exception) = log_ref.execution_flow.exception_handling.last_mut() {
+                                last_exception.recovery_successful = true;
+                            }
+                        }
+                        return Some(result);
+                    },
                     Err(_) => {} // Fall through to other recovery strategies
                 }
             }
@@ -1147,7 +1662,16 @@ mod sandbox_impl {
         if error_msg.contains("Syntax") {
             let cleaned_code = attempt_syntax_cleanup(code);
             match ctx.eval(Source::from_bytes(cleaned_code.as_bytes())) {
-                Ok(result) => return Some(result),
+                Ok(result) => {
+                    // Mark recovery as successful
+                    {
+                        let mut log_ref = log.borrow_mut();
+                        if let Some(last_exception) = log_ref.execution_flow.exception_handling.last_mut() {
+                            last_exception.recovery_successful = true;
+                        }
+                    }
+                    return Some(result);
+                },
                 Err(_) => {} // Fall through
             }
         }

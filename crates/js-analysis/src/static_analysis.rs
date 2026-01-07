@@ -35,12 +35,24 @@ pub fn extract_js_signals_with_ast(data: &[u8], enable_ast: bool) -> HashMap<Str
     );
     out.insert("js.contains_eval".into(), bool_str(find_token(data, b"eval")));
     out.insert(
+        "js.dynamic_eval_construction".into(), 
+        bool_str(contains_dynamic_eval_construction(data))
+    );
+    out.insert(
         "js.contains_unescape".into(),
         bool_str(find_token(data, b"unescape")),
     );
     out.insert(
         "js.contains_fromcharcode".into(),
         bool_str(find_token(data, b"fromCharCode")),
+    );
+    out.insert(
+        "js.hex_fromcharcode_pattern".into(),
+        bool_str(contains_hex_fromcharcode_pattern(data))
+    );
+    out.insert(
+        "js.environment_fingerprinting".into(),
+        bool_str(contains_environment_fingerprinting(data))
     );
     out.insert(
         "js.string_concat_density".into(),
@@ -232,6 +244,7 @@ fn contains_regex_packing(data: &[u8]) -> bool {
 
 fn contains_suspicious_api(data: &[u8]) -> bool {
     let apis: &[&[u8]] = &[
+        // Existing APIs
         b"app.launchURL",
         b"util.printf",
         b"this.getURL",
@@ -239,12 +252,79 @@ fn contains_suspicious_api(data: &[u8]) -> bool {
         b"importDataObject",
         b"exportDataObject",
         b"app.mailMsg",
+        
+        // PDF annotation manipulation (high risk)
+        b"app.doc.syncAnnotScan",
+        b"app.doc.getAnnots",
+        b"app.doc.addAnnot",
+        b"app.doc.removeAnnot",
+        b".subject",
+        
+        // Environment fingerprinting
+        b"app.plugIns.length",
+        b"app.viewerType",
+        b"app.platform",
+        
+        // Media exploitation
+        b"this.media.newPlayer",
+        b"app.media.newPlayer",
+        
+        // Advanced execution contexts
+        b"this.getOCGs",
+        b"app.doc.getOCGs",
     ];
     apis.iter().any(|pat| find_token(data, pat))
 }
 
 fn find_token(data: &[u8], token: &[u8]) -> bool {
     data.windows(token.len()).any(|w| w.eq_ignore_ascii_case(token))
+}
+
+fn contains_dynamic_eval_construction(data: &[u8]) -> bool {
+    // Detect patterns like: 'ev' + 'a' + 'l' or variable[function_name]()
+    let patterns: &[&[u8]] = &[
+        // String concatenation to form "eval"
+        b"'ev'",
+        b"\"ev\"", 
+        // Common eval construction fragments
+        b"'a'",
+        b"\"a\"",
+        b"'l'",
+        b"\"l\"",
+    ];
+    
+    // Look for string concatenation operators near eval fragments
+    let has_eval_fragments = patterns.iter().any(|pat| find_token(data, pat));
+    let has_concat = find_token(data, b"+");
+    let has_dynamic_access = find_token(data, b"[") && find_token(data, b"]");
+    
+    (has_eval_fragments && has_concat) || has_dynamic_access
+}
+
+fn contains_hex_fromcharcode_pattern(data: &[u8]) -> bool {
+    // Detect String.fromCharCode with hex patterns like "0x" or parseInt usage
+    let has_fromcharcode = find_token(data, b"fromCharCode");
+    let has_hex_prefix = find_token(data, b"0x") || find_token(data, b"\"0x");
+    let has_parseint = find_token(data, b"parseInt");
+    
+    has_fromcharcode && (has_hex_prefix || has_parseint)
+}
+
+fn contains_environment_fingerprinting(data: &[u8]) -> bool {
+    // Detect conditional execution based on environment properties
+    let fingerprint_props: &[&[u8]] = &[
+        b"app.plugIns.length",
+        b"app.viewerType",
+        b"app.platform",
+        b"app.viewerVersion",
+        b"this.info.title",
+        b"this.info.author",
+    ];
+    
+    let has_fingerprinting = fingerprint_props.iter().any(|pat| find_token(data, pat));
+    let has_conditional = find_token(data, b"if") && (find_token(data, b">") || find_token(data, b"==") || find_token(data, b"!="));
+    
+    has_fingerprinting && has_conditional
 }
 
 fn byte_density(data: &[u8], byte: u8) -> f64 {
