@@ -103,15 +103,31 @@ pub fn summarize_ir_graph(ir: &IrGraphArtifacts) -> IrGraphSummary {
 
 fn render_ir_text(obj: &PdfIrObject) -> String {
     let mut out = String::new();
-    for line in &obj.lines {
+    for (idx, line) in obj.lines.iter().enumerate() {
         if !out.is_empty() {
             out.push_str(" ; ");
         }
+        out.push_str("path=");
         out.push_str(&line.path);
-        out.push(' ');
+        out.push('\t');
+        out.push_str("value_type=");
         out.push_str(&line.value_type);
-        out.push(' ');
+        out.push('\t');
+        out.push_str("value=");
         out.push_str(&line.value);
+        out.push('\t');
+        out.push_str("obj=");
+        out.push_str(&format!("{} {}", line.obj_ref.0, line.obj_ref.1));
+        out.push('\t');
+        out.push_str("line_index=");
+        out.push_str(&idx.to_string());
+    }
+    if !obj.deviations.is_empty() {
+        if !out.is_empty() {
+            out.push_str(" ; ");
+        }
+        out.push_str("path=$meta\tvalue_type=deviation\tvalue=");
+        out.push_str(&obj.deviations.join(","));
     }
     out
 }
