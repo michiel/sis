@@ -33,6 +33,9 @@ pub struct GraphModelRunner {
     gnn: OnnxGnn,
 }
 
+const CHARS_PER_TOKEN: usize = 4;
+const TAIL_MARKER: &str = " <TAIL> ";
+
 impl GraphModelRunner {
     pub fn load(model_dir: &Path) -> Result<Self> {
         let config = GraphModelConfig::load(model_dir)?;
@@ -84,26 +87,62 @@ impl GraphModelRunner {
         if node_texts.is_empty() {
             return Err(anyhow!("no node texts provided"));
         }
+        let mut texts = node_texts.to_vec();
+        let original_node_count = texts.len();
+        let mut unresolved_edges = 0usize;
+        let mut sentinel_idx: Option<usize> = None;
+        let mut edges: Vec<(usize, usize)> = Vec::with_capacity(edge_index.len());
+        for (s, t) in edge_index.iter().cloned() {
+            let mut src = s;
+            let mut dst = t;
+            if src >= original_node_count || dst >= original_node_count {
+                unresolved_edges += 1;
+                if sentinel_idx.is_none() {
+                    sentinel_idx = Some(texts.len());
+                    texts.push("path=$meta\tvalue_type=unresolved_edges\tvalue=1".into());
+                }
+                let sentinel = sentinel_idx.unwrap();
+                if src >= original_node_count {
+                    src = sentinel;
+                }
+                if dst >= original_node_count {
+                    dst = sentinel;
+                }
+            }
+            edges.push((src, dst));
+        }
+        if unresolved_edges > 0 {
+            if let Some(idx) = sentinel_idx {
+                texts[idx] = format!(
+                    "path=$meta\tvalue_type=unresolved_edges\tvalue={}",
+                    unresolved_edges
+                );
+            }
+            eprintln!(
+                "warning: ml_graph: remapped {} edges with out-of-range nodes (nodes={})",
+                unresolved_edges, original_node_count
+            );
+        }
+        if edges.is_empty() {
+            let marker = "path=$meta\tvalue_type=edge_count\tvalue=0";
+            if let Some(first) = texts.first_mut() {
+                first.push_str(" ; ");
+                first.push_str(marker);
+            }
+        }
         let normalized = normalize::normalize_ir_texts(
-            node_texts,
+            &texts,
             &self.config.embedding.normalize,
             max_ir_string_len(&self.config),
         );
+        let compressed = compress_texts_for_max_tokens(
+            &normalized,
+            self.tokenizer.max_length(),
+        );
         let batch_size = max_batch_size(&self.config);
-        let embeddings = embed_in_batches(&self.tokenizer, &self.embedder, &normalized, batch_size)?;
+        let embeddings = embed_in_batches(&self.tokenizer, &self.embedder, &compressed, batch_size)?;
         let node_count = embeddings.len();
-        let mut edges: Vec<(usize, usize)> = edge_index
-            .iter()
-            .cloned()
-            .filter(|(s, t)| *s < node_count && *t < node_count)
-            .collect();
-        let dropped = edge_index.len().saturating_sub(edges.len());
-        if dropped > 0 {
-            eprintln!(
-                "warning: ml_graph: dropped {} edges with out-of-range nodes (nodes={})",
-                dropped, node_count
-            );
-        }
+        edges.retain(|(s, t)| *s < node_count && *t < node_count);
         if self.config.edge_index.add_reverse_edges {
             let mut reversed = edges.iter().map(|(s, t)| (*t, *s)).collect::<Vec<_>>();
             edges.append(&mut reversed);
@@ -179,6 +218,31 @@ fn embed_in_batches(
         out.append(&mut embeddings);
     }
     Ok(out)
+}
+
+fn compress_texts_for_max_tokens(texts: &[String], max_length: usize) -> Vec<String> {
+    texts
+        .iter()
+        .map(|text| compress_text_for_max_tokens(text, max_length))
+        .collect()
+}
+
+fn compress_text_for_max_tokens(text: &str, max_length: usize) -> String {
+    let max_chars = max_length.saturating_mul(CHARS_PER_TOKEN);
+    if text.len() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars <= TAIL_MARKER.len() + 2 {
+        return text.chars().take(max_chars).collect();
+    }
+    let head_len = (max_chars - TAIL_MARKER.len()) / 2;
+    let tail_len = max_chars - TAIL_MARKER.len() - head_len;
+    if tail_len == 0 {
+        return text.chars().take(max_chars).collect();
+    }
+    let head: String = text.chars().take(head_len).collect();
+    let tail: String = text.chars().rev().take(tail_len).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{}{}{}", head, TAIL_MARKER, tail)
 }
 
 #[cfg(test)]

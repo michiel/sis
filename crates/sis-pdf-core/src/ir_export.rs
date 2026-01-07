@@ -7,12 +7,14 @@ pub fn export_ir_json(ir_objects: &[PdfIrObject]) -> serde_json::Value {
             let lines: Vec<serde_json::Value> = obj
                 .lines
                 .iter()
-                .map(|l| {
+                .enumerate()
+                .map(|(idx, line)| {
                     serde_json::json!({
-                        "obj": format!("{} {}", l.obj_ref.0, l.obj_ref.1),
-                        "path": l.path,
-                        "type": l.value_type,
-                        "value": l.value,
+                        "line_index": idx,
+                        "obj": format!("{} {}", line.obj_ref.0, line.obj_ref.1),
+                        "path": line.path,
+                        "type": line.value_type,
+                        "value": line.value,
                     })
                 })
                 .collect();

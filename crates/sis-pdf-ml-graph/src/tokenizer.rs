@@ -38,6 +38,10 @@ impl TokenizerWrapper {
         })
     }
 
+    pub fn max_length(&self) -> usize {
+        self.max_length
+    }
+
     pub fn encode_batch(&self, texts: &[String]) -> Result<TokenizedBatch> {
         let encodings = self
             .tokenizer

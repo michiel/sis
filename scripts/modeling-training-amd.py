@@ -31,6 +31,45 @@ try:
 except ImportError:  # Optional dependency.
     tqdm = None
 
+CHARS_PER_TOKEN = 4
+TAIL_MARKER = " <TAIL> "
+
+
+def compress_text_for_max_tokens(text: str, max_length: int) -> str:
+    max_chars = max_length * CHARS_PER_TOKEN
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= len(TAIL_MARKER) + 2:
+        return text[:max_chars]
+    head_len = (max_chars - len(TAIL_MARKER)) // 2
+    tail_len = max_chars - len(TAIL_MARKER) - head_len
+    if tail_len <= 0:
+        return text[:max_chars]
+    return f"{text[:head_len]}{TAIL_MARKER}{text[-tail_len:]}"
+
+
+def serialize_ir_line(line: dict, index: int) -> str:
+    path = line.get("path", "")
+    value_type = line.get("type", "")
+    value = line.get("value", "")
+    obj_ref = line.get("obj", "")
+    line_index = line.get("line_index", index)
+    return (
+        f"path={path}\tvalue_type={value_type}\tvalue={value}"
+        f"\tobj={obj_ref}\tline_index={line_index}"
+    )
+
+
+def serialize_ir_object(obj: dict) -> str:
+    lines = obj.get("lines", [])
+    pieces = [serialize_ir_line(line, idx) for idx, line in enumerate(lines)]
+    deviations = obj.get("deviations", [])
+    if deviations:
+        pieces.append(
+            f"path=$meta\tvalue_type=deviation\tvalue={','.join(deviations)}"
+        )
+    return " ; ".join(pieces)
+
 
 def load_sample(ir_path: Path, org_path: Path):
     ir = json.loads(ir_path.read_text())
@@ -39,13 +78,7 @@ def load_sample(ir_path: Path, org_path: Path):
     node_texts = []
     node_ids = {}
     for idx, obj in enumerate(ir.get("objects", [])):
-        lines = []
-        for line in obj.get("lines", []):
-            path = line.get("path", "")
-            line_type = line.get("type", "")
-            value = line.get("value", "")
-            lines.append(f"{path} {line_type} {value}".strip())
-        node_texts.append(" ; ".join(lines))
+        node_texts.append(serialize_ir_object(obj))
         if "obj" in obj:
             node_ids[obj["obj"]] = idx
     if not node_texts:
@@ -53,22 +86,40 @@ def load_sample(ir_path: Path, org_path: Path):
         node_texts = ["/EMPTY"]
 
     edge_index = []
-    unresolved = 0
+    sentinel_idx = None
+    unresolved_edges = 0
     for edge in org.get("edges", []):
         # Accept both "src/dst" and "from/to" edge formats.
         if "src" in edge and "dst" in edge:
             src, dst = edge["src"], edge["dst"]
         else:
             src, dst = edge["from"], edge["to"]
-        if src in node_ids and dst in node_ids:
-            edge_index.append((node_ids[src], node_ids[dst]))
-        else:
-            unresolved += 1
+        src_idx = node_ids.get(src)
+        dst_idx = node_ids.get(dst)
+        if src_idx is None or dst_idx is None:
+            unresolved_edges += 1
+            if sentinel_idx is None:
+                sentinel_idx = len(node_texts)
+                node_texts.append(
+                    "path=$meta\tvalue_type=unresolved_edges\tvalue=1"
+                )
+            if src_idx is None:
+                src_idx = sentinel_idx
+            if dst_idx is None:
+                dst_idx = sentinel_idx
+        edge_index.append((src_idx, dst_idx))
 
-    if unresolved:
+    if unresolved_edges:
         print(
-            f"warning: {org_path} has {unresolved} edges that don't resolve to IR nodes"
+            f"warning: {org_path} has {unresolved_edges} edges that don't resolve to IR nodes"
         )
+    if unresolved_edges and sentinel_idx is not None:
+        node_texts[sentinel_idx] = (
+            f"path=$meta\tvalue_type=unresolved_edges\tvalue={unresolved_edges}"
+        )
+
+    if not edge_index and node_texts:
+        node_texts[0] = f"{node_texts[0]} ; path=$meta\tvalue_type=edge_count\tvalue=0"
 
     return node_texts, edge_index
 
@@ -80,7 +131,13 @@ def build_dataset(manifest_path: Path):
             continue
         item = json.loads(line)
         node_texts, edge_index = load_sample(Path(item["ir"]), Path(item["org"]))
-        label = 1 if item["label"] == "malicious" else 0
+        label_value = item.get("label")
+        if label_value == "malicious":
+            label = 1
+        elif label_value == "benign":
+            label = 0
+        else:
+            raise RuntimeError(f"Unsupported label: {label_value}")
         dataset.append((node_texts, edge_index, label))
     if not dataset:
         raise RuntimeError(f"No samples found in manifest: {manifest_path}")
@@ -102,7 +159,10 @@ def embed_texts(
     if tqdm:
         batches = tqdm(batches, desc="embedding", unit="batch")
     for i in batches:
-        chunk = texts[i : i + batch_size]
+        chunk = [
+            compress_text_for_max_tokens(text, max_length)
+            for text in texts[i : i + batch_size]
+        ]
         batch = tokenizer(
             chunk,
             padding=True,
@@ -197,8 +257,33 @@ def configure_sdp(device, allow_experimental):
             fn(value)
 
 
-def export_onnx(encoder, tokenizer, gnn_model, out_dir: Path, device, opset_version):
+def export_onnx(
+    encoder, tokenizer, gnn_model, out_dir: Path, device, opset_version, pooling
+):
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    class EncoderWithPooling(nn.Module):
+        def __init__(self, model, pooling):
+            super().__init__()
+            self.model = model
+            self.pooling = pooling
+
+        def forward(self, input_ids, attention_mask, token_type_ids=None):
+            if token_type_ids is None:
+                out = self.model(input_ids=input_ids, attention_mask=attention_mask)
+            else:
+                out = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                )
+            last_hidden = out.last_hidden_state
+            if self.pooling == "mean":
+                mask = attention_mask.unsqueeze(-1).to(last_hidden.dtype)
+                summed = (last_hidden * mask).sum(dim=1)
+                denom = mask.sum(dim=1).clamp(min=1.0)
+                return summed / denom
+            return last_hidden[:, 0, :]
 
     dummy = tokenizer(["/Type /Page"], return_tensors="pt")
     dummy = {k: v.to(device) for k, v in dummy.items()}
@@ -213,13 +298,15 @@ def export_onnx(encoder, tokenizer, gnn_model, out_dir: Path, device, opset_vers
         embed_names.append("token_type_ids")
         embed_dynamic_axes["token_type_ids"] = {0: "batch", 1: "seq"}
 
+    pooled_encoder = EncoderWithPooling(encoder, pooling=pooling)
+
     torch.onnx.export(
-        encoder,
+        pooled_encoder,
         tuple(embed_inputs),
         str(out_dir / "embedding.onnx"),
         input_names=embed_names,
-        output_names=["last_hidden_state"],
-        dynamic_axes=embed_dynamic_axes,
+        output_names=["pooled_embedding"],
+        dynamic_axes={**embed_dynamic_axes, "pooled_embedding": {0: "batch"}},
         opset_version=opset_version,
         dynamo=False,
     )
@@ -291,6 +378,7 @@ def write_graph_model_config(
             "pooling": pooling,
             "output_dim": output_dim,
             "input_names": embedding_input_names,
+            "output_name": "pooled_embedding",
             "normalize": {
                 "normalize_numbers": True,
                 "normalize_strings": True,
@@ -425,7 +513,15 @@ def main():
         raise RuntimeError("No graphs constructed from dataset; check input data.")
     in_dim = graphs[0].x.shape[1]
     gnn_model = train_gnn(graphs, in_dim, device, epochs=args.epochs)
-    export_onnx(encoder, tokenizer, gnn_model, Path(args.out), device, args.onnx_opset)
+    export_onnx(
+        encoder,
+        tokenizer,
+        gnn_model,
+        Path(args.out),
+        device,
+        args.onnx_opset,
+        args.pooling,
+    )
     out_dir = Path(args.out)
     write_tokenizer(tokenizer, out_dir)
     has_token_type = (
