@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use crate::scan::{ScanContext, ScanOptions};
 use crate::page_tree::build_page_tree;
+use sis_pdf_pdf::classification::ObjectRole;
 use sis_pdf_pdf::graph::ObjEntry;
 use sis_pdf_pdf::object::{PdfAtom, PdfDict, PdfObj, PdfStr, PdfStream};
+use sis_pdf_pdf::typed_graph::EdgeType;
 use sis_pdf_pdf::{parse_pdf, ParseOptions};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -43,11 +45,31 @@ pub struct ContentFeatures {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphFeatures {
+    pub total_edges: usize,
+    pub open_action_edges: usize,
+    pub js_payload_edges: usize,
+    pub uri_target_edges: usize,
+    pub launch_target_edges: usize,
+    pub suspicious_edge_count: usize,
+    pub action_chain_count: usize,
+    pub max_chain_length: usize,
+    pub automatic_chain_count: usize,
+    pub js_chain_count: usize,
+    pub external_chain_count: usize,
+    pub max_graph_depth: usize,
+    pub avg_graph_depth: f64,
+    pub catalog_to_js_paths: usize,
+    pub multi_stage_indicators: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FeatureVector {
     pub general: GeneralFeatures,
     pub structural: StructuralFeatures,
     pub behavioral: BehavioralFeatures,
     pub content: ContentFeatures,
+    pub graph: GraphFeatures,
 }
 
 impl FeatureVector {
@@ -73,6 +95,21 @@ impl FeatureVector {
             self.content.rich_media_count as f32,
             self.content.annotation_count as f32,
             self.content.page_count as f32,
+            self.graph.total_edges as f32,
+            self.graph.open_action_edges as f32,
+            self.graph.js_payload_edges as f32,
+            self.graph.uri_target_edges as f32,
+            self.graph.launch_target_edges as f32,
+            self.graph.suspicious_edge_count as f32,
+            self.graph.action_chain_count as f32,
+            self.graph.max_chain_length as f32,
+            self.graph.automatic_chain_count as f32,
+            self.graph.js_chain_count as f32,
+            self.graph.external_chain_count as f32,
+            self.graph.max_graph_depth as f32,
+            self.graph.avg_graph_depth as f32,
+            self.graph.catalog_to_js_paths as f32,
+            self.graph.multi_stage_indicators as f32,
         ]
     }
 }
@@ -99,6 +136,21 @@ pub fn feature_names() -> Vec<&'static str> {
         "content.rich_media_count",
         "content.annotation_count",
         "content.page_count",
+        "graph.total_edges",
+        "graph.open_action_edges",
+        "graph.js_payload_edges",
+        "graph.uri_target_edges",
+        "graph.launch_target_edges",
+        "graph.suspicious_edge_count",
+        "graph.action_chain_count",
+        "graph.max_chain_length",
+        "graph.automatic_chain_count",
+        "graph.js_chain_count",
+        "graph.external_chain_count",
+        "graph.max_graph_depth",
+        "graph.avg_graph_depth",
+        "graph.catalog_to_js_paths",
+        "graph.multi_stage_indicators",
     ]
 }
 
@@ -176,6 +228,9 @@ impl FeatureExtractor {
 
         let page_count = build_page_tree(graph).pages.len();
 
+        // Extract graph-based features using TypedGraph infrastructure
+        let graph_features = extract_graph_features(ctx);
+
         FeatureVector {
             general: GeneralFeatures {
                 file_size: bytes.len(),
@@ -205,6 +260,7 @@ impl FeatureExtractor {
                 annotation_count,
                 page_count,
             },
+            graph: graph_features,
         }
     }
 
@@ -365,6 +421,90 @@ fn binary_ratio(data: &[u8]) -> f64 {
         .filter(|&&b| !(b == b'\n' || b == b'\r' || b == b'\t' || (b >= 0x20 && b <= 0x7e)))
         .count();
     binary as f64 / data.len() as f64
+}
+
+/// Extract graph-based features using TypedGraph and PathFinder infrastructure
+fn extract_graph_features(ctx: &ScanContext) -> GraphFeatures {
+    // Build typed graph and get classifications
+    let typed_graph = ctx.build_typed_graph();
+    let classifications = ctx.classifications();
+
+    // Count edges by type
+    let total_edges = typed_graph.edges.len();
+    let mut open_action_edges = 0;
+    let mut js_payload_edges = 0;
+    let mut uri_target_edges = 0;
+    let mut launch_target_edges = 0;
+    let mut suspicious_edge_count = 0;
+
+    for edge in &typed_graph.edges {
+        if edge.suspicious {
+            suspicious_edge_count += 1;
+        }
+        match edge.edge_type {
+            EdgeType::OpenAction => open_action_edges += 1,
+            EdgeType::JavaScriptPayload | EdgeType::JavaScriptNames => js_payload_edges += 1,
+            EdgeType::UriTarget => uri_target_edges += 1,
+            EdgeType::LaunchTarget => launch_target_edges += 1,
+            _ => {}
+        }
+    }
+
+    // Analyze action chains using PathFinder
+    let path_finder = typed_graph.path_finder();
+    let chains = path_finder.find_all_action_chains();
+
+    let action_chain_count = chains.len();
+    let max_chain_length = chains.iter().map(|c| c.length()).max().unwrap_or(0);
+    let automatic_chain_count = chains.iter().filter(|c| c.automatic).count();
+    let js_chain_count = chains.iter().filter(|c| c.involves_js).count();
+    let external_chain_count = chains.iter().filter(|c| c.involves_external).count();
+
+    // Calculate graph depth metrics
+    let depths = path_finder.catalog_depths();
+    let max_graph_depth = depths.values().max().copied().unwrap_or(0);
+    let avg_graph_depth = if !depths.is_empty() {
+        depths.values().sum::<usize>() as f64 / depths.len() as f64
+    } else {
+        0.0
+    };
+
+    // Count paths from catalog to JavaScript objects
+    let js_sources = path_finder.find_javascript_sources();
+    let catalog_to_js_paths = js_sources
+        .iter()
+        .filter(|src| path_finder.is_reachable_from_catalog(**src))
+        .count();
+
+    // Detect multi-stage attack indicators (JS + embedded + external)
+    let has_js = js_payload_edges > 0;
+    let has_embedded = classifications
+        .iter()
+        .any(|(_, c)| c.has_role(ObjectRole::EmbeddedFile));
+    let has_external = uri_target_edges > 0 || launch_target_edges > 0;
+    let multi_stage_indicators = if has_js && has_embedded && has_external {
+        1
+    } else {
+        0
+    };
+
+    GraphFeatures {
+        total_edges,
+        open_action_edges,
+        js_payload_edges,
+        uri_target_edges,
+        launch_target_edges,
+        suspicious_edge_count,
+        action_chain_count,
+        max_chain_length,
+        automatic_chain_count,
+        js_chain_count,
+        external_chain_count,
+        max_graph_depth,
+        avg_graph_depth,
+        catalog_to_js_paths,
+        multi_stage_indicators,
+    }
 }
 
 #[allow(dead_code)]

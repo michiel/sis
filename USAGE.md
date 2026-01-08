@@ -425,6 +425,29 @@ CSV feature export:
 sis export-features --path samples --glob "*.pdf" --format csv -o features.csv
 ```
 
+### Feature Categories
+
+The feature extractor generates **35 features** organized into 5 categories:
+
+**General (3 features):**
+- `file_size`, `file_entropy`, `binary_ratio`
+
+**Structural (5 features):**
+- `max_object_id`, `objstm_count`, `trailer_count`, `startxref_count`, `linearized_present`
+
+**Content (3 features):**
+- `page_count`, `annotation_count`, `embedded_file_count`, `rich_media_count`
+
+**Behavioral (7 features):**
+- `js_object_count`, `js_eval_count`, `js_suspicious_api_count`, `env_probe_count`, `time_api_count`, `action_count`, `js_entropy_avg`
+
+**Graph (15 features):**
+- Edge counts: `total_edges`, `open_action_edges`, `js_payload_edges`, `uri_target_edges`, `launch_target_edges`, `suspicious_edge_count`
+- Action chains: `action_chain_count`, `max_chain_length`, `automatic_chain_count`, `js_chain_count`, `external_chain_count`
+- Graph metrics: `max_graph_depth`, `avg_graph_depth`, `catalog_to_js_paths`, `multi_stage_indicators`
+
+Graph features leverage the typed reference graph to detect complex attack patterns like multi-stage execution chains, automatic JavaScript triggers, and external resource loading.
+
 ## 14) Advanced detectors (supply chain, crypto, multi-stage, quantum)
 
 These detectors run automatically during `sis scan` and surface the following finding kinds:
