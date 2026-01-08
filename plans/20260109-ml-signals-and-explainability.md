@@ -69,7 +69,7 @@ This plan merges two complementary initiatives:
   - `crates/sis-pdf-core/src/explainability.rs` (450 lines)
   - `crates/sis-pdf-core/src/features_extended.rs` (965 lines)
 - **Structures Implemented**:
-  - `ExtendedFeatureVector` with 320 features (35 legacy + 285 new)
+  - `ExtendedFeatureVector` with 321 features (35 legacy + 286 new)
   - All 11 feature group structs (AttackSurfaceFeatures, SeverityFeatures, etc.)
   - `FeatureAttribution` for SHAP-style attribution
   - `MlExplanation` with natural language summaries
@@ -83,15 +83,42 @@ This plan merges two complementary initiatives:
   - `compute_percentile()` - Percentile computation
 - **Tests**: 8 unit tests covering feature dimensions, naming, conversions
 
-#### 🚧 In Progress (Phase 1.2)
-- Feature extraction functions from findings
-- JS signal extraction (30 features)
-- URI signal extraction (20 features)
-- Severity/confidence distribution extraction
+#### ✅ Completed (Phase 1.2) - Commit `3e8874a`
+- **Feature Extraction Functions**: All 321 features extracted from findings
+  - `extract_extended_features()` - Main orchestrator
+  - `extract_attack_surface_features()` - 12 features (added ContentPhishing)
+  - `extract_severity_features()` - 15 features with distributions
+  - `extract_confidence_features()` - 9 features with ratios
+  - `extract_finding_features()` - 140 features (70 binary + 70 counts) via macro
+  - `extract_js_features()` - 30 JS signals from metadata
+  - `extract_uri_features()` - 20 URI signals (schemes, IPs, phishing)
+  - `extract_content_features()` - 15 content signals (phishing, overlays, etc.)
+  - `extract_supply_chain_features()` - 10 supply chain indicators
+  - `extract_structural_features()` - 20 structural anomalies
+  - `extract_crypto_features()` - 10 crypto signals
+  - `extract_embedded_features()` - 15 embedded content signals
+- **Fixed**: AttackSurface enum variants (XRefTrailer, StreamsAndFilters, RichMedia3D)
+- **File**: `crates/sis-pdf-core/src/features_extended.rs` now ~2,070 lines
+
+#### ✅ Completed (Phase 1.3) - Commit `66cfc22`
+- **Feature Attribution Implementation**: Model-agnostic permutation importance
+  - `compute_permutation_importance()` - Permutation-based attribution
+    - Replaces each feature with baseline value
+    - Measures prediction change as contribution
+    - Returns features sorted by absolute contribution
+  - `compute_feature_group_importance()` - Group-level importance
+    - Aggregates contributions by feature prefix (js_signals, uri_signals, etc.)
+  - `create_ml_explanation()` - Complete ML explanation builder
+    - Top 10 positive/negative features
+    - Feature group importance map
+    - Natural language summary
+  - `compute_baseline_from_samples()` - Baseline statistics from benign PDFs
+    - Computes means, stddevs, percentiles [P10, P25, P50, P75, P90, P95, P99]
+  - `compute_nth_percentile()` - Percentile helper
+- **File**: `crates/sis-pdf-core/src/explainability.rs` now 600+ lines
 
 #### ⏳ Pending
-- Phase 1.3: Feature attribution (permutation importance)
-- Phase 1.4-1.7: Testing, documentation, integration
+- Phase 1.4-1.7: Enhanced testing, documentation, integration
 
 ### Phase 2-6: Not Started
 
