@@ -342,6 +342,217 @@ pub fn compute_comparative_explanation(
     comparisons
 }
 
+/// Compute permutation importance for feature attribution
+///
+/// This is a model-agnostic approach where each feature is replaced with its baseline value
+/// and the change in prediction is measured. The difference is the feature's contribution.
+///
+/// # Arguments
+/// * `model` - Function that takes feature values and returns prediction
+/// * `feature_values` - Original feature values as flat vector
+/// * `feature_names` - Names of all features
+/// * `baseline` - Benign baseline statistics
+///
+/// # Returns
+/// Vector of feature attributions sorted by absolute contribution
+pub fn compute_permutation_importance(
+    model: &dyn Fn(&[f32]) -> f32,
+    feature_values: &[f32],
+    feature_names: &[String],
+    baseline: &BenignBaseline,
+) -> Vec<FeatureAttribution> {
+    let original_pred = model(feature_values);
+    let mut attributions = Vec::new();
+
+    for (idx, (name, &value)) in feature_names.iter().zip(feature_values).enumerate() {
+        // Get baseline value for this feature
+        let baseline_value = baseline.feature_means.get(name).copied().unwrap_or(0.0);
+
+        // Create permuted feature vector with this feature set to baseline
+        let mut permuted = feature_values.to_vec();
+        permuted[idx] = baseline_value;
+
+        // Measure prediction change
+        let permuted_pred = model(&permuted);
+        let contribution = original_pred - permuted_pred;
+
+        // Compute percentile
+        let percentile = if let Some(pcts) = baseline.feature_percentiles.get(name) {
+            compute_percentile(value, pcts)
+        } else {
+            50.0
+        };
+
+        attributions.push(FeatureAttribution {
+            feature_name: name.clone(),
+            value,
+            contribution,
+            baseline: baseline_value,
+            percentile,
+        });
+    }
+
+    // Sort by absolute contribution (most impactful features first)
+    attributions.sort_by(|a, b| b.contribution.abs().partial_cmp(&a.contribution.abs()).unwrap());
+    attributions
+}
+
+/// Compute feature group importance from individual feature attributions
+///
+/// Groups features by their prefix (e.g., "js_signals.", "uri_signals.") and sums
+/// the absolute contributions within each group.
+pub fn compute_feature_group_importance(
+    attributions: &[FeatureAttribution],
+) -> HashMap<String, f32> {
+    let mut group_importance: HashMap<String, f32> = HashMap::new();
+
+    for attr in attributions {
+        // Extract group name from feature name (everything before the last dot)
+        let group = if let Some(dot_pos) = attr.feature_name.rfind('.') {
+            &attr.feature_name[..dot_pos]
+        } else {
+            "legacy"
+        };
+
+        *group_importance.entry(group.to_string()).or_insert(0.0) += attr.contribution.abs();
+    }
+
+    group_importance
+}
+
+/// Create a complete ML explanation from prediction and feature attributions
+///
+/// # Arguments
+/// * `prediction` - Model prediction score
+/// * `attributions` - All feature attributions
+/// * `baseline` - Benign baseline for baseline_score
+/// * `findings` - PDF findings for context in summary
+///
+/// # Returns
+/// Complete MlExplanation with top features, group importance, and summary
+pub fn create_ml_explanation(
+    prediction: f32,
+    attributions: Vec<FeatureAttribution>,
+    baseline: &BenignBaseline,
+    findings: &[Finding],
+) -> MlExplanation {
+    // Compute baseline score (average of benign means)
+    let baseline_score = if !baseline.feature_means.is_empty() {
+        baseline.feature_means.values().sum::<f32>() / baseline.feature_means.len() as f32
+    } else {
+        0.0
+    };
+
+    // Split into positive and negative contributions
+    let mut positive_features: Vec<_> = attributions
+        .iter()
+        .filter(|a| a.contribution > 0.0)
+        .cloned()
+        .collect();
+    positive_features.sort_by(|a, b| b.contribution.partial_cmp(&a.contribution).unwrap());
+    positive_features.truncate(10);
+
+    let mut negative_features: Vec<_> = attributions
+        .iter()
+        .filter(|a| a.contribution < 0.0)
+        .cloned()
+        .collect();
+    negative_features.sort_by(|a, b| a.contribution.partial_cmp(&b.contribution).unwrap());
+    negative_features.truncate(10);
+
+    // Compute group importance
+    let feature_group_importance = compute_feature_group_importance(&attributions);
+
+    // Generate natural language summary
+    let summary = generate_explanation_text(prediction, &positive_features, findings);
+
+    MlExplanation {
+        prediction,
+        baseline_score,
+        top_positive_features: positive_features,
+        top_negative_features: negative_features,
+        feature_group_importance,
+        summary,
+    }
+}
+
+/// Compute baseline statistics from a collection of benign samples
+///
+/// # Arguments
+/// * `benign_feature_maps` - Vector of feature name -> value maps from benign PDFs
+///
+/// # Returns
+/// BenignBaseline with computed means, stddevs, and percentiles
+pub fn compute_baseline_from_samples(
+    benign_feature_maps: &[HashMap<String, f32>],
+) -> BenignBaseline {
+    if benign_feature_maps.is_empty() {
+        return BenignBaseline::default();
+    }
+
+    let mut feature_means = HashMap::new();
+    let mut feature_stddevs = HashMap::new();
+    let mut feature_percentiles = HashMap::new();
+
+    // Collect all feature names
+    let mut all_features = std::collections::HashSet::new();
+    for map in benign_feature_maps {
+        all_features.extend(map.keys().cloned());
+    }
+
+    // Compute statistics for each feature
+    for feature_name in all_features {
+        let mut values: Vec<f32> = benign_feature_maps
+            .iter()
+            .filter_map(|m| m.get(&feature_name).copied())
+            .collect();
+
+        if values.is_empty() {
+            continue;
+        }
+
+        // Compute mean
+        let mean = values.iter().sum::<f32>() / values.len() as f32;
+        feature_means.insert(feature_name.clone(), mean);
+
+        // Compute stddev
+        let variance = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f32>() / values.len() as f32;
+        let stddev = variance.sqrt();
+        feature_stddevs.insert(feature_name.clone(), stddev);
+
+        // Compute percentiles
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let percentiles = vec![
+            compute_nth_percentile(&values, 10.0),
+            compute_nth_percentile(&values, 25.0),
+            compute_nth_percentile(&values, 50.0),
+            compute_nth_percentile(&values, 75.0),
+            compute_nth_percentile(&values, 90.0),
+            compute_nth_percentile(&values, 95.0),
+            compute_nth_percentile(&values, 99.0),
+        ];
+        feature_percentiles.insert(feature_name, percentiles);
+    }
+
+    BenignBaseline {
+        feature_means,
+        feature_stddevs,
+        feature_percentiles,
+    }
+}
+
+/// Compute the nth percentile from a sorted array
+fn compute_nth_percentile(sorted_values: &[f32], percentile: f32) -> f32 {
+    if sorted_values.is_empty() {
+        return 0.0;
+    }
+
+    let index = (percentile / 100.0 * (sorted_values.len() - 1) as f32).round() as usize;
+    sorted_values[index.min(sorted_values.len() - 1)]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
