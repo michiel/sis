@@ -94,6 +94,7 @@ Reporting and evidence:
 CLI workflows:
 - `docs/scenarios.md` for end-to-end operator workflows.
 - `sis scan` for triage, deep scans, strict mode, and focused trigger scans.
+- `sis detect` for filtering files by findings (outputs only files with ALL specified findings).
 - `sis report` for full Markdown reporting, with optional output file.
 - `sis explain` for individual finding inspection with evidence previews.
 - `sis extract` for JavaScript and embedded files.

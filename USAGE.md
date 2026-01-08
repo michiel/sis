@@ -134,7 +134,58 @@ Analysis steps:
 - Inspect file headers for PE/ELF/Mach-O signatures.
 - Map embedded file object IDs back to findings for provenance.
 
-## 7) Structural evasions (incremental updates)
+## 7) Detect files with specific findings
+
+Use `detect` to find files that contain all specified findings. This is useful for filtering large corpora:
+
+```
+sis detect --path /path/to/pdfs --findings js_present,open_action_present
+```
+
+With custom glob pattern:
+
+```
+sis detect --path /path/to/pdfs --glob "*.pdf" --findings js_present
+```
+
+Multiple findings (ALL required):
+
+```
+sis detect --path samples/ --findings js_present,uri_present,embedded_file_present
+```
+
+Sequential processing (no parallelism):
+
+```
+sis detect --path samples/ --findings js_present --sequential
+```
+
+Analysis workflow:
+- Use comma-separated finding IDs (no spaces): `--findings id1,id2,id3`
+- Output is one filename per line (easy to pipe to other tools)
+- Only files with ALL specified findings are returned
+- Files that fail to scan are silently skipped
+- Parallel processing is enabled by default for performance
+
+Example pipeline:
+
+```bash
+# Find PDFs with JavaScript and OpenAction
+sis detect --path samples/ --findings js_present,open_action_present > matches.txt
+
+# Scan each match in detail
+while read pdf; do
+  sis scan "$pdf" --deep --json >> detailed_results.jsonl
+done < matches.txt
+```
+
+Use cases:
+- Filter malware corpus to specific threat patterns
+- Find files requiring manual review
+- Automated triage in CI/CD pipelines
+- Rapid corpus classification
+
+## 8) Structural evasions (incremental updates)
 
 If you see `xref_conflict` or `incremental_update_chain`:
 
@@ -152,7 +203,7 @@ Notes:
 - Differential parsing uses `lopdf` as a secondary parser.
 - Use this when you suspect parser differentials or malformed structures.
 
-## 8) Decoder-risk triage
+## 9) Decoder-risk triage
 
 If you see `decoder_risk_present` or `decompression_ratio_suspicious`:
 
@@ -160,7 +211,7 @@ If you see `decoder_risk_present` or `decompression_ratio_suspicious`:
 2) Inspect stream span offsets to verify size and filter chain.
 3) If needed, extract embedded content to a quarantine directory.
 
-## 9) Phishing-content heuristic workflow
+## 10) Phishing-content heuristic workflow
 
 If you see `content_phishing`:
 
@@ -168,7 +219,7 @@ If you see `content_phishing`:
 2) Review page content for full-page images and overlay links.
 3) Cross-reference with JS and Actions findings for behaviour.
 
-## 10) Building a minimal synthetic fixture
+## 11) Building a minimal synthetic fixture
 
 This is useful for smoke tests or training.
 

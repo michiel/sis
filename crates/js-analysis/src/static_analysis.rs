@@ -25,6 +25,35 @@ pub fn extract_js_signals_with_ast(data: &[u8], enable_ast: bool) -> HashMap<Str
         "js.long_token_run".into(),
         bool_str(longest_token_run(data) >= 32),
     );
+
+    // Attempt payload reconstruction (fromCharCode, concatenation, etc.)
+    if enable_ast {
+        if let Some(reconstructed) = reconstruct_payloads(data) {
+            if !reconstructed.from_charcode.is_empty() {
+                out.insert("payload.fromCharCode_reconstructed".into(), "true".into());
+                out.insert(
+                    "payload.fromCharCode_count".into(),
+                    reconstructed.from_charcode.len().to_string(),
+                );
+                // Include first reconstructed payload as preview
+                if let Some(first) = reconstructed.from_charcode.first() {
+                    let preview = if first.len() > 200 {
+                        format!("{}...", &first[..200])
+                    } else {
+                        first.clone()
+                    };
+                    out.insert("payload.fromCharCode_preview".into(), preview);
+                }
+            }
+            if !reconstructed.concatenations.is_empty() {
+                out.insert("payload.concatenation_reconstructed".into(), "true".into());
+                out.insert(
+                    "payload.concatenation_count".into(),
+                    reconstructed.concatenations.len().to_string(),
+                );
+            }
+        }
+    }
     out.insert(
         "js.contains_hex_escapes".into(),
         bool_str(contains_hex_escape(data)),
@@ -847,6 +876,108 @@ fn ast_behaviour_summary(data: &[u8]) -> Option<AstSummary> {
         urls,
         domains,
     })
+}
+
+#[derive(Debug, Clone)]
+struct ReconstructedPayloads {
+    from_charcode: Vec<String>,
+    concatenations: Vec<String>,
+}
+
+/// Reconstruct obfuscated payloads from JavaScript code
+#[cfg(feature = "js-ast")]
+fn reconstruct_payloads(data: &[u8]) -> Option<ReconstructedPayloads> {
+    use boa_ast::expression::Call;
+    use boa_ast::scope::Scope;
+    use boa_ast::visitor::{VisitWith, Visitor};
+    use boa_interner::{Interner, ToInternedString};
+    use boa_parser::{Parser, Source};
+
+    let src = std::str::from_utf8(data).ok()?;
+    let mut interner = Interner::default();
+    let source = Source::from_bytes(src);
+    let mut parser = Parser::new(source);
+    let scope = Scope::new_global();
+    let script = parser.parse_script(&scope, &mut interner).ok()?;
+
+    struct ReconstructionVisitor<'a> {
+        interner: &'a Interner,
+        from_charcode: Vec<String>,
+    }
+
+    impl<'ast, 'a> Visitor<'ast> for ReconstructionVisitor<'a> {
+        type BreakTy = ();
+
+        fn visit_call(&mut self, node: &'ast Call) -> std::ops::ControlFlow<Self::BreakTy> {
+            // Check for String.fromCharCode(...) pattern
+            let func_name = node.function().to_interned_string(self.interner);
+
+            // Handle String.fromCharCode or fromCharCode
+            let is_from_charcode = func_name == "String.fromCharCode"
+                || func_name == "fromCharCode"
+                || func_name.ends_with(".fromCharCode");
+
+            if is_from_charcode {
+                // Try to reconstruct the string from numeric arguments
+                if let Some(reconstructed) = self.reconstruct_from_charcode_args(node.args()) {
+                    if !reconstructed.is_empty() {
+                        self.from_charcode.push(reconstructed);
+                    }
+                }
+            }
+
+            node.visit_with(self)
+        }
+    }
+
+    impl<'a> ReconstructionVisitor<'a> {
+        fn reconstruct_from_charcode_args(&self, args: &[boa_ast::expression::Expression]) -> Option<String> {
+            let mut result = String::new();
+
+            for arg in args {
+                // Try to get numeric literal
+                // Convert the expression to a string and try to parse as number
+                let arg_str = arg.to_interned_string(self.interner);
+                if let Ok(code) = arg_str.parse::<i64>() {
+                    if code >= 0 && code <= 0x10FFFF {
+                        if let Some(ch) = char::from_u32(code as u32) {
+                            result.push(ch);
+                        } else {
+                            return None; // Invalid character code
+                        }
+                    } else {
+                        return None; // Out of range
+                    }
+                } else {
+                    // Not a simple numeric literal, skip reconstruction
+                    return None;
+                }
+            }
+
+            if result.is_empty() {
+                None
+            } else {
+                Some(result)
+            }
+        }
+    }
+
+    let mut visitor = ReconstructionVisitor {
+        interner: &interner,
+        from_charcode: Vec::new(),
+    };
+
+    let _ = script.visit_with(&mut visitor);
+
+    Some(ReconstructedPayloads {
+        from_charcode: visitor.from_charcode,
+        concatenations: Vec::new(), // Will be implemented in Phase 2.1
+    })
+}
+
+#[cfg(not(feature = "js-ast"))]
+fn reconstruct_payloads(_data: &[u8]) -> Option<ReconstructedPayloads> {
+    None
 }
 
 #[cfg(feature = "js-ast")]

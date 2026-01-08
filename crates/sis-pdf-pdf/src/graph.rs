@@ -54,9 +54,12 @@ impl<'a> ObjectGraph<'a> {
     }
 
     pub fn get_object(&self, obj: u32, gen: u16) -> Option<&ObjEntry<'a>> {
+        // Use last() instead of first() to get the most recent version
+        // In PDFs with incremental updates, later definitions override earlier ones
+        // This prevents evasion via object ID shadowing
         self.index
             .get(&(obj, gen))
-            .and_then(|v| v.first().copied())
+            .and_then(|v| v.last().copied())
             .and_then(|idx| self.objects.get(idx))
     }
 
@@ -83,17 +86,18 @@ pub fn parse_pdf(bytes: &[u8], options: ParseOptions) -> Result<ObjectGraph<'_>>
     }
     let (mut objects, deviations) =
         scan_indirect_objects(bytes, options.strict, options.max_objects);
-    if options.deep {
-        let ObjStmExpansion { objects: mut extra } = expand_objstm(
-            bytes,
-            &objects,
-            options.strict,
-            options.max_objstm_bytes,
-            options.max_objects,
-            options.max_objstm_total_bytes,
-        );
-        objects.append(&mut extra);
-    }
+
+    // Always expand object streams to detect hidden JavaScript and other content
+    // Resource limits (max 100 ObjStm, byte limits) prevent DoS
+    let ObjStmExpansion { objects: mut extra } = expand_objstm(
+        bytes,
+        &objects,
+        options.strict,
+        options.max_objstm_bytes,
+        options.max_objects,
+        options.max_objstm_total_bytes,
+    );
+    objects.append(&mut extra);
     let mut index: HashMap<(u32, u16), Vec<usize>> = HashMap::new();
     for (i, o) in objects.iter().enumerate() {
         index.entry((o.obj, o.gen)).or_default().push(i);

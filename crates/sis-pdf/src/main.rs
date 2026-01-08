@@ -103,6 +103,33 @@ enum Command {
         pdf: String,
         finding_id: String,
     },
+    #[command(about = "Detect files that contain specific findings")]
+    Detect {
+        #[arg(long)]
+        path: PathBuf,
+        #[arg(long, default_value = "*.pdf")]
+        glob: String,
+        #[arg(long, value_delimiter = ',', required = true)]
+        findings: Vec<String>,
+        #[arg(long)]
+        deep: bool,
+        #[arg(long, default_value_t = 32 * 1024 * 1024)]
+        max_decode_bytes: usize,
+        #[arg(long, default_value_t = 256 * 1024 * 1024)]
+        max_total_decoded_bytes: usize,
+        #[arg(long)]
+        no_recover: bool,
+        #[arg(long)]
+        strict: bool,
+        #[arg(long, default_value_t = 500_000)]
+        max_objects: usize,
+        #[arg(long, alias = "seq")]
+        sequential: bool,
+        #[arg(long)]
+        no_js_ast: bool,
+        #[arg(long)]
+        no_js_sandbox: bool,
+    },
     #[command(about = "Extract JavaScript or embedded files from a PDF")]
     Extract {
         #[arg(value_parser = ["js", "embedded"])]
@@ -315,6 +342,33 @@ fn main() -> Result<()> {
             !no_js_sandbox,
         ),
         Command::Explain { pdf, finding_id } => run_explain(&pdf, &finding_id),
+        Command::Detect {
+            path,
+            glob,
+            findings,
+            deep,
+            max_decode_bytes,
+            max_total_decoded_bytes,
+            no_recover,
+            strict,
+            max_objects,
+            sequential,
+            no_js_ast,
+            no_js_sandbox,
+        } => run_detect(
+            &path,
+            &glob,
+            &findings,
+            deep,
+            max_decode_bytes,
+            max_total_decoded_bytes,
+            !no_recover,
+            strict,
+            max_objects,
+            sequential,
+            !no_js_ast,
+            !no_js_sandbox,
+        ),
         Command::Extract {
             kind,
             pdf,
@@ -855,6 +909,129 @@ fn run_explain(pdf: &str, finding_id: &str) -> Result<()> {
     }
     Ok(())
 }
+
+fn run_detect(
+    path: &std::path::Path,
+    glob: &str,
+    findings: &[String],
+    deep: bool,
+    max_decode_bytes: usize,
+    max_total_decoded_bytes: usize,
+    recover_xref: bool,
+    strict: bool,
+    max_objects: usize,
+    sequential: bool,
+    js_ast: bool,
+    js_sandbox: bool,
+) -> Result<()> {
+    if findings.is_empty() {
+        return Err(anyhow!("--findings must specify at least one finding ID"));
+    }
+
+    let opts = sis_pdf_core::scan::ScanOptions {
+        deep,
+        max_decode_bytes,
+        max_total_decoded_bytes,
+        recover_xref,
+        parallel: false,
+        batch_parallel: !sequential,
+        diff_parser: strict,
+        max_objects,
+        max_recursion_depth: 64,
+        strict,
+        ir: false,
+        fast: false,
+        focus_trigger: None,
+        focus_depth: 0,
+        yara_scope: None,
+        ml_config: None,
+    };
+
+    let settings = sis_pdf_detectors::DetectorSettings {
+        js_ast,
+        js_sandbox,
+    };
+    let detectors = sis_pdf_detectors::default_detectors_with_settings(settings);
+
+    // Set up glob matcher
+    let matcher = Glob::new(glob)?.compile_matcher();
+
+    // Walk directory and collect matching files
+    let iter = WalkDir::new(path)
+        .follow_links(false)
+        .max_depth(MAX_WALK_DEPTH);
+
+    let mut paths = Vec::new();
+    for entry in iter.into_iter().filter_map(Result::ok) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if !matcher.is_match(path) {
+            continue;
+        }
+        paths.push(path.to_path_buf());
+    }
+
+    // Scan files and filter by findings
+    let matching_files: Vec<String> = if opts.batch_parallel {
+        paths
+            .par_iter()
+            .filter_map(|path| {
+                scan_and_check_findings(path, &opts, &detectors, findings)
+            })
+            .collect()
+    } else {
+        paths
+            .iter()
+            .filter_map(|path| {
+                scan_and_check_findings(path, &opts, &detectors, findings)
+            })
+            .collect()
+    };
+
+    // Output only the filenames, one per line
+    for file in matching_files {
+        println!("{}", file);
+    }
+
+    Ok(())
+}
+
+fn scan_and_check_findings(
+    path: &std::path::Path,
+    opts: &sis_pdf_core::scan::ScanOptions,
+    detectors: &[Box<dyn sis_pdf_core::detect::Detector>],
+    required_findings: &[String],
+) -> Option<String> {
+    // Attempt to scan the file
+    let mmap = match mmap_file(path.to_str()?) {
+        Ok(m) => m,
+        Err(_) => return None, // Skip files that can't be read
+    };
+
+    let report = match sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts.clone(), detectors) {
+        Ok(r) => r,
+        Err(_) => return None, // Skip files that fail to scan
+    };
+
+    // Check if ALL required findings are present
+    let mut found_findings = std::collections::HashSet::new();
+    for finding in &report.findings {
+        found_findings.insert(finding.kind.as_str());
+    }
+
+    let has_all_findings = required_findings
+        .iter()
+        .all(|required| found_findings.contains(required.as_str()));
+
+    if has_all_findings {
+        Some(path.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
 fn run_extract(kind: &str, pdf: &str, outdir: &PathBuf, max_extract_bytes: usize) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     fs::create_dir_all(outdir)?;
