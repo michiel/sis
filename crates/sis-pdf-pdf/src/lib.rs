@@ -1,3 +1,4 @@
+pub mod classification;
 pub mod decode;
 pub mod content;
 pub mod graph;

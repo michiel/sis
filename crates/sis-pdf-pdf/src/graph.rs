@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
+use crate::classification::{classify_all_objects, ClassificationMap};
 use crate::object::{PdfAtom, PdfDict, PdfObj};
 use crate::parser::scan_indirect_objects;
 use crate::span::Span;
@@ -70,6 +71,32 @@ impl<'a> ObjectGraph<'a> {
             .flat_map(|v| v.iter())
             .filter_map(|idx| self.objects.get(*idx))
             .collect()
+    }
+
+    /// Classifies all objects in the graph
+    ///
+    /// This builds a classification map that identifies object types (Catalog, Page, Action, etc.)
+    /// and roles (JsContainer, ActionTarget, etc.) for all objects in the document.
+    ///
+    /// # Returns
+    ///
+    /// A map from (obj, gen) to ClassifiedObject containing type and role information.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let graph = parse_pdf(bytes, options)?;
+    /// let classifications = graph.classify_objects();
+    ///
+    /// for ((obj, gen), classified) in &classifications {
+    ///     println!("Object {} {} is type: {}", obj, gen, classified.obj_type.as_str());
+    ///     if classified.has_role(ObjectRole::JsContainer) {
+    ///         println!("  Contains JavaScript!");
+    ///     }
+    /// }
+    /// ```
+    pub fn classify_objects(&self) -> ClassificationMap {
+        classify_all_objects(&self.objects)
     }
 }
 
