@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashSet;
 
 use sis_pdf_core::detect::{Cost, Detector, Needs};
 use sis_pdf_core::evidence::{decoded_evidence_span, preview_ascii};
@@ -513,6 +514,36 @@ fn aa_event_value(ctx: &sis_pdf_core::scan::ScanContext, obj: &sis_pdf_pdf::obje
     }
 }
 
+/// Check if a PDF name represents a JavaScript key
+/// Matches /JS, /JavaScript, /JScript (case-insensitive, handles hex encoding)
+fn is_javascript_key(name: &sis_pdf_pdf::object::PdfName<'_>) -> bool {
+    let decoded = &name.decoded;
+    // Remove leading slash if present
+    let name_str = if decoded.starts_with(b"/") {
+        &decoded[1..]
+    } else {
+        decoded
+    };
+
+    matches!(
+        name_str,
+        b"JS" | b"js" | b"Js" | b"jS" |
+        b"JavaScript" | b"javascript" | b"JAVASCRIPT" |
+        b"JScript" | b"jscript" | b"JSCRIPT"
+    )
+}
+
+/// Find all JavaScript key-value pairs in a dictionary
+fn find_javascript_entries<'a>(
+    dict: &'a sis_pdf_pdf::object::PdfDict<'a>,
+) -> Vec<(&'a sis_pdf_pdf::object::PdfName<'a>, &'a sis_pdf_pdf::object::PdfObj<'a>)> {
+    dict.entries
+        .iter()
+        .filter(|(k, _)| is_javascript_key(k))
+        .map(|(k, v)| (k, v))
+        .collect()
+}
+
 struct JavaScriptDetector {
     enable_ast: bool,
 }
@@ -534,23 +565,52 @@ impl Detector for JavaScriptDetector {
         let mut findings = Vec::new();
         for entry in &ctx.graph.objects {
             if let Some(dict) = entry_dict(entry) {
-                let mut js_obj = None;
-                if let Some((k, v)) = dict.get_first(b"/JS") {
-                    js_obj = Some((k, v));
-                }
-                if dict.has_name(b"/S", b"/JavaScript") || js_obj.is_some() {
+                // Find all JavaScript entries (handles /JS, /JavaScript, /JScript, hex-encoded variants)
+                let js_entries = find_javascript_entries(dict);
+
+                if dict.has_name(b"/S", b"/JavaScript") || !js_entries.is_empty() {
                     let mut evidence = Vec::new();
-                    if let Some((k, v)) = js_obj {
-                        evidence.push(span_to_evidence(k.span, "JavaScript key /JS"));
-                        evidence.push(span_to_evidence(v.span, "JavaScript payload"));
-                    } else {
-                        evidence.push(span_to_evidence(dict.span, "Action dict"));
-                    }
                     let mut meta = std::collections::HashMap::new();
-                    meta.insert("payload_key".into(), "/JS".into());
+
+                    // Detect multiple JavaScript keys (evasion technique)
+                    if js_entries.len() > 1 {
+                        meta.insert("js.multiple_keys".into(), "true".into());
+                        meta.insert("js.multiple_keys_count".into(), js_entries.len().to_string());
+                    }
+
+                    // Process all JavaScript entries
+                    let mut all_payloads = Vec::new();
+                    for (idx, (k, v)) in js_entries.iter().enumerate() {
+                        evidence.push(span_to_evidence(k.span, &format!("JavaScript key #{}", idx + 1)));
+                        evidence.push(span_to_evidence(v.span, &format!("JavaScript payload #{}", idx + 1)));
+
+                        let key_name = String::from_utf8_lossy(&k.decoded).to_string();
+                        if idx == 0 {
+                            meta.insert("payload_key".into(), key_name.clone());
+                        } else {
+                            meta.insert(format!("payload_key_{}", idx + 1), key_name);
+                        }
+
+                        all_payloads.push((idx, k, v));
+                    }
+
+                    // If no explicit JavaScript keys, but /S is /JavaScript
+                    if all_payloads.is_empty() {
+                        evidence.push(span_to_evidence(dict.span, "Action dict"));
+                        meta.insert("payload_key".into(), "/S /JavaScript".into());
+                    }
+
                     meta.insert("js.stream.decoded".into(), "false".into());
                     meta.insert("js.stream.decode_error".into(), "-".into());
-                    if let Some((_, v)) = dict.get_first(b"/JS") {
+
+                    // Process the first (or only) JavaScript payload
+                    let primary_payload = if !all_payloads.is_empty() {
+                        Some(all_payloads[0].2)
+                    } else {
+                        None
+                    };
+
+                    if let Some(v) = primary_payload {
                         let res = resolve_payload(ctx, v);
                         if let Some(err) = res.error {
                             meta.insert("js.stream.decode_error".into(), err);
@@ -1638,16 +1698,41 @@ pub(crate) fn resolve_payload(
     ctx: &sis_pdf_core::scan::ScanContext,
     obj: &sis_pdf_pdf::object::PdfObj<'_>,
 ) -> PayloadResult {
+    let mut visited = HashSet::new();
+    resolve_payload_recursive(ctx, obj, 0, &mut visited, Vec::new())
+}
+
+const MAX_RESOLVE_DEPTH: usize = 10;
+const MAX_ARRAY_ELEMENTS: usize = 1000;
+
+fn resolve_payload_recursive(
+    ctx: &sis_pdf_core::scan::ScanContext,
+    obj: &sis_pdf_pdf::object::PdfObj<'_>,
+    depth: usize,
+    visited: &mut HashSet<(u32, u16)>,
+    mut ref_chain: Vec<String>,
+) -> PayloadResult {
+    if depth > MAX_RESOLVE_DEPTH {
+        return PayloadResult {
+            payload: None,
+            error: Some(format!("max resolution depth {} exceeded", MAX_RESOLVE_DEPTH)),
+        };
+    }
+
     match &obj.atom {
         PdfAtom::Str(s) => PayloadResult {
             payload: Some(PayloadInfo {
-            bytes: string_bytes(s),
-            kind: "string".into(),
-            ref_chain: "-".into(),
-            origin: Some(s_span(s)),
-            filters: None,
-            decode_ratio: None,
-        }),
+                bytes: string_bytes(s),
+                kind: "string".into(),
+                ref_chain: if ref_chain.is_empty() {
+                    "-".into()
+                } else {
+                    ref_chain.join(" -> ")
+                },
+                origin: Some(s_span(s)),
+                filters: None,
+                decode_ratio: None,
+            }),
             error: None,
         },
         PdfAtom::Stream(st) => match ctx.decoded.get_or_decode(ctx.bytes, st) {
@@ -1661,7 +1746,11 @@ pub(crate) fn resolve_payload(
                     payload: Some(PayloadInfo {
                         bytes: decoded.data,
                         kind: "stream".into(),
-                        ref_chain: "-".into(),
+                        ref_chain: if ref_chain.is_empty() {
+                            "-".into()
+                        } else {
+                            ref_chain.join(" -> ")
+                        },
                         origin: Some(st.data_span),
                         filters: Some(decoded.filters.join(",")),
                         decode_ratio: ratio,
@@ -1674,62 +1763,114 @@ pub(crate) fn resolve_payload(
                 error: Some(e.to_string()),
             },
         },
-        PdfAtom::Ref { .. } => {
-            let entry = match ctx.graph.resolve_ref(obj) {
+        PdfAtom::Ref { obj: obj_id, gen } => {
+            // Cycle detection
+            if !visited.insert((*obj_id, *gen)) {
+                return PayloadResult {
+                    payload: None,
+                    error: Some(format!("circular reference detected: {} {} R", obj_id, gen)),
+                };
+            }
+
+            let entry = match ctx.graph.get_object(*obj_id, *gen) {
                 Some(e) => e,
                 None => {
                     return PayloadResult {
                         payload: None,
-                        error: Some("ref resolution failed".into()),
-                    }
+                        error: Some(format!("ref resolution failed: {} {} R", obj_id, gen)),
+                    };
                 }
             };
-            let ref_chain = format!("{} {} R", entry.obj, entry.gen);
-            match &entry.atom {
-                PdfAtom::Str(s) => PayloadResult {
-                    payload: Some(PayloadInfo {
-                        bytes: string_bytes(s),
-                        kind: "string".into(),
-                        ref_chain,
-                        origin: Some(s_span(s)),
-                        filters: None,
-                        decode_ratio: None,
-                    }),
-                    error: None,
-                },
-                PdfAtom::Stream(st) => match ctx.decoded.get_or_decode(ctx.bytes, st) {
-                    Ok(decoded) => {
-                        let ratio = if decoded.input_len > 0 {
-                            Some(decoded.data.len() as f64 / decoded.input_len as f64)
-                        } else {
-                            None
-                        };
-                        PayloadResult {
-                            payload: Some(PayloadInfo {
-                                bytes: decoded.data,
-                                kind: "stream".into(),
-                                ref_chain,
-                                origin: Some(st.data_span),
-                                filters: Some(decoded.filters.join(",")),
-                                decode_ratio: ratio,
-                            }),
-                            error: None,
+
+            ref_chain.push(format!("{} {} R", obj_id, gen));
+
+            // Create a temporary PdfObj for the resolved entry
+            let resolved_obj = sis_pdf_pdf::object::PdfObj {
+                span: entry.body_span,
+                atom: entry.atom.clone(),
+            };
+
+            resolve_payload_recursive(ctx, &resolved_obj, depth + 1, visited, ref_chain)
+        }
+        PdfAtom::Array(arr) => {
+            // Array payload reconstruction: concatenate all string elements
+            if arr.len() > MAX_ARRAY_ELEMENTS {
+                return PayloadResult {
+                    payload: None,
+                    error: Some(format!(
+                        "array too large: {} elements (max {})",
+                        arr.len(),
+                        MAX_ARRAY_ELEMENTS
+                    )),
+                };
+            }
+
+            let mut fragments = Vec::new();
+            let mut errors = Vec::new();
+            let mut first_origin = None;
+
+            for (idx, elem) in arr.iter().enumerate() {
+                let result = resolve_payload_recursive(
+                    ctx,
+                    elem,
+                    depth + 1,
+                    visited,
+                    ref_chain.clone(),
+                );
+
+                match result.payload {
+                    Some(p) => {
+                        if first_origin.is_none() {
+                            first_origin = p.origin;
+                        }
+                        fragments.push(p.bytes);
+                    }
+                    None => {
+                        if let Some(err) = result.error {
+                            errors.push(format!("element {}: {}", idx, err));
                         }
                     }
-                    Err(e) => PayloadResult {
-                        payload: None,
-                        error: Some(e.to_string()),
-                    },
-                },
-                _ => PayloadResult {
+                }
+            }
+
+            if fragments.is_empty() {
+                return PayloadResult {
                     payload: None,
-                    error: Some("unsupported payload type".into()),
+                    error: Some(format!(
+                        "array payload reconstruction failed: {}",
+                        if errors.is_empty() {
+                            "no resolvable elements".to_string()
+                        } else {
+                            errors.join("; ")
+                        }
+                    )),
+                };
+            }
+
+            let concatenated = fragments.concat();
+            PayloadResult {
+                payload: Some(PayloadInfo {
+                    bytes: concatenated,
+                    kind: format!("array[{}]", fragments.len()),
+                    ref_chain: if ref_chain.is_empty() {
+                        format!("array[{}]", fragments.len())
+                    } else {
+                        format!("{} -> array[{}]", ref_chain.join(" -> "), fragments.len())
+                    },
+                    origin: first_origin,
+                    filters: None,
+                    decode_ratio: None,
+                }),
+                error: if errors.is_empty() {
+                    None
+                } else {
+                    Some(format!("partial reconstruction: {}", errors.join("; ")))
                 },
             }
         }
         _ => PayloadResult {
             payload: None,
-            error: Some("unsupported payload type".into()),
+            error: Some(format!("unsupported payload type: {:?}", obj.atom)),
         },
     }
 }

@@ -2,6 +2,81 @@
 
 This document describes every finding ID that `sis-pdf` can emit. Each entry includes a label, a short description, tags for quick grouping, and details on relevance, meaning, and exploit-chain usage.
 
+---
+
+## Evasion-Resistant Metadata Fields
+
+As of 2026-01-08, sis-pdf includes enhanced payload reconstruction capabilities to detect evasively-hidden JavaScript. The following metadata fields are added to findings when evasion techniques are detected or payloads are reconstructed:
+
+### Payload Reconstruction Metadata
+
+**payload.type**
+- Values: `string`, `stream`, `array[N]` where N is the number of fragments
+- Meaning: Indicates how the payload was extracted
+- Example: `array[3]` means the payload was reconstructed from 3 array elements
+
+**payload.ref_chain**
+- Values: Reference chain like `10 0 R -> 11 0 R -> 12 0 R` or `-` for direct payloads
+- Meaning: Shows the indirect reference chain followed to resolve the payload
+- Example: `10 0 R -> array[3]` indicates object 10 contained an array of 3 fragments
+
+**payload.fromCharCode_reconstructed**
+- Values: `true` or absent
+- Meaning: JavaScript payload contains reconstructed String.fromCharCode(...) calls
+- Detection: Static analysis found and decoded character code arrays
+
+**payload.fromCharCode_count**
+- Values: Integer count
+- Meaning: Number of fromCharCode strings successfully reconstructed
+- Example: `3` means 3 separate fromCharCode calls were decoded
+
+**payload.fromCharCode_preview**
+- Values: String (max 200 characters)
+- Meaning: Preview of first reconstructed fromCharCode payload
+- Example: `app.alert('malicious')` shows the decoded function call
+
+### Multiple Key Detection
+
+**js.multiple_keys**
+- Values: `true` or absent
+- Meaning: Dictionary contains multiple JavaScript keys (evasion technique)
+- Detection: More than one /JS, /JavaScript, or /JScript key found
+
+**js.multiple_keys_count**
+- Values: Integer count
+- Meaning: Total number of JavaScript keys in dictionary
+- Example: `2` indicates two separate JS keys (suspicious)
+
+**payload_key_N**
+- Values: Key name string (e.g., `/JavaScript`, `/#4A#53`)
+- Meaning: Additional JavaScript key names beyond the first
+- Example: `payload_key_2: /JScript` shows second key
+
+### Enhanced Error Reporting
+
+**js.stream.decode_error**
+- Additional error types:
+  - `circular reference detected: N M R` - Reference loop found
+  - `max resolution depth 10 exceeded` - Too many reference hops
+  - `array too large: 1234 elements (max 1000)` - Array size limit exceeded
+  - `array payload reconstruction failed: ...` - Array reconstruction error
+
+### Evasion Techniques Detected
+
+The enhanced analysis now detects and reconstructs:
+1. **Array-based fragmentation**: JavaScript split across array elements
+2. **Multi-hop references**: Payload hidden through reference chains (up to 10 hops)
+3. **Hex-encoded keys**: `/JS` encoded as `/#4A#53` or similar
+4. **Name variants**: `/JavaScript`, `/JScript` keys now recognized
+5. **Multiple keys**: Duplicate /JS keys in same dictionary
+6. **Character code obfuscation**: `String.fromCharCode(...)` decoded to strings
+7. **Object streams**: Always expanded to find hidden content (no --deep flag required)
+8. **Object shadowing**: Latest object version used (incremental updates)
+
+For implementation details, see `plans/review-evasive.md` and `plans/evasion-implementation-summary.md`.
+
+---
+
 ## 3d_present
 
 - ID: `3d_present`
