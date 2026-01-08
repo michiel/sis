@@ -746,8 +746,27 @@ ML models automatically get richer context without code changes!
 - **Tests**: All tests pass
 - **Status**: Complete
 
-### 🔄 Sprint 6: Enhanced ORG Export (Pending)
+### ✅ Sprint 6: Enhanced ORG Export (Completed)
 - **Goal**: Include semantic edge types and classifications in ORG export
+- **Modified Files**:
+  - `crates/sis-pdf-core/src/org.rs` - Add OrgNode, OrgEdge, enhanced structures
+  - `crates/sis-pdf-core/src/org_export.rs` - Enhanced JSON/DOT export with types and roles
+  - `crates/sis-pdf/src/main.rs` - Add --enhanced flag to export-org command
+- **New Features**:
+  - `OrgGraph::from_object_graph_enhanced()` - Build ORG with classifications and typed edges
+  - Enhanced JSON format includes: node types, roles, edge types, suspicious flags
+  - Enhanced DOT format includes: labeled nodes with types/roles, colored edges for suspicious
+  - Backwards compatible: falls back to basic export when --enhanced not used
+- **Usage**:
+  - Basic: `sis export-org input.pdf -o output.json`
+  - Enhanced: `sis export-org --enhanced input.pdf -o output.json`
+- **Benefits for ML**:
+  - Richer training data with semantic annotations
+  - Graph structure includes security-relevant edge types
+  - Node classifications enable feature extraction
+  - Suspicious edge marking for label propagation
+- **Tests**: Manual testing verified both basic and enhanced exports
+- **Status**: Complete
 
 ### 🔄 Sprint 7: ML Feature Enhancement (Pending)
 - **Goal**: Add graph-based features to ML feature extraction

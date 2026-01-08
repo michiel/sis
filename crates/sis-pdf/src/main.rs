@@ -193,6 +193,8 @@ enum Command {
         format: String,
         #[arg(short, long)]
         out: PathBuf,
+        #[arg(long, help = "Include semantic edge types and object classifications")]
+        enhanced: bool,
     },
     #[command(about = "Export PDFObj IR as text or JSON")]
     ExportIr {
@@ -418,7 +420,7 @@ fn main() -> Result<()> {
             format,
             out,
         } => run_export_graph(&pdf, chains_only, &format, &out),
-        Command::ExportOrg { pdf, format, out } => run_export_org(&pdf, &format, &out),
+        Command::ExportOrg { pdf, format, out, enhanced } => run_export_org(&pdf, &format, &out, enhanced),
         Command::ExportIr { pdf, format, out } => run_export_ir(&pdf, &format, &out),
         Command::ExportFeatures {
             pdf,
@@ -1095,7 +1097,7 @@ fn run_export_graph(pdf: &str, chains_only: bool, format: &str, outdir: &PathBuf
     }
     Ok(())
 }
-fn run_export_org(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
+fn run_export_org(pdf: &str, format: &str, out: &PathBuf, enhanced: bool) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     let graph = sis_pdf_pdf::parse_pdf(
         &mmap,
@@ -1108,7 +1110,40 @@ fn run_export_org(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
             max_objstm_total_bytes: 256 * 1024 * 1024,
         },
     )?;
-    let org = sis_pdf_core::org::OrgGraph::from_object_graph(&graph);
+
+    let org = if enhanced {
+        // Build enhanced ORG with classifications and typed edges
+        let opts = sis_pdf_core::scan::ScanOptions {
+            deep: false,
+            max_decode_bytes: 32 * 1024 * 1024,
+            max_total_decoded_bytes: 256 * 1024 * 1024,
+            recover_xref: true,
+            parallel: false,
+            batch_parallel: false,
+            diff_parser: false,
+            max_objects: 500_000,
+            max_recursion_depth: 50,
+            fast: false,
+            focus_trigger: None,
+            yara_scope: None,
+            focus_depth: 5,
+            strict: false,
+            ir: false,
+            ml_config: None,
+        };
+        let ctx = sis_pdf_core::scan::ScanContext::new(&mmap, graph, opts);
+        let classifications = ctx.classifications();
+        let typed_graph = ctx.build_typed_graph();
+        sis_pdf_core::org::OrgGraph::from_object_graph_enhanced(
+            &ctx.graph,
+            classifications,
+            &typed_graph,
+        )
+    } else {
+        // Basic ORG export
+        sis_pdf_core::org::OrgGraph::from_object_graph(&graph)
+    };
+
     match format {
         "json" => {
             let v = sis_pdf_core::org_export::export_org_json(&org);
