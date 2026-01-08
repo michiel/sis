@@ -768,8 +768,13 @@ ML models automatically get richer context without code changes!
 - **Tests**: Manual testing verified both basic and enhanced exports
 - **Status**: Complete
 
-### 🔄 Sprint 7: ML Feature Enhancement (Pending)
+### ✅ Sprint 7: ML Feature Enhancement (Completed)
 - **Goal**: Add graph-based features to ML feature extraction
+- **Status**: Complete (commit dd2ce0a)
+- **Added**: 15 new graph-based features using TypedGraph and PathFinder
+- **Features**: Edge counts, action chain metrics, graph depth analysis, multi-stage indicators
+- **Total**: Expanded from 20 to 35 ML features across 5 categories
+- **Documentation**: Updated USAGE.md with complete feature breakdown
 
 ## Conclusion
 
