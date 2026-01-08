@@ -8,6 +8,7 @@ pub mod objstm;
 pub mod object;
 pub mod parser;
 pub mod span;
+pub mod typed_graph;
 pub mod xref;
 
 pub use crate::graph::{parse_pdf, ObjectGraph, ParseOptions};
