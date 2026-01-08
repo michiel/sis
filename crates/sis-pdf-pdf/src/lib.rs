@@ -7,6 +7,7 @@ pub mod lexer;
 pub mod objstm;
 pub mod object;
 pub mod parser;
+pub mod path_finder;
 pub mod span;
 pub mod typed_graph;
 pub mod xref;

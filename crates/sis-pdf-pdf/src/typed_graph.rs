@@ -284,6 +284,11 @@ impl<'a> TypedGraph<'a> {
     {
         self.edges.iter().filter(|e| predicate(e)).collect()
     }
+
+    /// Creates a PathFinder for this graph
+    pub fn path_finder(&self) -> crate::path_finder::PathFinder<'_> {
+        crate::path_finder::PathFinder::new(self)
+    }
 }
 
 /// Edge extractor that builds typed edges from PDF objects
