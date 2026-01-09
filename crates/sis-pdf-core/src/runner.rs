@@ -2,12 +2,13 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
 use crate::model::Finding;
-use crate::report::{
-    MlNodeAttribution, MlRunSummary, MlSummary, Report, SecondaryParserSummary, StructuralSummary,
-};
+use crate::report::{MlRunSummary, MlSummary, Report, SecondaryParserSummary, StructuralSummary};
+#[cfg(feature = "ml-graph")]
+use crate::report::MlNodeAttribution;
 use crate::scan::{ScanContext, ScanOptions};
 use sis_pdf_pdf::{parse_pdf, ObjectGraph, ParseOptions};
 use sis_pdf_pdf::object::{PdfAtom, PdfDict, PdfObj};
+#[cfg(feature = "ml-graph")]
 use sis_pdf_pdf::ir::PdfIrObject;
 use crate::graph_walk::{build_adjacency, reachable_from, ObjRef};
 
@@ -409,6 +410,7 @@ fn stable_id(f: &Finding) -> String {
     format!("sis-{}", hasher.finalize().to_hex())
 }
 
+#[cfg(feature = "ml-graph")]
 fn summarize_ir_object(obj: &PdfIrObject) -> String {
     let mut parts = Vec::new();
     for line in obj.lines.iter().take(3) {
@@ -431,6 +433,7 @@ fn summarize_ir_object(obj: &PdfIrObject) -> String {
     }
 }
 
+#[cfg(feature = "ml-graph")]
 fn top_node_attributions(
     node_scores: &[f32],
     ir_graph: &crate::ir_pipeline::IrGraphArtifacts,

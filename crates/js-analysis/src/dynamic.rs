@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::types::{DynamicOptions, DynamicOutcome};
 
 #[cfg(feature = "js-sandbox")]

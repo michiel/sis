@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
-use sis_pdf_pdf::classification::{ClassificationMap, PdfObjectType};
-use sis_pdf_pdf::typed_graph::{EdgeType, TypedGraph};
+use sis_pdf_pdf::classification::ClassificationMap;
+use sis_pdf_pdf::typed_graph::TypedGraph;
 use sis_pdf_pdf::ObjectGraph;
 
 use crate::graph_walk::{build_adjacency, ObjRef};

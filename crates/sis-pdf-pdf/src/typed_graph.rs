@@ -679,6 +679,7 @@ impl<'a, 'b> EdgeExtractor<'a, 'b> {
     }
 
     /// Gets a dictionary from an object
+    #[allow(dead_code)]
     fn get_dict<'c>(&self, obj: &'c PdfObj<'a>) -> Option<&'c PdfDict<'a>> {
         match &obj.atom {
             PdfAtom::Dict(d) => Some(d),
@@ -687,6 +688,7 @@ impl<'a, 'b> EdgeExtractor<'a, 'b> {
     }
 
     /// Gets a dictionary from an object, resolving references
+    #[allow(dead_code)]
     fn get_dict_resolved(&self, obj: &'a PdfObj<'a>) -> Option<&'a PdfDict<'a>> {
         match &obj.atom {
             PdfAtom::Dict(d) => Some(d),

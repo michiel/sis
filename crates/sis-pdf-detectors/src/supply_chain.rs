@@ -5,7 +5,6 @@ use sis_pdf_core::detect::{Cost, Detector, Needs};
 use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
 use sis_pdf_core::scan::span_to_evidence;
 use sis_pdf_pdf::classification::ObjectRole;
-use sis_pdf_pdf::object::PdfAtom;
 use sis_pdf_pdf::typed_graph::EdgeType;
 
 use crate::{entry_dict, resolve_payload};
