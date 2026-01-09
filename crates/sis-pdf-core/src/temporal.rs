@@ -222,6 +222,7 @@ mod tests {
             yara_scope: None,
             focus_depth: 0,
             strict: false,
+            strict_summary: false,
             ir: false,
             ml_config: None,
         }

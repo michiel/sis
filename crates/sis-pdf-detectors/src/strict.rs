@@ -4,6 +4,7 @@ use sis_pdf_core::detect::{Cost, Detector, Needs};
 use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
 use sis_pdf_core::scan::span_to_evidence;
 use sis_pdf_pdf::object::PdfAtom;
+use std::collections::BTreeMap;
 
 pub struct StrictParseDeviationDetector;
 
@@ -220,25 +221,67 @@ impl Detector for StrictParseDeviationDetector {
                     yara: None,
                 });
             }
-            for dev in &ctx.graph.deviations {
-                let mut description = format!("Strict parser recorded a deviation: {}.", dev.kind);
-                if let Some(note) = &dev.note {
-                    description.push_str(&format!(" {}", note));
+            if ctx.options.strict_summary {
+                if !ctx.graph.deviations.is_empty() {
+                    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+                    for dev in &ctx.graph.deviations {
+                        *counts.entry(dev.kind.clone()).or_insert(0) += 1;
+                    }
+                    let mut top: Vec<(String, usize)> = counts
+                        .iter()
+                        .map(|(k, v)| (k.clone(), *v))
+                        .collect();
+                    top.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                    let top_list = top
+                        .iter()
+                        .take(10)
+                        .map(|(k, v)| format!("{}:{}", k, v))
+                        .collect::<Vec<_>>();
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert(
+                        "parser.deviation_total".into(),
+                        ctx.graph.deviations.len().to_string(),
+                    );
+                    meta.insert("parser.deviation_unique".into(), counts.len().to_string());
+                    if !top_list.is_empty() {
+                        meta.insert("parser.deviation_top".into(), top_list.join(","));
+                    }
+                    findings.push(Finding {
+                        id: String::new(),
+                        surface: self.surface(),
+                        kind: "strict_parse_deviation_summary".into(),
+                        severity: Severity::Low,
+                        confidence: Confidence::Heuristic,
+                        title: "Strict parser deviation summary".into(),
+                        description: "Strict parser deviations summarised by kind.".into(),
+                        objects: vec!["parser".into()],
+                        evidence: Vec::new(),
+                        remediation: Some("Inspect deviation kinds with the highest counts.".into()),
+                        meta,
+                        yara: None,
+                    });
                 }
-                findings.push(Finding {
-                    id: String::new(),
-                    surface: self.surface(),
-                    kind: "strict_parse_deviation".into(),
-                    severity: deviation_severity(&dev.kind),
-                    confidence: Confidence::Probable,
-                    title: format!("Strict parser deviation: {}", dev.kind),
-                    description,
-                    objects: vec!["parser".into()],
-                    evidence: vec![span_to_evidence(dev.span, "Parser deviation")],
-                    remediation: Some("Inspect malformed tokens or truncated objects.".into()),
-                    meta: Default::default(),
-                    yara: None,
-                });
+            } else {
+                for dev in &ctx.graph.deviations {
+                    let mut description = format!("Strict parser recorded a deviation: {}.", dev.kind);
+                    if let Some(note) = &dev.note {
+                        description.push_str(&format!(" {}", note));
+                    }
+                    findings.push(Finding {
+                        id: String::new(),
+                        surface: self.surface(),
+                        kind: "strict_parse_deviation".into(),
+                        severity: deviation_severity(&dev.kind),
+                        confidence: Confidence::Probable,
+                        title: format!("Strict parser deviation: {}", dev.kind),
+                        description,
+                        objects: vec!["parser".into()],
+                        evidence: vec![span_to_evidence(dev.span, "Parser deviation")],
+                        remediation: Some("Inspect malformed tokens or truncated objects.".into()),
+                        meta: Default::default(),
+                        yara: None,
+                    });
+                }
             }
         }
         Ok(findings)

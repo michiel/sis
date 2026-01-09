@@ -90,6 +90,12 @@ Strict parsing (record lexer-level deviations):
 sis scan suspicious.pdf --strict
 ```
 
+Strict parsing with deviation summary (reduces per‑deviation output in batch runs):
+
+```
+sis scan suspicious.pdf --strict --strict-summary
+```
+
 When to use deep scan:
 - You have `StreamsAndFilters` findings and need to measure decode ratios.
 - You suspect embedded JavaScript or embedded files hidden behind filters.

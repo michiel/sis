@@ -75,6 +75,8 @@ enum Command {
         focus_depth: usize,
         #[arg(long)]
         strict: bool,
+        #[arg(long, help = "Summarise strict parser deviations instead of emitting each deviation")]
+        strict_summary: bool,
         #[arg(long)]
         ir: bool,
         #[arg(long, default_value_t = 500_000)]
@@ -341,6 +343,7 @@ fn main() -> Result<()> {
             focus_trigger,
             focus_depth,
             strict,
+            strict_summary,
             ir,
             max_objects,
             max_recursion_depth,
@@ -385,6 +388,7 @@ fn main() -> Result<()> {
             focus_trigger,
             focus_depth,
             strict,
+            strict_summary,
             ir,
             max_objects,
             max_recursion_depth,
@@ -590,6 +594,7 @@ fn run_scan(
     focus_trigger: Option<String>,
     focus_depth: usize,
     strict: bool,
+    strict_summary: bool,
     ir: bool,
     max_objects: usize,
     max_recursion_depth: usize,
@@ -614,6 +619,9 @@ fn run_scan(
     if path.is_some() && pdf.is_some() {
         return Err(anyhow!("provide either a PDF path or --path, not both"));
     }
+    if strict_summary && !strict {
+        return Err(anyhow!("--strict-summary requires --strict"));
+    }
     let diff_parser = diff_parser || strict;
     if diff_parser && strict {
         eprintln!("security_boundary: enabling diff parser in strict mode");
@@ -633,6 +641,7 @@ fn run_scan(
         focus_depth,
         yara_scope: Some(yara_scope.to_string()),
         strict,
+        strict_summary,
         ir,
         ml_config: None,
     };
@@ -1134,6 +1143,9 @@ fn run_scan_batch(
     if export_intents {
         return Ok(());
     }
+    if jsonl_findings {
+        return Ok(());
+    }
     let avg_ms = if entries.is_empty() {
         0
     } else {
@@ -1166,6 +1178,7 @@ fn run_explain(pdf: &str, finding_id: &str) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     let opts = sis_pdf_core::scan::ScanOptions {
         strict: false,
+        strict_summary: false,
         ir: false,
         deep: true,
         max_decode_bytes: 32 * 1024 * 1024,
@@ -1247,6 +1260,7 @@ fn run_detect(
         max_objects,
         max_recursion_depth: 64,
         strict,
+        strict_summary: false,
         ir: false,
         fast: false,
         focus_trigger: None,
@@ -1365,6 +1379,7 @@ fn run_export_graph(pdf: &str, chains_only: bool, format: &str, outdir: &PathBuf
     fs::create_dir_all(outdir)?;
     let opts = sis_pdf_core::scan::ScanOptions {
         strict: false,
+        strict_summary: false,
         ir: false,
         deep: true,
         max_decode_bytes: 32 * 1024 * 1024,
@@ -1434,6 +1449,7 @@ fn run_export_org(pdf: &str, format: &str, out: &PathBuf, enhanced: bool) -> Res
             yara_scope: None,
             focus_depth: 5,
             strict: false,
+            strict_summary: false,
             ir: false,
             ml_config: None,
         };
@@ -1525,6 +1541,7 @@ fn run_export_ir(pdf: &str, format: &str, out: &PathBuf, enhanced: bool) -> Resu
             yara_scope: None,
             focus_depth: 5,
             strict: false,
+            strict_summary: false,
             ir: false,
             ml_config: None,
         };
@@ -1611,6 +1628,7 @@ fn run_report(
         yara_scope: None,
         focus_depth: 0,
         strict,
+        strict_summary: false,
         ir,
         ml_config: None,
     };
@@ -1731,6 +1749,7 @@ fn run_export_features(
         yara_scope: None,
         focus_depth: 0,
         strict,
+        strict_summary: false,
         ir: false,
         ml_config: None,
     };
@@ -2125,13 +2144,14 @@ fn run_mutate(pdf: &str, out: &std::path::Path, scan: bool) -> Result<()> {
         let detectors = sis_pdf_detectors::default_detectors();
         let opts = sis_pdf_core::scan::ScanOptions {
             strict: false,
+            strict_summary: false,
             ir: false,
             deep: true,
             max_decode_bytes: 32 * 1024 * 1024,
             max_total_decoded_bytes: 256 * 1024 * 1024,
             recover_xref: true,
             parallel: false,
-        batch_parallel: false,
+            batch_parallel: false,
             diff_parser: false,
             max_objects: 500_000,
             max_recursion_depth: 64,
