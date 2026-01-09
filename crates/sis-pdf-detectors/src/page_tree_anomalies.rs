@@ -57,6 +57,8 @@ impl Detector for PageTreeManipulationDetector {
                         remediation: Some("Inspect page tree structure for missing or hidden pages.".into()),
                         meta,
                         yara: None,
+        position: None,
+        positions: Vec::new(),
                     });
                 }
             }
@@ -96,6 +98,8 @@ impl Detector for PageTreeManipulationDetector {
                     remediation: Some("Inspect page tree references and catalog root.".into()),
                     meta,
                     yara: None,
+        position: None,
+        positions: Vec::new(),
                 });
             }
         }
@@ -125,6 +129,8 @@ fn fallback_pages_root<'a>(
         remediation: Some("Inspect catalog /Root and /Pages references for consistency.".into()),
         meta: Default::default(),
         yara: None,
+        position: None,
+        positions: Vec::new(),
     });
     Some(PdfObj {
         span: entry.body_span,
@@ -170,6 +176,8 @@ fn detect_cycles(
                 remediation: Some("Inspect /Kids references for cycles.".into()),
                 meta: Default::default(),
                 yara: None,
+        position: None,
+        positions: Vec::new(),
             });
             return;
         }

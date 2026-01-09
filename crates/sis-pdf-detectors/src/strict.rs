@@ -46,6 +46,8 @@ impl Detector for StrictParseDeviationDetector {
                 remediation: Some("Verify file type and parser tolerance.".into()),
                 meta: Default::default(),
                 yara: None,
+        position: None,
+        positions: Vec::new(),
             });
         }
         if let Some(off) = header_offset {
@@ -74,6 +76,8 @@ impl Detector for StrictParseDeviationDetector {
                     remediation: Some("Inspect for polyglot or header-tolerant evasion.".into()),
                     meta,
                     yara: None,
+        position: None,
+        positions: Vec::new(),
                 });
             }
         }
@@ -103,6 +107,8 @@ impl Detector for StrictParseDeviationDetector {
                 remediation: Some("Check for truncated or malformed file.".into()),
                 meta: Default::default(),
                 yara: None,
+        position: None,
+        positions: Vec::new(),
             });
         } else if let Some(off) = eof_offset {
             let distance = ctx.bytes.len().saturating_sub(off + 5);
@@ -132,6 +138,8 @@ impl Detector for StrictParseDeviationDetector {
                     remediation: Some("Inspect for incremental updates or trailing data.".into()),
                     meta,
                     yara: None,
+        position: None,
+        positions: Vec::new(),
                 });
             }
         }
@@ -160,6 +168,8 @@ impl Detector for StrictParseDeviationDetector {
                                 ),
                                 meta: Default::default(),
                                 yara: None,
+        position: None,
+        positions: Vec::new(),
                             });
                         }
                     }
@@ -188,6 +198,8 @@ impl Detector for StrictParseDeviationDetector {
                     remediation: Some("Treat as evasion attempt; inspect malformed structure.".into()),
                     meta: Default::default(),
                     yara: None,
+        position: None,
+        positions: Vec::new(),
                 });
             }
             let mut action_object = None;
@@ -219,6 +231,8 @@ impl Detector for StrictParseDeviationDetector {
                     remediation: Some("Validate with alternate parser and inspect action payloads.".into()),
                     meta: Default::default(),
                     yara: None,
+        position: None,
+        positions: Vec::new(),
                 });
             }
             if ctx.options.strict_summary {
@@ -259,6 +273,8 @@ impl Detector for StrictParseDeviationDetector {
                         remediation: Some("Inspect deviation kinds with the highest counts.".into()),
                         meta,
                         yara: None,
+        position: None,
+        positions: Vec::new(),
                     });
                 }
             } else {
@@ -280,6 +296,8 @@ impl Detector for StrictParseDeviationDetector {
                         remediation: Some("Inspect malformed tokens or truncated objects.".into()),
                         meta: Default::default(),
                         yara: None,
+        position: None,
+        positions: Vec::new(),
                     });
                 }
             }

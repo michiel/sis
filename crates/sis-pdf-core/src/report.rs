@@ -847,6 +847,263 @@ fn split_values(input: &str) -> Vec<String> {
         .collect()
 }
 
+fn build_position_preview_map(findings: &[Finding]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for f in findings {
+        let mut positions = Vec::new();
+        if let Some(position) = &f.position {
+            positions.push(position.clone());
+        }
+        positions.extend(f.positions.iter().cloned());
+        positions.sort();
+        positions.dedup();
+        for position in positions {
+            let preview = position_preview_for_finding(f, &position)
+                .or_else(|| select_position_preview(f))
+                .unwrap_or_else(|| f.title.clone());
+            if preview.trim().is_empty() {
+                continue;
+            }
+            out.entry(position).or_insert(preview);
+        }
+    }
+    out
+}
+
+fn position_preview_for_finding(f: &Finding, position: &str) -> Option<String> {
+    let (obj, gen) = parse_position_obj_ref(position)?;
+    let key = format!("position.preview.{}:{}", obj, gen);
+    f.meta.get(&key).cloned()
+}
+
+fn parse_position_obj_ref(position: &str) -> Option<(u32, u16)> {
+    let (_, obj_ref) = position.split_once('@')?;
+    let (obj, gen) = obj_ref.split_once(':')?;
+    let obj_id = obj.parse::<u32>().ok()?;
+    let gen_id = gen.parse::<u16>().ok()?;
+    Some((obj_id, gen_id))
+}
+
+fn select_position_preview(f: &Finding) -> Option<String> {
+    let keys = [
+        "position.preview",
+        "payload.decoded_preview",
+        "payload.deobfuscated_preview",
+        "payload.preview",
+        "embedded.decoded_preview",
+        "action.target",
+        "uri.url",
+        "js.behaviour_summary",
+    ];
+    for key in keys {
+        if let Some(value) = f.meta.get(key) {
+            if !value.trim().is_empty() {
+                return Some(value.clone());
+            }
+        }
+    }
+    None
+}
+
+fn render_aligned_preview_lines(entries: &[(String, String)], preview_len: usize) -> Vec<String> {
+    let width = entries
+        .iter()
+        .map(|(pos, _)| pos.len())
+        .max()
+        .unwrap_or(0);
+    entries
+        .iter()
+        .map(|(pos, preview)| {
+            let preview = sanitise_preview(preview, preview_len);
+            format!("{:<width$} | \"{}\"", pos, preview, width = width)
+        })
+        .collect()
+}
+
+fn render_position_tree(entries: &[(String, String)], preview_len: usize) -> Vec<String> {
+    let mut parsed = Vec::new();
+    for (position, preview) in entries {
+        if let Some(entry) = parse_canonical_position(position, preview) {
+            parsed.push(entry);
+        }
+    }
+    if parsed.is_empty() {
+        return Vec::new();
+    }
+    let unique_revisions: BTreeSet<String> =
+        parsed.iter().map(|entry| entry.revision.clone()).collect();
+    let include_revision = unique_revisions.len() > 1;
+    let mut root = PositionTreeNode::default();
+    for entry in parsed {
+        let mut segments = Vec::new();
+        if include_revision {
+            segments.push(entry.revision);
+        }
+        segments.extend(entry.path_segments);
+        root.insert(&segments, entry.obj_ref, entry.preview);
+    }
+    let mut lines = Vec::new();
+    root.render(0, &mut lines);
+    let width = lines.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    lines
+        .into_iter()
+        .map(|(label, preview)| {
+            let preview = sanitise_preview(&preview, preview_len);
+            format!("{:<width$} | \"{}\"", label, preview, width = width)
+        })
+        .collect()
+}
+
+fn sanitise_preview(preview: &str, max_len: usize) -> String {
+    let mut cleaned = String::with_capacity(preview.len());
+    for ch in preview.chars() {
+        if ch.is_ascii() {
+            if ch.is_ascii_control() {
+                cleaned.push(' ');
+            } else {
+                cleaned.push(ch);
+            }
+        } else {
+            cleaned.push('?');
+        }
+    }
+    let mut out = cleaned
+        .split_whitespace()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if max_len == 0 {
+        return String::new();
+    }
+    if out.len() > max_len {
+        if max_len > 3 {
+            out.truncate(max_len - 3);
+            out.push_str("...");
+        } else {
+            out.truncate(max_len);
+        }
+    }
+    out
+}
+
+struct ParsedPositionEntry {
+    revision: String,
+    path_segments: Vec<String>,
+    obj_ref: String,
+    preview: String,
+}
+
+fn parse_canonical_position(position: &str, preview: &str) -> Option<ParsedPositionEntry> {
+    let trimmed = position.trim();
+    let after_doc = trimmed.strip_prefix("doc:")?;
+    let (rev_and_path, obj_ref) = after_doc.split_once('@')?;
+    let mut parts = rev_and_path.splitn(2, '/');
+    let revision = parts.next()?.to_string();
+    let path = parts.next().unwrap_or("?").trim();
+    let path_segments = if path.is_empty() {
+        vec!["?".to_string()]
+    } else {
+        path.split('.').map(|s| s.to_string()).collect()
+    };
+    Some(ParsedPositionEntry {
+        revision,
+        path_segments,
+        obj_ref: obj_ref.to_string(),
+        preview: preview.to_string(),
+    })
+}
+
+#[derive(Default)]
+struct PositionTreeNode {
+    label: String,
+    obj_ref: Option<String>,
+    preview: Option<String>,
+    children: BTreeMap<String, PositionTreeNode>,
+}
+
+impl PositionTreeNode {
+    fn insert(&mut self, segments: &[String], obj_ref: String, preview: String) {
+        if segments.is_empty() {
+            return;
+        }
+        let mut node = self;
+        for segment in segments {
+            node = node
+                .children
+                .entry(segment.clone())
+                .or_insert_with(|| PositionTreeNode {
+                    label: segment.clone(),
+                    obj_ref: None,
+                    preview: None,
+                    children: BTreeMap::new(),
+                });
+        }
+        if node.obj_ref.is_none() {
+            node.obj_ref = Some(obj_ref);
+        }
+        if node.preview.is_none() {
+            node.preview = Some(preview);
+        }
+    }
+
+    fn render(&self, depth: usize, out: &mut Vec<(String, String)>) {
+        for child in self.children.values() {
+            let indent = "  ".repeat(depth);
+            let label = match &child.obj_ref {
+                Some(obj_ref) => format!("{}{}@{}", indent, child.label, obj_ref),
+                None => format!("{}{}@?", indent, child.label),
+            };
+            let preview = child
+                .preview
+                .clone()
+                .unwrap_or_else(|| segment_preview(&child.label));
+            out.push((label, preview));
+            child.render(depth + 1, out);
+        }
+    }
+}
+
+fn segment_preview(segment: &str) -> String {
+    let trimmed = segment.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.chars().any(|c| c.is_ascii_digit() || c == '[') {
+        return trimmed.to_string();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let mapped = match lower.as_str() {
+        "catalog" => "Catalog",
+        "pages" => "Pages",
+        "page" => "Page",
+        "kids" => "kids",
+        "annots" => "Annots",
+        "openaction" => "OpenAction",
+        "aa" => "AA",
+        "action" => "Action",
+        "js" => "JS",
+        "uri" => "URI",
+        "embedded" => "Embedded",
+        "filespec" => "FileSpec",
+        "objstm" => "ObjStm",
+        "stream" => "Stream",
+        "names" => "Names",
+        _ => trimmed,
+    };
+    if mapped == trimmed {
+        let mut chars = trimmed.chars();
+        let Some(first) = chars.next() else {
+            return String::new();
+        };
+        let mut out = String::new();
+        out.push(first.to_ascii_uppercase());
+        out.push_str(chars.as_str());
+        out
+    } else {
+        mapped.to_string()
+    }
+}
+
 fn render_chain_notes(chain: &ExploitChain) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = chain
         .notes
@@ -1899,6 +2156,7 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
 
     if !report.chains.is_empty() {
         let link_edges = build_link_edges(report);
+        let position_previews = build_position_preview_map(&report.findings);
         out.push_str("## Exploit Chain Reconstruction\n\n");
         for chain in &report.chains {
             out.push_str(&format!(
@@ -1910,6 +2168,28 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
                 "- Path: {}\n",
                 escape_markdown(&chain.path)
             ));
+            if !chain.nodes.is_empty() {
+                out.push_str("- Nodes:\n");
+                let mut entries = Vec::new();
+                for node in &chain.nodes {
+                    let preview = position_previews
+                        .get(node)
+                        .cloned()
+                        .unwrap_or_else(|| node.clone());
+                    entries.push((node.clone(), preview));
+                }
+                for line in render_aligned_preview_lines(&entries, 40) {
+                    out.push_str(&format!("  - {}\n", escape_markdown(&line)));
+                }
+                let tree_lines = render_position_tree(&entries, 40);
+                if !tree_lines.is_empty() {
+                    out.push_str("\n- Nodes tree:\n\n```\n");
+                    for line in tree_lines {
+                        out.push_str(&format!("{}\n", escape_control(&line)));
+                    }
+                    out.push_str("```\n");
+                }
+            }
             if let Some(trigger) = &chain.trigger {
                 out.push_str(&format!("- Trigger: `{}`\n", escape_markdown(trigger)));
             }
@@ -2103,6 +2383,18 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             out.push_str(&format!(
                 "- Objects: {}\n",
                 escape_markdown(&f.objects.join(", "))
+            ));
+        }
+        if let Some(position) = &f.position {
+            out.push_str(&format!(
+                "- Position: `{}`\n",
+                escape_markdown(position)
+            ));
+        }
+        if f.positions.len() > 1 {
+            out.push_str(&format!(
+                "- Positions: {}\n",
+                escape_markdown(&f.positions.join(", "))
             ));
         }
         if let Some(page) = f.meta.get("page.number") {

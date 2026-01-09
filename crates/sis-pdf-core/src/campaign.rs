@@ -312,7 +312,6 @@ fn is_suspicious_tld(tld: &str) -> bool {
             | "charat"
             | "tostring"
             | "getannots"
-            | "getannots"
             | "push"
             | "pop"
             | "shift"

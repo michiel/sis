@@ -67,6 +67,8 @@ impl Detector for JavaScriptSandboxDetector {
                         remediation: Some("Inspect the JS payload size and consider manual analysis.".into()),
                         meta,
                         yara: None,
+        position: None,
+        positions: Vec::new(),
                     });
                 }
                 DynamicOutcome::TimedOut { timeout_ms } => {
@@ -87,6 +89,8 @@ impl Detector for JavaScriptSandboxDetector {
                         remediation: Some("Inspect the JS payload for long-running loops.".into()),
                         meta,
                         yara: None,
+        position: None,
+        positions: Vec::new(),
                     });
                 }
                 DynamicOutcome::Executed(signals) => {
@@ -123,6 +127,8 @@ impl Detector for JavaScriptSandboxDetector {
                             remediation: Some("Review JS payload and runtime errors.".into()),
                             meta,
                             yara: None,
+        position: None,
+        positions: Vec::new(),
                         });
                         continue;
                     }
@@ -169,6 +175,8 @@ impl Detector for JavaScriptSandboxDetector {
                             remediation: Some("Inspect runtime JS calls and network targets.".into()),
                             meta,
                             yara: None,
+        position: None,
+        positions: Vec::new(),
                         });
                     }
                     if has_file {
@@ -187,6 +195,8 @@ impl Detector for JavaScriptSandboxDetector {
                             remediation: Some("Review runtime JS calls for file or export operations.".into()),
                             meta,
                             yara: None,
+        position: None,
+        positions: Vec::new(),
                         });
                     }
                     if !has_network && !has_file {
@@ -205,6 +215,8 @@ impl Detector for JavaScriptSandboxDetector {
                             remediation: Some("Review runtime JS calls for additional behavior.".into()),
                             meta,
                             yara: None,
+        position: None,
+        positions: Vec::new(),
                         });
                     }
                 }

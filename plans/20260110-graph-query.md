@@ -47,14 +47,14 @@ Define a shared path vocabulary so findings, chains, and graph exports align:
 
 ### 4) Chain representation
 
-Chains should reference the canonical positions of their nodes:
+Chains should reference the canonical positions of their nodes. In extended (default human‑readable) mode, show a 40‑character sanitised content preview aligned beyond the longest node line:
 
 ```
 chain:<id>
   nodes:
-    - doc:r0/catalog.openaction@5:0
-    - doc:r0/action.js@12:0
-    - doc:r0/stream@42:0
+    - doc:r0/catalog.openaction@5:0          | "OpenAction -> JavaScript action..."
+    - doc:r0/action.js@12:0                  | "app.doc.submitForm('http://...')"
+    - doc:r0/stream@42:0                     | "if (typeof(ADBE.Reader_Value_..."
   edges:
     - openaction -> action
     - action -> js
@@ -68,21 +68,22 @@ Rules:
 
 ### 5) Tree view presentation
 
-Provide a consistent tree view rendering for IR/ORG nodes:
+Provide a consistent tree view rendering for IR/ORG nodes. In extended (default human‑readable) mode, append a 40‑character sanitised preview aligned beyond the longest tree line:
 
 ```
-catalog@1:0
-  pages@2:0
-    kids[0]@4:0
-      annots[1]@9:0
-        a@10:0
-          js@12:0
+catalog@1:0                             | "Catalog"
+  pages@2:0                             | "Page tree"
+    kids[0]@4:0                         | "Page 1"
+      annots[1]@9:0                     | "Annot: /Link"
+        a@10:0                          | "Action"
+          js@12:0                       | "if (typeof(ADBE.Reader_Value_..."
 ```
 
 Rules:
 - Nodes show key name and object ref.
 - Arrays show index with the owning key.
 - Tree view must be reproducible between CLI and query console.
+- Extended mode is the default for human‑readable reports; plain mode omits previews.
 
 ### 6) Report integration
 

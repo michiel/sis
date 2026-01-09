@@ -281,6 +281,8 @@ mod tests {
             remediation: None,
             meta: Default::default(),
             yara: None,
+        position: None,
+        positions: Vec::new(),
         }]);
 
         let report2 = empty_report(vec![Finding {
@@ -296,6 +298,8 @@ mod tests {
             remediation: None,
             meta: Default::default(),
             yara: None,
+        position: None,
+        positions: Vec::new(),
         }]);
 
         let scans = vec![
