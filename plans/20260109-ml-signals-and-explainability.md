@@ -1,9 +1,9 @@
 # ML Signals and Explainability - Integrated Implementation Plan
 
 **Date**: 2026-01-09
-**Status**: 🚧 In Progress - Phase 1
+**Status**: ✅ Phase 1 Complete, ✅ Phase 5 Complete - Ready for Phase 6
 **Prerequisite**: ✅ Graph integration (all 7 sprints complete)
-**Last Updated**: 2026-01-09
+**Last Updated**: 2026-01-09 (Phase 5 completion)
 
 ---
 
@@ -61,7 +61,7 @@ This plan merges two complementary initiatives:
 
 ## Implementation Progress
 
-### Phase 1: Extended Feature Vector with Attribution (3 weeks) - 🚧 In Progress
+### Phase 1: Extended Feature Vector with Attribution (3 weeks) - ✅ COMPLETE
 
 #### ✅ Completed (Phase 1.1)
 - **Commit**: `9cb0e72` - feat(ml): Phase 1.1 - Add explainability and extended features (320)
@@ -148,10 +148,104 @@ This plan merges two complementary initiatives:
   - 20 structural + 10 crypto + 15 embedded
 - All 27 tests passing ✅
 
-#### ⏳ Pending
-- Phase 1.4-1.5, 1.7: Documentation, integration examples
+#### ✅ Completed (Phase 1.4-1.7)
+- Documentation and integration completed as part of Phase 5 implementation
+- See `docs/training-pipeline.md` for comprehensive ML training documentation
+- See `USAGE.md` for CLI usage examples
 
-### Phase 2-6: Not Started
+---
+
+### Phase 5: ML Training Pipeline Integration (2 weeks) - ✅ COMPLETE
+
+**Commit**: `b362842` - feat: Phase 5 ML Training Pipeline Integration
+
+#### ✅ Implemented
+
+**CLI Changes (Enhanced/Extended as Default)**:
+- **export-org**: Now includes suspicious paths and attack pattern classification by default
+  - `--basic` flag added for simple graph-only export
+  - Enhanced mode includes TypedGraph classifications and PathFinder analysis
+- **export-ir**: Now includes findings, risk scores, and explanations by default
+  - `--basic` flag added for raw IR without annotations
+  - Enhanced mode includes per-object risk scores and natural language explanations
+- **export-features**: Now exports 333-feature extended vector by default
+  - `--basic` flag added for legacy 35-feature vector
+  - Extended features integrate all detector findings and metadata
+- **compute-baseline**: New command for benign baseline computation
+  - Computes means, stddevs, percentiles [P10, P25, P50, P75, P90, P95, P99]
+  - Supports both 35 and 333 feature vectors
+  - Output format: JSON with feature statistics
+
+**Python Scripts (3 new scripts)**:
+1. **scripts/calibrate.py** - Model calibration
+   - Platt scaling (logistic regression on predictions)
+   - Isotonic regression (non-parametric monotonic mapping)
+   - Calibration metrics: log loss, Brier score, ECE
+   - Supports both methods with --method platt/isotonic/both
+
+2. **scripts/apply_calibration.py** - Calibration application
+   - Applies trained calibration to raw predictions
+   - Transforms raw scores to calibrated probabilities
+   - Handles both Platt and isotonic calibration models
+
+3. **scripts/training_pipeline.py** - Complete ML training pipeline
+   - Automated feature extraction from benign/malicious corpora
+   - Baseline computation
+   - Model training (LogisticRegression with balanced class weights)
+   - Calibration fitting
+   - Evaluation with standard metrics (accuracy, precision, recall, F1, ROC AUC)
+
+**Documentation**:
+- **docs/training-pipeline.md** (500+ lines)
+  - Complete ML training pipeline documentation
+  - Stage 1: Feature Extraction (extended 333 features)
+  - Stage 2: Baseline Computation
+  - Stage 3: Model Training (logistic regression)
+  - Stage 4: Calibration Fitting (Platt/isotonic)
+  - Stage 5: Model Evaluation (metrics and calibration analysis)
+  - Stage 6: Deployment options
+  - Includes troubleshooting, model update procedures, A/B testing
+  - Examples for all pipeline stages
+
+- **USAGE.md** updates
+  - Section 12c: Updated ORG export documentation (enhanced by default)
+  - Section 12d: Updated IR export documentation (enhanced by default)
+  - Section 13: Updated feature export (333 features by default)
+  - Section 13b: New ML Training Pipeline section
+    - compute-baseline command usage
+    - Training pipeline script usage
+    - Model calibration workflow
+    - Calibration methods comparison
+
+#### Implementation Fixes
+- **ScanOptions cloning**: Added `.clone()` for `opts` usage in `run_export_org` to avoid move issues
+  - ScanOptions contains non-Copy types (String, PathBuf in MlConfig)
+  - Clone used instead of deriving Copy
+
+#### Files Modified/Created
+- Modified:
+  - `crates/sis-pdf/src/main.rs` - CLI commands updated for enhanced defaults
+  - `USAGE.md` - Documentation for new commands and defaults
+
+- Created:
+  - `scripts/calibrate.py` - Calibration model fitting
+  - `scripts/apply_calibration.py` - Calibration application
+  - `scripts/training_pipeline.py` - Complete training pipeline
+  - `docs/training-pipeline.md` - Comprehensive ML training guide
+
+---
+
+### Phase 2-4: Not Started
+- Phase 2: Enhanced IR with Semantic Annotations
+- Phase 3: Enhanced ORG with Graph Paths
+- Phase 4: Document-Level Risk Profile with Calibration
+
+### Phase 6: Next Phase
+- Phase 6: Inference Integration with Comprehensive Explanations
+  - Integrate trained models into CLI and reporting
+  - Use extended features during inference
+  - Generate comprehensive explanations
+  - Wire up calibration models
 
 ---
 
@@ -2163,26 +2257,30 @@ def validate_explanation_faithfulness(model, X, explanations):
 ## Implementation Checklist
 
 ### Code
-- [ ] Phase 1: Extended features + attribution + summaries + evidence (3 weeks)
+- [x] Phase 1: Extended features + attribution + summaries + evidence (3 weeks) ✅
 - [ ] Phase 2: Enhanced IR with semantic annotations (2 weeks)
 - [ ] Phase 3: Enhanced ORG with graph paths (2 weeks)
 - [ ] Phase 4: Risk profiles + calibration + comparative (2 weeks)
-- [ ] Phase 5: Training pipeline integration (2 weeks)
-- [ ] Phase 6: Inference integration (2 weeks)
+- [x] Phase 5: Training pipeline integration (2 weeks) ✅
+- [ ] Phase 6: Inference integration (2 weeks) - **NEXT**
 - [ ] Phase 7 (Optional): Advanced explainability (2 weeks)
 
 **Total**: 13-15 weeks
+**Completed**: 5 weeks (Phase 1 + Phase 5)
+**Remaining**: 8-10 weeks (Phases 2-4, 6-7)
 
 ### Documentation
 - [ ] Update `docs/modeling.md` with extended features and explainability
-- [ ] Document all 320 features with descriptions
+- [x] Document all 333 features with descriptions (in features_extended.rs) ✅
 - [ ] Create explainability guide for analysts
-- [ ] Add training pipeline documentation
+- [x] Add training pipeline documentation (docs/training-pipeline.md) ✅
+- [x] Create usage examples (USAGE.md section 13b) ✅
 - [ ] Create example notebooks
 
 ### Training Infrastructure
-- [ ] Baseline computation scripts
-- [ ] Calibration model training scripts
+- [x] Baseline computation scripts (sis compute-baseline command) ✅
+- [x] Calibration model training scripts (scripts/calibrate.py) ✅
+- [x] Complete training pipeline (scripts/training_pipeline.py) ✅
 - [ ] Attribution validation scripts
 - [ ] Performance benchmarking suite
 
@@ -2250,4 +2348,47 @@ This integrated plan combines ML signal enhancement (35→320 features, enhanced
 
 The phased approach allows for gradual rollout while maintaining backward compatibility. By building explainability into each phase from the start, we ensure ML predictions are operationally useful, not just accurate.
 
-**Next Steps**: Begin Phase 1 implementation (Extended Features + Attribution + Summaries + Evidence).
+---
+
+## Current Status and Progress (2026-01-09)
+
+### ✅ Completed Work
+
+**Phase 1 Complete** (Commits: 9cb0e72, 3e8874a, 66cfc22, 0080520):
+- Extended feature vector: 333 features (35 legacy + 298 new)
+- Feature extraction from detector findings and metadata
+- Feature attribution (permutation importance)
+- Natural language explanation generation
+- Evidence chain linking (features → findings → byte offsets)
+- Comparative analysis vs. benign baseline
+- Comprehensive test suite (27 tests)
+
+**Phase 5 Complete** (Commit: b362842):
+- CLI commands default to enhanced/extended modes (--basic for legacy)
+- `compute-baseline` command for benign baseline computation
+- Python calibration scripts (Platt scaling, isotonic regression)
+- Complete training pipeline script
+- Comprehensive documentation (docs/training-pipeline.md, USAGE.md updates)
+
+**Progress Review Fixes** (See plans/20260109-ml-signals-and-explainability-progress-review.md):
+1. ✅ Feature count documentation corrected (321 → 333)
+2. ✅ Evidence chain linking bug fixed (suffix stripping)
+3. ✅ URI metadata alignment (keys match detector output)
+4. ✅ Supply chain extraction tightened (avoid false positives)
+5. ✅ URI aggregation filter fixed (only URI-related findings)
+
+### 🎯 Next Steps
+
+**Phase 6: Inference Integration** (2 weeks)
+- Integrate trained models into CLI (--ml flag)
+- Use extended features during inference
+- Generate comprehensive explanations
+- Wire up calibration models
+- Add ML explanation section to reports
+
+**Phases 2-4: Future Work** (6-8 weeks)
+- Phase 2: Enhanced IR with semantic annotations
+- Phase 3: Enhanced ORG with graph paths
+- Phase 4: Document-level risk profiles with calibration
+
+**Note**: Phases 2-4 can be implemented in parallel with or after Phase 6, as they are largely independent. Phase 6 provides immediate value by enabling ML inference with the already-completed extended features and training pipeline.
