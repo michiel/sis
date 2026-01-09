@@ -19,7 +19,7 @@ pub enum AttackSurface {
     ContentPhishing,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Severity {
     Info,
     Low,
@@ -28,7 +28,7 @@ pub enum Severity {
     Critical,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Confidence {
     Heuristic,
     Probable,

@@ -44,6 +44,12 @@ pub struct Report {
     #[serde(default)]
     pub ml_summary: Option<MlSummary>,
     #[serde(default)]
+    pub ml_inference: Option<crate::ml_inference::MlInferenceResult>,
+    #[serde(default)]
+    pub temporal_signals: Option<TemporalSignalSummary>,
+    #[serde(default)]
+    pub temporal_snapshots: Option<Vec<crate::explainability::TemporalSnapshot>>,
+    #[serde(default)]
     pub sandbox_summary: Option<SandboxSummary>,
 }
 
@@ -109,6 +115,9 @@ impl Report {
             response_rules,
             structural_summary,
             ml_summary,
+            ml_inference: None,
+            temporal_signals: None,
+            temporal_snapshots: None,
             sandbox_summary: None,
         }
     }
@@ -120,6 +129,30 @@ impl Report {
 
     pub fn with_sandbox_summary(mut self, summary: SandboxSummary) -> Self {
         self.sandbox_summary = Some(summary);
+        self
+    }
+
+    pub fn with_ml_inference(
+        mut self,
+        ml_inference: Option<crate::ml_inference::MlInferenceResult>,
+    ) -> Self {
+        self.ml_inference = ml_inference;
+        self
+    }
+
+    pub fn with_temporal_signals(
+        mut self,
+        temporal_signals: Option<TemporalSignalSummary>,
+    ) -> Self {
+        self.temporal_signals = temporal_signals;
+        self
+    }
+
+    pub fn with_temporal_snapshots(
+        mut self,
+        temporal_snapshots: Option<Vec<crate::explainability::TemporalSnapshot>>,
+    ) -> Self {
+        self.temporal_snapshots = temporal_snapshots;
         self
     }
 }
@@ -158,6 +191,16 @@ pub struct MlSummary {
     pub mode: Option<String>,
     pub graph: Option<MlRunSummary>,
     pub traditional: Option<MlRunSummary>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TemporalSignalSummary {
+    pub revisions: usize,
+    pub new_high_severity: usize,
+    pub new_attack_surfaces: Vec<String>,
+    pub removed_findings: Vec<String>,
+    pub new_findings: Vec<String>,
+    pub structural_deltas: Vec<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -349,6 +392,57 @@ pub fn print_human(report: &Report) {
             println!("    Status: error (see ml_model_error findings)");
         }
     }
+    if let Some(ml) = &report.ml_inference {
+        println!();
+        println!("ML inference");
+        println!(
+            "  Score: {:.4} threshold {:.4} label {} ({})",
+            ml.prediction.calibrated_score,
+            ml.prediction.threshold,
+            ml.prediction.label,
+            ml_assessment(ml.prediction.label)
+        );
+        println!(
+            "  Raw: {:.4} calibration: {}",
+            ml.prediction.raw_score,
+            ml.prediction.calibration_method
+        );
+        if let Some((low, high)) = ml.prediction.confidence_interval {
+            println!(
+                "  Confidence interval (95%): {:.4}-{:.4}",
+                low, high
+            );
+        }
+        if let Some(explanation) = &ml.explanation {
+            println!("  Summary: {}", escape_control(&explanation.summary));
+            if !explanation.decision_factors.is_empty() {
+                println!("  Decision factors:");
+                for factor in explanation.decision_factors.iter().take(5) {
+                    println!("    - {}", escape_control(factor));
+                }
+            }
+        }
+    }
+    if let Some(signals) = &report.temporal_signals {
+        println!();
+        println!("Temporal signals");
+        println!("  Revisions: {}", signals.revisions);
+        if signals.new_high_severity > 0 {
+            println!("  New high-severity findings: {}", signals.new_high_severity);
+        }
+        if !signals.new_attack_surfaces.is_empty() {
+            println!(
+                "  New attack surfaces: {}",
+                signals.new_attack_surfaces.join(", ")
+            );
+        }
+        if !signals.new_findings.is_empty() {
+            println!("  New findings: {}", signals.new_findings.len());
+        }
+        if !signals.removed_findings.is_empty() {
+            println!("  Removed findings: {}", signals.removed_findings.len());
+        }
+    }
     if let Some(resource) = resource_risk_summary(&report.findings) {
         println!();
         println!("Resource risks");
@@ -395,6 +489,30 @@ pub fn print_human(report: &Report) {
 pub fn print_jsonl(report: &Report) -> Result<()> {
     for f in &report.findings {
         println!("{}", serde_json::to_string(f)?);
+    }
+    if let Some(ml) = &report.ml_inference {
+        let record = serde_json::json!({
+            "type": "ml_inference",
+            "prediction": ml.prediction,
+            "explanation": ml.explanation,
+        });
+        println!("{}", serde_json::to_string(&record)?);
+    }
+    if let Some(signals) = &report.temporal_signals {
+        let record = serde_json::json!({
+            "type": "temporal_signal_summary",
+            "summary": signals,
+        });
+        println!("{}", serde_json::to_string(&record)?);
+    }
+    if let Some(snapshots) = &report.temporal_snapshots {
+        for snapshot in snapshots {
+            let record = serde_json::json!({
+                "type": "ml_temporal_snapshot",
+                "snapshot": snapshot,
+            });
+            println!("{}", serde_json::to_string(&record)?);
+        }
     }
     Ok(())
 }
@@ -1508,6 +1626,55 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         }
     }
 
+    if let Some(ml) = &report.ml_inference {
+        out.push_str(&format_ml_explanation_for_report(
+            ml.explanation.as_ref(),
+            &ml.prediction,
+        ));
+    }
+
+    if let Some(signals) = &report.temporal_signals {
+        out.push_str("## Temporal signals\n\n");
+        out.push_str(&format!(
+            "- Revisions: {}\n",
+            signals.revisions
+        ));
+        if signals.new_high_severity > 0 {
+            out.push_str(&format!(
+                "- New high-severity findings: {}\n",
+                signals.new_high_severity
+            ));
+        }
+        if !signals.new_attack_surfaces.is_empty() {
+            out.push_str(&format!(
+                "- New attack surfaces: {}\n",
+                escape_markdown(&signals.new_attack_surfaces.join(", "))
+            ));
+        }
+        if !signals.structural_deltas.is_empty() {
+            out.push_str("- Structural deltas:\n");
+            for delta in signals.structural_deltas.iter().take(5) {
+                out.push_str(&format!(
+                    "  - {}\n",
+                    escape_markdown(delta)
+                ));
+            }
+        }
+        if !signals.new_findings.is_empty() {
+            out.push_str(&format!(
+                "- New findings: {}\n",
+                signals.new_findings.len()
+            ));
+        }
+        if !signals.removed_findings.is_empty() {
+            out.push_str(&format!(
+                "- Removed findings: {}\n",
+                signals.removed_findings.len()
+            ));
+        }
+        out.push('\n');
+    }
+
     if let Some(resource) = resource_risk_summary(&report.findings) {
         out.push_str("## Resource Risks\n\n");
         out.push_str(&format!(
@@ -2029,6 +2196,154 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         }
     }
     out
+}
+
+fn format_ml_explanation_for_report(
+    explanation: Option<&crate::ml_inference::ComprehensiveExplanation>,
+    prediction: &crate::ml_inference::CalibratedPrediction,
+) -> String {
+    let mut report = String::new();
+    report.push_str("## ML Inference\n\n");
+    report.push_str(&format!(
+        "- Score: {:.4}\n- Threshold: {:.4}\n- Label: {} ({})\n- Calibration: `{}`\n",
+        prediction.calibrated_score,
+        prediction.threshold,
+        prediction.label,
+        ml_assessment(prediction.label),
+        escape_markdown(&prediction.calibration_method)
+    ));
+    if let Some((low, high)) = prediction.confidence_interval {
+        report.push_str(&format!(
+            "- Confidence interval (95%): {:.4}-{:.4}\n",
+            low, high
+        ));
+    }
+    report.push('\n');
+
+    let Some(explanation) = explanation else {
+        return report;
+    };
+
+    report.push_str("### Summary\n\n");
+    report.push_str(&format!(
+        "{}\n\n",
+        escape_markdown(&explanation.summary)
+    ));
+
+    if !explanation.decision_factors.is_empty() {
+        report.push_str("### Decision factors\n\n");
+        for factor in explanation.decision_factors.iter().take(10) {
+            report.push_str(&format!(
+                "- {}\n",
+                escape_markdown(factor)
+            ));
+        }
+        report.push('\n');
+    }
+
+    if !explanation.feature_attribution.is_empty() {
+        report.push_str("### Top contributing features\n\n");
+        report.push_str("| Feature | Value | Contribution | Baseline |\n");
+        report.push_str("| --- | --- | --- | --- |\n");
+        for attr in explanation.feature_attribution.iter().take(10) {
+            report.push_str(&format!(
+                "| {} | {:.2} | {:+.2} | {:.2} |\n",
+                escape_markdown(&crate::explainability::humanize_feature_name(&attr.feature_name)),
+                attr.value,
+                attr.contribution,
+                attr.baseline
+            ));
+        }
+        report.push('\n');
+    }
+
+    if !explanation.comparative_analysis.is_empty() {
+        report.push_str("### Comparison with benign baseline\n\n");
+        for comp in explanation.comparative_analysis.iter().take(5) {
+            report.push_str(&format!(
+                "- **{}**: {:.2} (benign mean {:.2}, z-score {:.1}) — {}\n",
+                escape_markdown(&crate::explainability::humanize_feature_name(&comp.feature_name)),
+                comp.value,
+                comp.benign_mean,
+                comp.z_score,
+                escape_markdown(&comp.interpretation)
+            ));
+        }
+        report.push('\n');
+    }
+
+    if !explanation.evidence_chains.is_empty() {
+        report.push_str("### Evidence chains\n\n");
+        for chain in explanation.evidence_chains.iter().take(5) {
+            report.push_str(&format!(
+                "- **{}** -> findings [{}] (spans {})\n",
+                escape_markdown(&crate::explainability::humanize_feature_name(&chain.feature_name)),
+                escape_markdown(&chain.derived_from_findings.join(", ")),
+                chain.evidence_spans.len()
+            ));
+        }
+        report.push('\n');
+    }
+
+    if let Some(counterfactual) = &explanation.counterfactual {
+        report.push_str("### Counterfactual changes\n\n");
+        report.push_str(&format!(
+            "- Target score: {:.2}\n- Achieved score: {:.2}\n",
+            counterfactual.target_score,
+            counterfactual.achieved_score
+        ));
+        if counterfactual.changes.is_empty() {
+            report.push_str("- No changes suggested\n");
+        } else {
+            for change in counterfactual.changes.iter().take(6) {
+                report.push_str(&format!(
+                    "- {}: {:.2} -> {:.2} (delta {:+.2})\n",
+                    escape_markdown(&crate::explainability::humanize_feature_name(&change.feature_name)),
+                    change.from_value,
+                    change.to_value,
+                    change.delta
+                ));
+            }
+        }
+        if !counterfactual.notes.is_empty() {
+            for note in counterfactual.notes.iter().take(3) {
+                report.push_str(&format!("- Note: {}\n", escape_markdown(note)));
+            }
+        }
+        report.push('\n');
+    }
+
+    if !explanation.feature_interactions.is_empty() {
+        report.push_str("### Feature interactions\n\n");
+        for interaction in explanation.feature_interactions.iter().take(5) {
+            report.push_str(&format!(
+                "- {} (score {:.2})\n",
+                escape_markdown(&interaction.summary),
+                interaction.interaction_score
+            ));
+        }
+        report.push('\n');
+    }
+
+    if let Some(temporal) = &explanation.temporal_analysis {
+        report.push_str("### Temporal analysis\n\n");
+        report.push_str(&format!(
+            "- Trend: {}\n- Score delta: {:.2}\n",
+            escape_markdown(&temporal.trend),
+            temporal.score_delta
+        ));
+        if !temporal.notable_changes.is_empty() {
+            for change in temporal.notable_changes.iter().take(5) {
+                report.push_str(&format!(
+                    "- {}\n",
+                    escape_markdown(change)
+                ));
+            }
+        }
+        report.push('\n');
+    }
+
+    report
 }
 
 pub fn render_batch_markdown(report: &BatchReport) -> String {

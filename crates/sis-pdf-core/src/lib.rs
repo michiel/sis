@@ -1,6 +1,10 @@
 pub mod detect;
 pub mod features;
+pub mod features_extended;
+pub mod explainability;
+pub mod temporal;
 pub mod ml;
+pub mod ml_inference;
 pub mod ml_models;
 pub mod behavior;
 pub mod supply_chain;
@@ -29,6 +33,7 @@ pub mod org;
 pub mod ir_pipeline;
 pub mod org_export;
 pub mod ir_export;
+pub mod ir_enhanced;
 pub mod intent;
 pub mod page_tree;
 pub mod cache;

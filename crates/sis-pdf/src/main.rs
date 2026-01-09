@@ -93,6 +93,20 @@ enum Command {
         ml_threshold: f32,
         #[arg(long, default_value = "traditional", value_parser = ["traditional", "graph"])]
         ml_mode: String,
+        #[arg(long, help = "Use extended 333-feature vector for ML (default with --ml)")]
+        ml_extended_features: bool,
+        #[arg(long, help = "Generate comprehensive ML explanation")]
+        ml_explain: bool,
+        #[arg(long, help = "Include advanced ML explainability (counterfactuals and interactions)")]
+        ml_advanced: bool,
+        #[arg(long, help = "Compute ML temporal analysis across incremental updates")]
+        ml_temporal: bool,
+        #[arg(long, help = "Compute non-ML temporal signals across incremental updates")]
+        temporal_signals: bool,
+        #[arg(long, help = "Path to benign baseline JSON for explanations")]
+        ml_baseline: Option<PathBuf>,
+        #[arg(long, help = "Path to calibration model JSON")]
+        ml_calibration: Option<PathBuf>,
         #[arg(long)]
         no_js_ast: bool,
         #[arg(long)]
@@ -171,6 +185,20 @@ enum Command {
         ml_threshold: f32,
         #[arg(long, default_value = "traditional", value_parser = ["traditional", "graph"])]
         ml_mode: String,
+        #[arg(long, help = "Use extended 333-feature vector for ML (default with --ml)")]
+        ml_extended_features: bool,
+        #[arg(long, help = "Generate comprehensive ML explanation")]
+        ml_explain: bool,
+        #[arg(long, help = "Include advanced ML explainability (counterfactuals and interactions)")]
+        ml_advanced: bool,
+        #[arg(long, help = "Compute ML temporal analysis across incremental updates")]
+        ml_temporal: bool,
+        #[arg(long, help = "Compute non-ML temporal signals across incremental updates")]
+        temporal_signals: bool,
+        #[arg(long, help = "Path to benign baseline JSON for explanations")]
+        ml_baseline: Option<PathBuf>,
+        #[arg(long, help = "Path to calibration model JSON")]
+        ml_calibration: Option<PathBuf>,
         #[arg(long)]
         no_js_ast: bool,
         #[arg(long)]
@@ -186,23 +214,27 @@ enum Command {
         #[arg(short, long)]
         out: PathBuf,
     },
-    #[command(about = "Export object reference graph as DOT or JSON")]
+    #[command(about = "Export object reference graph with suspicious paths (DOT or JSON)")]
     ExportOrg {
         pdf: String,
         #[arg(long, default_value = "dot", value_parser = ["dot", "json"])]
         format: String,
         #[arg(short, long)]
         out: PathBuf,
+        #[arg(long, help = "Export basic graph only (no enhancements, paths, or classifications)")]
+        basic: bool,
     },
-    #[command(about = "Export PDFObj IR as text or JSON")]
+    #[command(about = "Export enhanced IR with findings and risk scores (text or JSON)")]
     ExportIr {
         pdf: String,
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         format: String,
         #[arg(short, long)]
         out: PathBuf,
+        #[arg(long, help = "Export basic IR only (no findings or risk analysis)")]
+        basic: bool,
     },
-    #[command(about = "Export feature vectors for ML pipelines")]
+    #[command(about = "Export extended 333-feature vectors for ML pipelines")]
     ExportFeatures {
         #[arg(value_name = "PDF", required_unless_present = "path")]
         pdf: Option<String>,
@@ -226,6 +258,15 @@ enum Command {
         format: String,
         #[arg(short, long)]
         out: Option<PathBuf>,
+        #[arg(long, help = "Export basic 35-feature vector only (legacy format)")]
+        basic: bool,
+    },
+    #[command(about = "Compute benign baseline from feature vectors")]
+    ComputeBaseline {
+        #[arg(long, help = "Path to JSONL file with benign feature vectors")]
+        input: PathBuf,
+        #[arg(short, long, help = "Output baseline JSON file")]
+        out: PathBuf,
     },
     #[command(about = "Analyze a PDF stream in chunks and stop on indicators")]
     StreamAnalyze {
@@ -303,6 +344,13 @@ fn main() -> Result<()> {
             ml_model_dir,
             ml_threshold,
             ml_mode,
+            ml_extended_features,
+            ml_explain,
+            ml_advanced,
+            ml_temporal,
+            temporal_signals,
+            ml_baseline,
+            ml_calibration,
             no_js_ast,
             no_js_sandbox,
         } => run_scan(
@@ -338,6 +386,13 @@ fn main() -> Result<()> {
             ml_model_dir.as_deref(),
             ml_threshold,
             &ml_mode,
+            ml_extended_features,
+            ml_explain,
+            ml_advanced,
+            ml_temporal,
+            temporal_signals,
+            ml_baseline.as_deref(),
+            ml_calibration.as_deref(),
             !no_js_ast,
             !no_js_sandbox,
         ),
@@ -391,6 +446,13 @@ fn main() -> Result<()> {
             ml_model_dir,
             ml_threshold,
             ml_mode,
+            ml_extended_features,
+            ml_explain,
+            ml_advanced,
+            ml_temporal,
+            temporal_signals,
+            ml_baseline,
+            ml_calibration,
             no_js_ast,
             no_js_sandbox,
         } => run_report(
@@ -409,6 +471,13 @@ fn main() -> Result<()> {
             ml_model_dir.as_deref(),
             ml_threshold,
             &ml_mode,
+            ml_extended_features,
+            ml_explain,
+            ml_advanced,
+            ml_temporal,
+            temporal_signals,
+            ml_baseline.as_deref(),
+            ml_calibration.as_deref(),
             !no_js_ast,
             !no_js_sandbox,
         ),
@@ -418,8 +487,8 @@ fn main() -> Result<()> {
             format,
             out,
         } => run_export_graph(&pdf, chains_only, &format, &out),
-        Command::ExportOrg { pdf, format, out } => run_export_org(&pdf, &format, &out),
-        Command::ExportIr { pdf, format, out } => run_export_ir(&pdf, &format, &out),
+        Command::ExportOrg { pdf, format, out, basic } => run_export_org(&pdf, &format, &out, !basic),
+        Command::ExportIr { pdf, format, out, basic } => run_export_ir(&pdf, &format, &out, !basic),
         Command::ExportFeatures {
             pdf,
             path,
@@ -432,6 +501,7 @@ fn main() -> Result<()> {
             label,
             format,
             out,
+            basic,
         } => run_export_features(
             pdf.as_deref(),
             path.as_deref(),
@@ -444,7 +514,11 @@ fn main() -> Result<()> {
             label.as_deref(),
             &format,
             out.as_deref(),
+            !basic,
         ),
+        Command::ComputeBaseline { input, out } => {
+            run_compute_baseline(&input, &out)
+        }
         Command::StreamAnalyze {
             pdf,
             chunk_size,
@@ -513,6 +587,13 @@ fn run_scan(
     ml_model_dir: Option<&std::path::Path>,
     ml_threshold: f32,
     ml_mode: &str,
+    ml_extended_features: bool,
+    ml_explain: bool,
+    ml_advanced: bool,
+    ml_temporal: bool,
+    temporal_signals: bool,
+    ml_baseline: Option<&std::path::Path>,
+    ml_calibration: Option<&std::path::Path>,
     js_ast: bool,
     js_sandbox: bool,
 ) -> Result<()> {
@@ -566,7 +647,17 @@ fn run_scan(
             js_sandbox,
         },
     );
+    let ml_inference_requested = ml_extended_features
+        || ml_explain
+        || ml_advanced
+        || ml_temporal
+        || ml_baseline.is_some()
+        || ml_calibration.is_some();
+    let temporal_requested = temporal_signals || ml_temporal;
     if let Some(dir) = path {
+        if ml_inference_requested || temporal_requested {
+            return Err(anyhow!("ML inference is not supported for batch scans"));
+        }
         let batch_parallel = opts.batch_parallel;
         return run_scan_batch(
             dir,
@@ -586,8 +677,56 @@ fn run_scan(
         );
     }
     let pdf = pdf.ok_or_else(|| anyhow!("PDF path is required unless --path is set"))?;
+    let mmap = mmap_file(pdf)?;
     let sandbox_summary = sis_pdf_detectors::sandbox_summary(js_sandbox);
-    let report = run_scan_single(pdf, &opts, &detectors)?.with_sandbox_summary(sandbox_summary);
+    let mut report =
+        run_scan_single(&mmap, pdf, &opts, &detectors)?.with_sandbox_summary(sandbox_summary);
+    if ml_inference_requested {
+        match run_ml_inference_for_scan(
+            &mmap,
+            &opts,
+            &report,
+            ml_model_dir,
+            ml_threshold,
+            ml_extended_features,
+            ml_explain,
+            ml_advanced,
+            ml_baseline,
+            ml_calibration,
+        ) {
+            Ok(ml_result) => {
+                report = report.with_ml_inference(Some(ml_result));
+            }
+            Err(err) => {
+                eprintln!("warning: ml_inference_error: {}", err);
+            }
+        }
+    }
+    if temporal_requested {
+        let (temporal_summary, temporal_snapshots, temporal_explanation) =
+            run_temporal_analysis(
+                &mmap,
+                &opts,
+                &detectors,
+                ml_model_dir,
+                ml_threshold,
+                ml_extended_features,
+                ml_explain,
+                ml_baseline,
+                ml_calibration,
+                ml_temporal,
+            )?;
+        report = report
+            .with_temporal_signals(temporal_summary)
+            .with_temporal_snapshots(temporal_snapshots);
+        if let (Some(ml), Some(explanation)) =
+            (report.ml_inference.as_mut(), temporal_explanation)
+        {
+            if let Some(expl) = ml.explanation.as_mut() {
+                expl.temporal_analysis = Some(explanation);
+            }
+        }
+    }
     if want_export_intents {
         let mut writer: Box<dyn Write> = if let Some(path) = export_intents_out {
             Box::new(fs::File::create(path)?)
@@ -625,12 +764,135 @@ fn run_scan(
     }
     Ok(())
 }
+
+fn build_scan_context<'a>(
+    mmap: &'a [u8],
+    opts: &sis_pdf_core::scan::ScanOptions,
+) -> Result<sis_pdf_core::scan::ScanContext<'a>> {
+    let graph = sis_pdf_pdf::parse_pdf(
+        mmap,
+        sis_pdf_pdf::ParseOptions {
+            recover_xref: opts.recover_xref,
+            deep: opts.deep,
+            strict: opts.strict,
+            max_objstm_bytes: opts.max_decode_bytes,
+            max_objects: opts.max_objects,
+            max_objstm_total_bytes: opts.max_total_decoded_bytes,
+        },
+    )?;
+    Ok(sis_pdf_core::scan::ScanContext::new(
+        mmap,
+        graph,
+        opts.clone(),
+    ))
+}
+
+fn run_ml_inference_for_scan(
+    mmap: &[u8],
+    opts: &sis_pdf_core::scan::ScanOptions,
+    report: &sis_pdf_core::report::Report,
+    ml_model_dir: Option<&std::path::Path>,
+    ml_threshold: f32,
+    ml_extended_features: bool,
+    ml_explain: bool,
+    ml_advanced: bool,
+    ml_baseline: Option<&std::path::Path>,
+    ml_calibration: Option<&std::path::Path>,
+) -> Result<sis_pdf_core::ml_inference::MlInferenceResult> {
+    let model_path = ml_model_dir.ok_or_else(|| anyhow!("--ml-model-dir is required for ML inference"))?;
+    if ml_advanced && !ml_explain {
+        return Err(anyhow!("--ml-advanced requires --ml-explain"));
+    }
+    if ml_explain && ml_baseline.is_none() {
+        return Err(anyhow!("--ml-explain requires --ml-baseline"));
+    }
+    let config = sis_pdf_core::ml_inference::MlInferenceConfig {
+        model_path: model_path.to_path_buf(),
+        baseline_path: ml_baseline.map(|p| p.to_path_buf()),
+        calibration_path: ml_calibration.map(|p| p.to_path_buf()),
+        threshold: ml_threshold,
+        explain: ml_explain,
+        use_extended_features: ml_extended_features || ml_explain || ml_baseline.is_some(),
+        explain_advanced: ml_advanced,
+    };
+    let ctx = build_scan_context(mmap, opts)?;
+    sis_pdf_core::ml_inference::run_ml_inference(&ctx, &report.findings, &config)
+}
+
+fn run_temporal_analysis(
+    mmap: &[u8],
+    opts: &sis_pdf_core::scan::ScanOptions,
+    detectors: &[Box<dyn sis_pdf_core::detect::Detector>],
+    ml_model_dir: Option<&std::path::Path>,
+    ml_threshold: f32,
+    ml_extended_features: bool,
+    ml_explain: bool,
+    ml_baseline: Option<&std::path::Path>,
+    ml_calibration: Option<&std::path::Path>,
+    ml_temporal: bool,
+) -> Result<(
+    Option<sis_pdf_core::report::TemporalSignalSummary>,
+    Option<Vec<sis_pdf_core::explainability::TemporalSnapshot>>,
+    Option<sis_pdf_core::explainability::TemporalExplanation>,
+)> {
+    let mut opts_temporal = opts.clone();
+    opts_temporal.ml_config = None;
+    let scans = sis_pdf_core::temporal::build_versioned_scans(mmap, &opts_temporal, detectors)?;
+    let temporal_summary = Some(sis_pdf_core::temporal::build_temporal_signal_summary(&scans));
+
+    if !ml_temporal {
+        return Ok((temporal_summary, None, None));
+    }
+    if !ml_explain {
+        return Err(anyhow!("--ml-temporal requires --ml-explain"));
+    }
+    let model_path = ml_model_dir.ok_or_else(|| anyhow!("--ml-model-dir is required for ML temporal analysis"))?;
+    let baseline_path = ml_baseline.ok_or_else(|| anyhow!("--ml-temporal requires --ml-baseline"))?;
+
+    let config = sis_pdf_core::ml_inference::MlInferenceConfig {
+        model_path: model_path.to_path_buf(),
+        baseline_path: Some(baseline_path.to_path_buf()),
+        calibration_path: ml_calibration.map(|p| p.to_path_buf()),
+        threshold: ml_threshold,
+        explain: false,
+        use_extended_features: ml_extended_features || ml_baseline.is_some(),
+        explain_advanced: false,
+    };
+
+    let mut snapshots = Vec::new();
+    for scan in &scans {
+        let inference = sis_pdf_core::ml_inference::run_ml_inference(
+            &scan.context,
+            &scan.report.findings,
+            &config,
+        )?;
+        let high_severity = scan
+            .report
+            .findings
+            .iter()
+            .filter(|f| matches!(f.severity, sis_pdf_core::model::Severity::High | sis_pdf_core::model::Severity::Critical))
+            .count();
+        snapshots.push(sis_pdf_core::explainability::TemporalSnapshot {
+            version_label: scan.label.clone(),
+            score: inference.prediction.calibrated_score,
+            high_severity_count: high_severity,
+            finding_count: scan.report.findings.len(),
+        });
+    }
+
+    let temporal_explanation = Some(
+        sis_pdf_core::explainability::analyse_temporal_risk(&snapshots),
+    );
+
+    Ok((temporal_summary, Some(snapshots), temporal_explanation))
+}
+
 fn run_scan_single(
+    mmap: &Mmap,
     pdf: &str,
     opts: &sis_pdf_core::scan::ScanOptions,
     detectors: &[Box<dyn sis_pdf_core::detect::Detector>],
 ) -> Result<sis_pdf_core::report::Report> {
-    let mmap = mmap_file(pdf)?;
     let report = sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts.clone(), detectors)?
         .with_input_path(Some(pdf.to_string()));
     Ok(report)
@@ -1095,7 +1357,7 @@ fn run_export_graph(pdf: &str, chains_only: bool, format: &str, outdir: &PathBuf
     }
     Ok(())
 }
-fn run_export_org(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
+fn run_export_org(pdf: &str, format: &str, out: &PathBuf, enhanced: bool) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     let graph = sis_pdf_pdf::parse_pdf(
         &mmap,
@@ -1108,21 +1370,83 @@ fn run_export_org(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
             max_objstm_total_bytes: 256 * 1024 * 1024,
         },
     )?;
-    let org = sis_pdf_core::org::OrgGraph::from_object_graph(&graph);
-    match format {
-        "json" => {
-            let v = sis_pdf_core::org_export::export_org_json(&org);
-            fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+
+    if enhanced {
+        // Build enhanced ORG with classifications, typed edges, and suspicious paths
+        let opts = sis_pdf_core::scan::ScanOptions {
+            deep: false,
+            max_decode_bytes: 32 * 1024 * 1024,
+            max_total_decoded_bytes: 256 * 1024 * 1024,
+            recover_xref: true,
+            parallel: false,
+            batch_parallel: false,
+            diff_parser: false,
+            max_objects: 500_000,
+            max_recursion_depth: 50,
+            fast: false,
+            focus_trigger: None,
+            yara_scope: None,
+            focus_depth: 5,
+            strict: false,
+            ir: false,
+            ml_config: None,
+        };
+        let ctx = sis_pdf_core::scan::ScanContext::new(&mmap, graph, opts.clone());
+        let classifications = ctx.classifications();
+        let typed_graph = ctx.build_typed_graph();
+        let org = sis_pdf_core::org::OrgGraph::from_object_graph_enhanced(
+            &ctx.graph,
+            classifications,
+            &typed_graph,
+        );
+
+        // Run detectors to get findings for path analysis
+        let detectors = sis_pdf_detectors::default_detectors_with_settings(
+            sis_pdf_detectors::DetectorSettings {
+                js_ast: true,
+                js_sandbox: false,
+            },
+        );
+        let report = sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts, &detectors)?;
+        let findings = &report.findings;
+
+        // Extract suspicious paths
+        let path_finder = typed_graph.path_finder();
+        let action_chains = path_finder.find_all_action_chains();
+        let path_explanation = sis_pdf_core::explainability::extract_suspicious_paths(&action_chains, findings, None);
+
+        // Create enhanced export with paths
+        let export = sis_pdf_core::org_export::OrgExportWithPaths::enhanced(org, path_explanation);
+
+        match format {
+            "json" => {
+                let v = sis_pdf_core::org_export::export_org_with_paths_json(&export);
+                fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+            }
+            _ => {
+                // For DOT format, just export the ORG without paths (paths don't render well in DOT)
+                let dot = sis_pdf_core::org_export::export_org_dot(&export.org);
+                fs::write(out, dot)?;
+            }
         }
-        _ => {
-            let dot = sis_pdf_core::org_export::export_org_dot(&org);
-            fs::write(out, dot)?;
+    } else {
+        // Basic ORG export (no enhancements)
+        let org = sis_pdf_core::org::OrgGraph::from_object_graph(&graph);
+        match format {
+            "json" => {
+                let v = sis_pdf_core::org_export::export_org_json(&org);
+                fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+            }
+            _ => {
+                let dot = sis_pdf_core::org_export::export_org_dot(&org);
+                fs::write(out, dot)?;
+            }
         }
     }
     Ok(())
 }
 
-fn run_export_ir(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
+fn run_export_ir(pdf: &str, format: &str, out: &PathBuf, enhanced: bool) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     let graph = sis_pdf_pdf::parse_pdf(
         &mmap,
@@ -1137,14 +1461,60 @@ fn run_export_ir(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
     )?;
     let ir_opts = sis_pdf_pdf::ir::IrOptions::default();
     let ir_objects = sis_pdf_pdf::ir::ir_for_graph(&graph.objects, &ir_opts);
-    match format {
-        "json" => {
-            let v = sis_pdf_core::ir_export::export_ir_json(&ir_objects);
-            fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+
+    if enhanced {
+        // Run detectors to get findings
+        let opts = sis_pdf_core::scan::ScanOptions {
+            deep: false,
+            max_decode_bytes: 32 * 1024 * 1024,
+            max_total_decoded_bytes: 256 * 1024 * 1024,
+            recover_xref: true,
+            parallel: false,
+            batch_parallel: false,
+            diff_parser: false,
+            max_objects: 500_000,
+            max_recursion_depth: 50,
+            fast: false,
+            focus_trigger: None,
+            yara_scope: None,
+            focus_depth: 5,
+            strict: false,
+            ir: false,
+            ml_config: None,
+        };
+        let detectors = sis_pdf_detectors::default_detectors_with_settings(
+            sis_pdf_detectors::DetectorSettings {
+                js_ast: true,
+                js_sandbox: false,
+            },
+        );
+        let report = sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts, &detectors)?;
+        let findings = &report.findings;
+
+        // Generate enhanced IR export
+        let enhanced_export = sis_pdf_core::ir_export::generate_enhanced_ir_export(&ir_objects, findings);
+
+        match format {
+            "json" => {
+                let v = sis_pdf_core::ir_export::export_enhanced_ir_json(&enhanced_export);
+                fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+            }
+            _ => {
+                let text = sis_pdf_core::ir_export::export_enhanced_ir_text(&enhanced_export);
+                fs::write(out, text)?;
+            }
         }
-        _ => {
-            let text = sis_pdf_core::ir_export::export_ir_text(&ir_objects);
-            fs::write(out, text)?;
+    } else {
+        // Basic IR export (no findings)
+        match format {
+            "json" => {
+                let v = sis_pdf_core::ir_export::export_ir_json(&ir_objects);
+                fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+            }
+            _ => {
+                let text = sis_pdf_core::ir_export::export_ir_text(&ir_objects);
+                fs::write(out, text)?;
+            }
         }
     }
     Ok(())
@@ -1165,6 +1535,13 @@ fn run_report(
     ml_model_dir: Option<&std::path::Path>,
     ml_threshold: f32,
     ml_mode: &str,
+    ml_extended_features: bool,
+    ml_explain: bool,
+    ml_advanced: bool,
+    ml_temporal: bool,
+    temporal_signals: bool,
+    ml_baseline: Option<&std::path::Path>,
+    ml_calibration: Option<&std::path::Path>,
     js_ast: bool,
     js_sandbox: bool,
 ) -> Result<()> {
@@ -1212,8 +1589,61 @@ fn run_report(
             js_sandbox,
         },
     );
-    let report = sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts, &detectors)?
+    let mut report = sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts.clone(), &detectors)?
         .with_input_path(Some(pdf.to_string()));
+    let ml_inference_requested = ml_extended_features
+        || ml_explain
+        || ml_advanced
+        || ml_temporal
+        || ml_baseline.is_some()
+        || ml_calibration.is_some();
+    let temporal_requested = temporal_signals || ml_temporal;
+    if ml_inference_requested {
+        match run_ml_inference_for_scan(
+            &mmap,
+            &opts,
+            &report,
+            ml_model_dir,
+            ml_threshold,
+            ml_extended_features,
+            ml_explain,
+            ml_advanced,
+            ml_baseline,
+            ml_calibration,
+        ) {
+            Ok(ml_result) => {
+                report = report.with_ml_inference(Some(ml_result));
+            }
+            Err(err) => {
+                eprintln!("warning: ml_inference_error: {}", err);
+            }
+        }
+    }
+    if temporal_requested {
+        let (temporal_summary, temporal_snapshots, temporal_explanation) =
+            run_temporal_analysis(
+                &mmap,
+                &opts,
+                &detectors,
+                ml_model_dir,
+                ml_threshold,
+                ml_extended_features,
+                ml_explain,
+                ml_baseline,
+                ml_calibration,
+                ml_temporal,
+            )?;
+        report = report
+            .with_temporal_signals(temporal_summary)
+            .with_temporal_snapshots(temporal_snapshots);
+        if let (Some(ml), Some(explanation)) =
+            (report.ml_inference.as_mut(), temporal_explanation)
+        {
+            if let Some(expl) = ml.explanation.as_mut() {
+                expl.temporal_analysis = Some(explanation);
+            }
+        }
+    }
     let md = sis_pdf_core::report::render_markdown(&report, Some(pdf));
     if let Some(path) = out {
         fs::write(path, md)?;
@@ -1234,11 +1664,12 @@ fn run_export_features(
     label: Option<&str>,
     format: &str,
     out: Option<&std::path::Path>,
+    extended: bool,
 ) -> Result<()> {
     if path.is_some() && pdf.is_some() {
         return Err(anyhow!("provide either a PDF path or --path, not both"));
     }
-    let opts = sis_pdf_core::scan::ScanOptions {
+    let opts_template = sis_pdf_core::scan::ScanOptions {
         deep,
         max_decode_bytes,
         max_total_decoded_bytes,
@@ -1308,7 +1739,17 @@ fn run_export_features(
     } else {
         Box::new(std::io::stdout())
     };
-    let names = sis_pdf_core::features::feature_names();
+
+    // Get feature names based on extended flag
+    let names = if extended {
+        sis_pdf_core::features_extended::extended_feature_names()
+    } else {
+        sis_pdf_core::features::feature_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+    };
+
     if format == "csv" {
         let mut header = String::from("path,label");
         for name in &names {
@@ -1318,16 +1759,60 @@ fn run_export_features(
         header.push('\n');
         writer.write_all(header.as_bytes())?;
     }
+
+    // For extended features, we need detectors
+    let detectors = if extended {
+        Some(sis_pdf_detectors::default_detectors_with_settings(
+            sis_pdf_detectors::DetectorSettings {
+                js_ast: true,
+                js_sandbox: false,
+            },
+        ))
+    } else {
+        None
+    };
+
     for path in paths {
         let path_str = path.display().to_string();
         let mmap = mmap_file(&path_str)?;
-        let fv = sis_pdf_core::features::FeatureExtractor::extract_from_bytes(&mmap, &opts)?;
+
+        let feature_vec = if extended {
+            // Clone opts for this iteration to avoid move issues
+            let opts1 = opts_template.clone();
+            let opts2 = opts_template.clone();
+
+            // Run full scan to get findings
+            let report = sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts1, detectors.as_ref().unwrap())?;
+
+            // Parse PDF again to create ScanContext for feature extraction
+            let graph = sis_pdf_pdf::parse_pdf(
+                &mmap,
+                sis_pdf_pdf::ParseOptions {
+                    recover_xref: opts_template.recover_xref,
+                    deep: opts_template.deep,
+                    strict: opts_template.strict,
+                    max_objstm_bytes: opts_template.max_decode_bytes,
+                    max_objects: opts_template.max_objects,
+                    max_objstm_total_bytes: opts_template.max_total_decoded_bytes,
+                },
+            )?;
+            let ctx = sis_pdf_core::scan::ScanContext::new(&mmap, graph, opts2);
+
+            // Extract extended features
+            let extended_fv = sis_pdf_core::features_extended::extract_extended_features(&ctx, &report.findings);
+            extended_fv.as_f32_vec()
+        } else {
+            // Basic feature extraction
+            let fv = sis_pdf_core::features::FeatureExtractor::extract_from_bytes(&mmap, &opts_template)?;
+            fv.as_f32_vec()
+        };
+
         match format {
             "jsonl" => {
                 let record = serde_json::json!({
                     "path": path_str,
                     "label": label,
-                    "features": fv,
+                    "features": feature_vec,
                 });
                 writer.write_all(serde_json::to_string(&record)?.as_bytes())?;
                 writer.write_all(b"\n")?;
@@ -1337,7 +1822,7 @@ fn run_export_features(
                 row.push_str(&path_str);
                 row.push(',');
                 row.push_str(label.unwrap_or(""));
-                for v in fv.as_f32_vec() {
+                for v in feature_vec {
                     row.push(',');
                     row.push_str(&format!("{:.6}", v));
                 }
@@ -1349,6 +1834,84 @@ fn run_export_features(
     }
     Ok(())
 }
+
+fn run_compute_baseline(input: &PathBuf, out: &PathBuf) -> Result<()> {
+    // Read JSONL file with feature vectors
+    let data = fs::read_to_string(input)?;
+    let mut feature_samples = Vec::new();
+
+    for (line_num, line) in data.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let record: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Warning: skipping line {}: {}", line_num + 1, e);
+                continue;
+            }
+        };
+
+        // Extract features array
+        if let Some(features) = record.get("features").and_then(|f| f.as_array()) {
+            let vec: Vec<f32> = features
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect();
+
+            if vec.len() == 333 || vec.len() == 35 {
+                feature_samples.push(vec);
+            } else {
+                eprintln!("Warning: line {} has unexpected feature count: {}", line_num + 1, vec.len());
+            }
+        } else {
+            eprintln!("Warning: line {} missing features array", line_num + 1);
+        }
+    }
+
+    if feature_samples.is_empty() {
+        return Err(anyhow!("No valid feature vectors found in input file"));
+    }
+
+    eprintln!("Loaded {} benign samples", feature_samples.len());
+
+    // Get feature names based on vector size
+    let feature_names = if feature_samples[0].len() == 333 {
+        sis_pdf_core::features_extended::extended_feature_names()
+    } else {
+        sis_pdf_core::features::feature_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // Convert Vec<f32> to HashMap<String, f32>
+    let feature_maps: Vec<std::collections::HashMap<String, f32>> = feature_samples
+        .iter()
+        .map(|vec| {
+            feature_names
+                .iter()
+                .zip(vec.iter())
+                .map(|(name, &value)| (name.clone(), value))
+                .collect()
+        })
+        .collect();
+
+    // Compute baseline using explainability module
+    let baseline = sis_pdf_core::explainability::compute_baseline_from_samples(&feature_maps);
+
+    // Save to JSON
+    let json = serde_json::to_string_pretty(&baseline)?;
+    fs::write(out, json)?;
+
+    eprintln!("Baseline saved to {}", out.display());
+    eprintln!("  Feature count: {}", baseline.feature_means.len());
+    eprintln!("  Sample count: {}", feature_samples.len());
+
+    Ok(())
+}
+
 fn run_stream_analyze(pdf: &str, chunk_size: usize, max_buffer: usize) -> Result<()> {
     let mut f = fs::File::open(pdf)?;
     let mut analyzer = sis_pdf_core::stream_analyzer::StreamAnalyzer::new(max_buffer);
