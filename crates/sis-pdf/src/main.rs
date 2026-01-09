@@ -47,6 +47,8 @@ enum Command {
         json: bool,
         #[arg(long)]
         jsonl: bool,
+        #[arg(long, help = "Emit JSONL findings with input path per entry")]
+        jsonl_findings: bool,
         #[arg(long)]
         sarif: bool,
         #[arg(long)]
@@ -55,6 +57,8 @@ enum Command {
         export_intents: bool,
         #[arg(long)]
         export_intents_out: Option<PathBuf>,
+        #[arg(long, help = "Include derived intent entries (domains and obfuscated URLs)")]
+        intents_derived: bool,
         #[arg(long)]
         yara: bool,
         #[arg(long)]
@@ -260,6 +264,8 @@ enum Command {
         out: Option<PathBuf>,
         #[arg(long, help = "Export basic 35-feature vector only (legacy format)")]
         basic: bool,
+        #[arg(long, help = "Include feature names in JSONL output records")]
+        feature_names: bool,
     },
     #[command(about = "Compute benign baseline from feature vectors")]
     ComputeBaseline {
@@ -321,10 +327,12 @@ fn main() -> Result<()> {
             no_recover,
             json,
             jsonl,
+            jsonl_findings,
             sarif,
             sarif_out,
             export_intents,
             export_intents_out,
+            intents_derived,
             yara,
             yara_out,
             yara_scope,
@@ -363,10 +371,12 @@ fn main() -> Result<()> {
             !no_recover,
             json,
             jsonl,
+            jsonl_findings,
             sarif,
             sarif_out.as_deref(),
             export_intents,
             export_intents_out.as_deref(),
+            intents_derived,
             yara,
             yara_out.as_deref(),
             &yara_scope,
@@ -502,6 +512,7 @@ fn main() -> Result<()> {
             format,
             out,
             basic,
+            feature_names,
         } => run_export_features(
             pdf.as_deref(),
             path.as_deref(),
@@ -515,6 +526,7 @@ fn main() -> Result<()> {
             &format,
             out.as_deref(),
             !basic,
+            feature_names,
         ),
         Command::ComputeBaseline { input, out } => {
             run_compute_baseline(&input, &out)
@@ -564,10 +576,12 @@ fn run_scan(
     recover_xref: bool,
     json: bool,
     jsonl: bool,
+    jsonl_findings: bool,
     sarif: bool,
     sarif_out: Option<&std::path::Path>,
     export_intents: bool,
     export_intents_out: Option<&std::path::Path>,
+    intents_derived: bool,
     yara: bool,
     yara_out: Option<&std::path::Path>,
     yara_scope: &str,
@@ -666,10 +680,12 @@ fn run_scan(
             &detectors,
             json,
             jsonl,
+            jsonl_findings,
             sarif,
             sarif_out,
             want_export_intents,
             export_intents_out,
+            intents_derived,
             yara,
             yara_out,
             cache_dir,
@@ -733,13 +749,15 @@ fn run_scan(
         } else {
             Box::new(std::io::stdout())
         };
-        write_intents_jsonl(&report, writer.as_mut())?;
+        write_intents_jsonl(&report, writer.as_mut(), intents_derived)?;
         return Ok(());
     }
     let want_sarif = sarif || sarif_out.is_some();
     let want_yara = yara || yara_out.is_some();
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if jsonl_findings {
+        sis_pdf_core::report::print_jsonl_findings(&report)?;
     } else if jsonl {
         sis_pdf_core::report::print_jsonl(&report)?;
     } else if want_sarif {
@@ -900,9 +918,23 @@ fn run_scan_single(
 fn write_intents_jsonl(
     report: &sis_pdf_core::report::Report,
     writer: &mut dyn Write,
+    intents_derived: bool,
 ) -> Result<()> {
     let path = report.input_path.as_deref().unwrap_or("-");
-    for intent in &report.network_intents {
+    let intents = if intents_derived {
+        let options = sis_pdf_core::campaign::IntentExtractionOptions {
+            include_domains: true,
+            include_obfuscated: true,
+            include_scheme_less: true,
+        };
+        sis_pdf_core::campaign::extract_network_intents_from_findings(
+            &report.findings,
+            &options,
+        )
+    } else {
+        report.network_intents.clone()
+    };
+    for intent in intents {
         let record = serde_json::json!({
             "path": path,
             "url": intent.url,
@@ -920,10 +952,12 @@ fn run_scan_batch(
     detectors: &[Box<dyn sis_pdf_core::detect::Detector>],
     json: bool,
     jsonl: bool,
+    jsonl_findings: bool,
     sarif: bool,
     sarif_out: Option<&std::path::Path>,
     export_intents: bool,
     export_intents_out: Option<&std::path::Path>,
+    intents_derived: bool,
     yara: bool,
     yara_out: Option<&std::path::Path>,
     cache_dir: Option<&std::path::Path>,
@@ -947,6 +981,12 @@ fn run_scan_batch(
         } else {
             Box::new(std::io::stdout())
         };
+        Some(Arc::new(Mutex::new(writer)))
+    } else {
+        None
+    };
+    let findings_writer: Option<Arc<Mutex<Box<dyn Write + Send>>>> = if jsonl_findings {
+        let writer: Box<dyn Write + Send> = Box::new(std::io::stdout());
         Some(Arc::new(Mutex::new(writer)))
     } else {
         None
@@ -1025,7 +1065,13 @@ fn run_scan_batch(
             let mut guard = writer
                 .lock()
                 .map_err(|_| anyhow!("intent writer lock poisoned"))?;
-            write_intents_jsonl(&report, guard.as_mut())?;
+            write_intents_jsonl(&report, guard.as_mut(), intents_derived)?;
+        }
+        if let Some(writer) = findings_writer.as_ref() {
+            let mut guard = writer
+                .lock()
+                .map_err(|_| anyhow!("findings writer lock poisoned"))?;
+            sis_pdf_core::report::write_jsonl_findings(&report, guard.as_mut())?;
         }
         let duration_ms = start.elapsed().as_millis() as u64;
         Ok(sis_pdf_core::report::BatchEntry {
@@ -1665,6 +1711,7 @@ fn run_export_features(
     format: &str,
     out: Option<&std::path::Path>,
     extended: bool,
+    feature_names: bool,
 ) -> Result<()> {
     if path.is_some() && pdf.is_some() {
         return Err(anyhow!("provide either a PDF path or --path, not both"));
@@ -1809,11 +1856,20 @@ fn run_export_features(
 
         match format {
             "jsonl" => {
-                let record = serde_json::json!({
-                    "path": path_str,
-                    "label": label,
-                    "features": feature_vec,
-                });
+                let record = if feature_names {
+                    serde_json::json!({
+                        "path": path_str,
+                        "label": label,
+                        "features": feature_vec,
+                        "feature_names": &names,
+                    })
+                } else {
+                    serde_json::json!({
+                        "path": path_str,
+                        "label": label,
+                        "features": feature_vec,
+                    })
+                };
                 writer.write_all(serde_json::to_string(&record)?.as_bytes())?;
                 writer.write_all(b"\n")?;
             }

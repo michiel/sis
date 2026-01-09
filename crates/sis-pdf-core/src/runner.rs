@@ -360,7 +360,8 @@ pub fn run_scan_with_detectors(
         .as_ref()
         .map(|s| crate::predictor::BehavioralPredictor.predict_evolution(&s.patterns))
         .unwrap_or_default();
-    let network_intents = extract_network_intents(&findings);
+    let network_intents =
+        crate::campaign::extract_network_intents_from_findings(&findings, &Default::default());
     let response_rules = behavior_summary
         .as_ref()
         .map(|s| {
@@ -665,41 +666,4 @@ fn filter_graph_by_refs<'a>(
         startxrefs: graph.startxrefs.clone(),
         deviations: graph.deviations.clone(),
     }
-}
-
-fn extract_network_intents(findings: &[Finding]) -> Vec<crate::campaign::NetworkIntent> {
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for f in findings {
-        for (k, v) in &f.meta {
-            if k == "action.target"
-                || k == "supply_chain.action_targets"
-                || k == "js.ast_urls"
-                || k.starts_with("js.")
-            {
-                for url in extract_urls(v) {
-                    if seen.insert(url.clone()) {
-                        out.push(crate::campaign::NetworkIntent {
-                            domain: crate::campaign::extract_domain(&url),
-                            url,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    out
-}
-
-fn extract_urls(input: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for token in input
-        .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
-        .filter(|s| !s.is_empty())
-    {
-        if token.starts_with("http://") || token.starts_with("https://") {
-            out.push(token.trim_matches(['"', '\'']).to_string());
-        }
-    }
-    out
 }

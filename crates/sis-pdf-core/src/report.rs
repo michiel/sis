@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 
 use anyhow::Result;
 
@@ -515,6 +516,54 @@ pub fn print_jsonl(report: &Report) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn write_jsonl_findings(report: &Report, writer: &mut dyn Write) -> Result<()> {
+    let path = report.input_path.as_deref().unwrap_or("-");
+    for f in &report.findings {
+        let record = serde_json::json!({
+            "path": path,
+            "finding": f,
+        });
+        writer.write_all(serde_json::to_string(&record)?.as_bytes())?;
+        writer.write_all(b"\n")?;
+    }
+    if let Some(ml) = &report.ml_inference {
+        let record = serde_json::json!({
+            "type": "ml_inference",
+            "path": path,
+            "prediction": ml.prediction,
+            "explanation": ml.explanation,
+        });
+        writer.write_all(serde_json::to_string(&record)?.as_bytes())?;
+        writer.write_all(b"\n")?;
+    }
+    if let Some(signals) = &report.temporal_signals {
+        let record = serde_json::json!({
+            "type": "temporal_signal_summary",
+            "path": path,
+            "summary": signals,
+        });
+        writer.write_all(serde_json::to_string(&record)?.as_bytes())?;
+        writer.write_all(b"\n")?;
+    }
+    if let Some(snapshots) = &report.temporal_snapshots {
+        for snapshot in snapshots {
+            let record = serde_json::json!({
+                "type": "ml_temporal_snapshot",
+                "path": path,
+                "snapshot": snapshot,
+            });
+            writer.write_all(serde_json::to_string(&record)?.as_bytes())?;
+            writer.write_all(b"\n")?;
+        }
+    }
+    Ok(())
+}
+
+pub fn print_jsonl_findings(report: &Report) -> Result<()> {
+    let mut writer = std::io::stdout();
+    write_jsonl_findings(report, &mut writer)
 }
 
 pub use crate::sarif::sarif_rule_count;
