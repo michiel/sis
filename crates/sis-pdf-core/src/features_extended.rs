@@ -1,10 +1,11 @@
-// Extended Feature Vector with 321 features
+// Extended Feature Vector with 333 features
 //
-// Expands from 35 to 321 features by incorporating all detector findings:
+// Expands from 35 to 333 features by incorporating all detector findings:
 // - Legacy features (35): General, Structural, Behavioral, Content, Graph
 // - Attack surface distribution (12)
-// - Severity/confidence distributions (24)
-// - Finding presence/counts (140: 70 binary + 70 counts)
+// - Severity distribution (15)
+// - Confidence distribution (9)
+// - Finding presence/counts (142: 71 binary + 71 counts)
 // - JS signals (30)
 // - URI signals (20)
 // - Content signals (15)
@@ -12,13 +13,15 @@
 // - Structural anomaly signals (20)
 // - Crypto signals (10)
 // - Embedded content signals (15)
+//
+// Total: 35 + 298 = 333 features
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use crate::features::FeatureVector;
 use crate::model::{Finding, Severity, Confidence, AttackSurface};
 
-/// Extended feature vector with 321 features
+/// Extended feature vector with 333 features
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtendedFeatureVector {
     /// Legacy features (35)
@@ -33,10 +36,10 @@ pub struct ExtendedFeatureVector {
     /// Confidence distribution (9 features)
     pub confidence_dist: ConfidenceFeatures,
 
-    /// Finding presence (70 binary features)
+    /// Finding presence (71 binary features)
     pub finding_presence: FindingPresenceFeatures,
 
-    /// Finding counts (70 count features)
+    /// Finding counts (71 count features)
     pub finding_counts: FindingCountFeatures,
 
     /// JavaScript-specific signals (30 features)
@@ -62,7 +65,7 @@ pub struct ExtendedFeatureVector {
 }
 
 impl ExtendedFeatureVector {
-    /// Convert to flat f32 vector (320 features)
+    /// Convert to flat f32 vector (333 features)
     pub fn as_f32_vec(&self) -> Vec<f32> {
         let mut vec = self.legacy.as_f32_vec();
         vec.extend(self.attack_surfaces.as_f32_vec());
@@ -305,7 +308,7 @@ impl ConfidenceFeatures {
 }
 
 // ============================================================================
-// Finding Presence (70 binary features - one per finding type)
+// Finding Presence (71 binary features - one per finding type)
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1463,13 +1466,13 @@ fn extract_js_features(findings: &[Finding]) -> JsSignalFeatures {
 fn extract_uri_features(findings: &[Finding]) -> UriSignalFeatures {
     let mut features = UriSignalFeatures::default();
 
-    // Filter to URI-related findings
+    // Filter to URI-related findings only (not all Actions surface findings)
     let uri_findings: Vec<_> = findings
         .iter()
         .filter(|f| {
             f.kind.contains("uri") ||
             f.kind.contains("url") ||
-            f.surface == AttackSurface::Actions
+            f.kind.starts_with("uri_")
         })
         .collect();
 
@@ -1515,7 +1518,7 @@ fn extract_uri_features(findings: &[Finding]) -> UriSignalFeatures {
         }
 
         // IP address URIs
-        if meta.get("uri.is_ip_address").map(|s| s == "true").unwrap_or(false) {
+        if meta.get("uri.is_ip").map(|s| s == "true").unwrap_or(false) {
             features.ip_address_count += 1.0;
         }
 
@@ -1524,9 +1527,11 @@ fn extract_uri_features(findings: &[Finding]) -> UriSignalFeatures {
             features.suspicious_tld_count += 1.0;
         }
 
-        // Obfuscated URIs
-        if meta.get("uri.obfuscated").map(|s| s == "true").unwrap_or(false) {
-            features.obfuscated_count += 1.0;
+        // Obfuscated URIs (check if obfuscation level is not "none")
+        if let Some(obf_level) = meta.get("uri.obfuscation") {
+            if obf_level != "none" {
+                features.obfuscated_count += 1.0;
+            }
         }
 
         // Data exfiltration patterns
@@ -1540,12 +1545,12 @@ fn extract_uri_features(findings: &[Finding]) -> UriSignalFeatures {
         }
 
         // Automatic triggers
-        if meta.get("uri.automatic_trigger").map(|s| s == "true").unwrap_or(false) {
+        if meta.get("uri.automatic").map(|s| s == "true").unwrap_or(false) {
             features.automatic_trigger_count += 1.0;
         }
 
         // JS-triggered URIs
-        if meta.get("uri.js_triggered").map(|s| s == "true").unwrap_or(false) {
+        if meta.get("uri.js_involved").map(|s| s == "true").unwrap_or(false) {
             features.js_triggered_count += 1.0;
         }
 
@@ -1690,8 +1695,8 @@ fn extract_supply_chain_features(findings: &[Finding]) -> SupplyChainFeatures {
             features.update_vectors += 1.0;
         }
 
-        // Multi-stage attack chains
-        if finding.kind.contains("multi_stage") || finding.kind.contains("chain") {
+        // Multi-stage attack chains (only supply_chain or multi_stage findings)
+        if finding.kind.contains("multi_stage") || finding.kind.starts_with("supply_chain") {
             features.multi_stage_chains += 1.0;
         }
 
@@ -2311,7 +2316,7 @@ mod tests {
     fn test_uri_feature_extraction() {
         let mut meta = HashMap::new();
         meta.insert("uri.scheme".to_string(), "http".to_string());
-        meta.insert("uri.is_ip_address".to_string(), "true".to_string());
+        meta.insert("uri.is_ip".to_string(), "true".to_string());
         meta.insert("uri.risk_score".to_string(), "0.75".to_string());
 
         let findings = vec![

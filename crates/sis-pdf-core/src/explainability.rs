@@ -404,9 +404,10 @@ fn find_contributing_findings<'a>(feature_name: &str, findings: &'a [Finding]) -
     } else if feature_name.starts_with("uri_signals.") {
         findings.iter().filter(|f| f.kind.contains("uri")).collect()
     } else if feature_name.starts_with("finding.") {
-        let kind = feature_name.strip_prefix("finding.").unwrap()
-            .strip_suffix("_count").or_else(|| feature_name.strip_suffix("_present"))
-            .unwrap_or(feature_name);
+        let base = feature_name.strip_prefix("finding.").unwrap();
+        let kind = base.strip_suffix("_count")
+            .or_else(|| base.strip_suffix("_present"))
+            .unwrap_or(base);
         findings.iter().filter(|f| f.kind == kind).collect()
     } else if feature_name.starts_with("supply_chain") {
         findings.iter().filter(|f| f.kind.starts_with("supply_chain")).collect()

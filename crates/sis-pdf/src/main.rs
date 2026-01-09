@@ -186,25 +186,27 @@ enum Command {
         #[arg(short, long)]
         out: PathBuf,
     },
-    #[command(about = "Export object reference graph as DOT or JSON")]
+    #[command(about = "Export object reference graph with suspicious paths (DOT or JSON)")]
     ExportOrg {
         pdf: String,
         #[arg(long, default_value = "dot", value_parser = ["dot", "json"])]
         format: String,
         #[arg(short, long)]
         out: PathBuf,
-        #[arg(long, help = "Include semantic edge types and object classifications")]
-        enhanced: bool,
+        #[arg(long, help = "Export basic graph only (no enhancements, paths, or classifications)")]
+        basic: bool,
     },
-    #[command(about = "Export PDFObj IR as text or JSON")]
+    #[command(about = "Export enhanced IR with findings and risk scores (text or JSON)")]
     ExportIr {
         pdf: String,
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         format: String,
         #[arg(short, long)]
         out: PathBuf,
+        #[arg(long, help = "Export basic IR only (no findings or risk analysis)")]
+        basic: bool,
     },
-    #[command(about = "Export feature vectors for ML pipelines")]
+    #[command(about = "Export extended 333-feature vectors for ML pipelines")]
     ExportFeatures {
         #[arg(value_name = "PDF", required_unless_present = "path")]
         pdf: Option<String>,
@@ -228,6 +230,8 @@ enum Command {
         format: String,
         #[arg(short, long)]
         out: Option<PathBuf>,
+        #[arg(long, help = "Export basic 35-feature vector only (legacy format)")]
+        basic: bool,
     },
     #[command(about = "Analyze a PDF stream in chunks and stop on indicators")]
     StreamAnalyze {
@@ -420,8 +424,8 @@ fn main() -> Result<()> {
             format,
             out,
         } => run_export_graph(&pdf, chains_only, &format, &out),
-        Command::ExportOrg { pdf, format, out, enhanced } => run_export_org(&pdf, &format, &out, enhanced),
-        Command::ExportIr { pdf, format, out } => run_export_ir(&pdf, &format, &out),
+        Command::ExportOrg { pdf, format, out, basic } => run_export_org(&pdf, &format, &out, !basic),
+        Command::ExportIr { pdf, format, out, basic } => run_export_ir(&pdf, &format, &out, !basic),
         Command::ExportFeatures {
             pdf,
             path,
@@ -434,6 +438,7 @@ fn main() -> Result<()> {
             label,
             format,
             out,
+            basic,
         } => run_export_features(
             pdf.as_deref(),
             path.as_deref(),
@@ -446,6 +451,7 @@ fn main() -> Result<()> {
             label.as_deref(),
             &format,
             out.as_deref(),
+            !basic,
         ),
         Command::StreamAnalyze {
             pdf,
@@ -1111,8 +1117,8 @@ fn run_export_org(pdf: &str, format: &str, out: &PathBuf, enhanced: bool) -> Res
         },
     )?;
 
-    let org = if enhanced {
-        // Build enhanced ORG with classifications and typed edges
+    if enhanced {
+        // Build enhanced ORG with classifications, typed edges, and suspicious paths
         let opts = sis_pdf_core::scan::ScanOptions {
             deep: false,
             max_decode_bytes: 32 * 1024 * 1024,
@@ -1134,30 +1140,58 @@ fn run_export_org(pdf: &str, format: &str, out: &PathBuf, enhanced: bool) -> Res
         let ctx = sis_pdf_core::scan::ScanContext::new(&mmap, graph, opts);
         let classifications = ctx.classifications();
         let typed_graph = ctx.build_typed_graph();
-        sis_pdf_core::org::OrgGraph::from_object_graph_enhanced(
+        let org = sis_pdf_core::org::OrgGraph::from_object_graph_enhanced(
             &ctx.graph,
             classifications,
             &typed_graph,
-        )
-    } else {
-        // Basic ORG export
-        sis_pdf_core::org::OrgGraph::from_object_graph(&graph)
-    };
+        );
 
-    match format {
-        "json" => {
-            let v = sis_pdf_core::org_export::export_org_json(&org);
-            fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+        // Run detectors to get findings for path analysis
+        let detectors = sis_pdf_detectors::default_detectors_with_settings(
+            sis_pdf_detectors::DetectorSettings {
+                js_ast: true,
+                js_sandbox: false,
+            },
+        );
+        let report = sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts, &detectors)?;
+        let findings = &report.findings;
+
+        // Extract suspicious paths
+        let action_chains = sis_pdf_pdf::path_finder::find_all_action_chains(&typed_graph);
+        let path_explanation = sis_pdf_core::explainability::extract_suspicious_paths(&action_chains, findings);
+
+        // Create enhanced export with paths
+        let export = sis_pdf_core::org_export::OrgExportWithPaths::enhanced(org, path_explanation);
+
+        match format {
+            "json" => {
+                let v = sis_pdf_core::org_export::export_org_with_paths_json(&export);
+                fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+            }
+            _ => {
+                // For DOT format, just export the ORG without paths (paths don't render well in DOT)
+                let dot = sis_pdf_core::org_export::export_org_dot(&export.org);
+                fs::write(out, dot)?;
+            }
         }
-        _ => {
-            let dot = sis_pdf_core::org_export::export_org_dot(&org);
-            fs::write(out, dot)?;
+    } else {
+        // Basic ORG export (no enhancements)
+        let org = sis_pdf_core::org::OrgGraph::from_object_graph(&graph);
+        match format {
+            "json" => {
+                let v = sis_pdf_core::org_export::export_org_json(&org);
+                fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+            }
+            _ => {
+                let dot = sis_pdf_core::org_export::export_org_dot(&org);
+                fs::write(out, dot)?;
+            }
         }
     }
     Ok(())
 }
 
-fn run_export_ir(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
+fn run_export_ir(pdf: &str, format: &str, out: &PathBuf, enhanced: bool) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     let graph = sis_pdf_pdf::parse_pdf(
         &mmap,
@@ -1172,14 +1206,60 @@ fn run_export_ir(pdf: &str, format: &str, out: &PathBuf) -> Result<()> {
     )?;
     let ir_opts = sis_pdf_pdf::ir::IrOptions::default();
     let ir_objects = sis_pdf_pdf::ir::ir_for_graph(&graph.objects, &ir_opts);
-    match format {
-        "json" => {
-            let v = sis_pdf_core::ir_export::export_ir_json(&ir_objects);
-            fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+
+    if enhanced {
+        // Run detectors to get findings
+        let opts = sis_pdf_core::scan::ScanOptions {
+            deep: false,
+            max_decode_bytes: 32 * 1024 * 1024,
+            max_total_decoded_bytes: 256 * 1024 * 1024,
+            recover_xref: true,
+            parallel: false,
+            batch_parallel: false,
+            diff_parser: false,
+            max_objects: 500_000,
+            max_recursion_depth: 50,
+            fast: false,
+            focus_trigger: None,
+            yara_scope: None,
+            focus_depth: 5,
+            strict: false,
+            ir: false,
+            ml_config: None,
+        };
+        let detectors = sis_pdf_detectors::default_detectors_with_settings(
+            sis_pdf_detectors::DetectorSettings {
+                js_ast: true,
+                js_sandbox: false,
+            },
+        );
+        let report = sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts, &detectors)?;
+        let findings = &report.findings;
+
+        // Generate enhanced IR export
+        let enhanced_export = sis_pdf_core::ir_export::generate_enhanced_ir_export(&ir_objects, findings);
+
+        match format {
+            "json" => {
+                let v = sis_pdf_core::ir_export::export_enhanced_ir_json(&enhanced_export);
+                fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+            }
+            _ => {
+                let text = sis_pdf_core::ir_export::export_enhanced_ir_text(&enhanced_export);
+                fs::write(out, text)?;
+            }
         }
-        _ => {
-            let text = sis_pdf_core::ir_export::export_ir_text(&ir_objects);
-            fs::write(out, text)?;
+    } else {
+        // Basic IR export (no findings)
+        match format {
+            "json" => {
+                let v = sis_pdf_core::ir_export::export_ir_json(&ir_objects);
+                fs::write(out, serde_json::to_vec_pretty(&v)?)?;
+            }
+            _ => {
+                let text = sis_pdf_core::ir_export::export_ir_text(&ir_objects);
+                fs::write(out, text)?;
+            }
         }
     }
     Ok(())
