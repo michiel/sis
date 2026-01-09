@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use crate::model::{Finding, Severity, Confidence, AttackSurface, EvidenceSpan};
+use crate::ml::LinearModel;
 
 /// Feature attribution showing how much a feature contributed to the prediction
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1018,6 +1019,248 @@ pub fn generate_document_risk_profile(
         graph_paths,
         evidence_chains,
     }
+}
+
+// ============================================================================
+// Advanced Explainability (Phase 7)
+// ============================================================================
+
+/// Counterfactual change suggestion for a single feature
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterfactualChange {
+    pub feature_name: String,
+    pub from_value: f32,
+    pub to_value: f32,
+    pub delta: f32,
+    pub weight: f32,
+}
+
+/// Counterfactual explanation with proposed feature changes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterfactualExplanation {
+    pub original_score: f32,
+    pub target_score: f32,
+    pub achieved_score: f32,
+    pub changes: Vec<CounterfactualChange>,
+    pub notes: Vec<String>,
+}
+
+/// Temporal snapshot for incremental update analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporalSnapshot {
+    pub version_label: String,
+    pub score: f32,
+    pub high_severity_count: usize,
+    pub finding_count: usize,
+}
+
+/// Temporal explanation showing risk evolution across updates
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporalExplanation {
+    pub snapshots: Vec<TemporalSnapshot>,
+    pub score_delta: f32,
+    pub trend: String,
+    pub notable_changes: Vec<String>,
+}
+
+/// Feature interaction detected from co-occurring high-impact signals
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureInteraction {
+    pub feature_a: String,
+    pub feature_b: String,
+    pub interaction_score: f32,
+    pub summary: String,
+}
+
+/// Generate counterfactual feature changes for a linear model.
+///
+/// This focuses on reducing the score to the target by moving features toward
+/// benign baselines (or zero if no baseline is available).
+pub fn generate_counterfactual_linear(
+    model: &LinearModel,
+    feature_values: &[f32],
+    feature_names: &[String],
+    target_score: f32,
+    max_changes: usize,
+    baseline: Option<&BenignBaseline>,
+) -> CounterfactualExplanation {
+    let original_logit = linear_logit(model, feature_values);
+    let original_score = sigmoid(original_logit);
+    let target_logit = logit(target_score.clamp(0.0001, 0.9999));
+
+    let mut notes = Vec::new();
+    if target_logit >= original_logit {
+        notes.push("Target score is not lower than the current score.".to_string());
+        return CounterfactualExplanation {
+            original_score,
+            target_score,
+            achieved_score: original_score,
+            changes: Vec::new(),
+            notes,
+        };
+    }
+
+    let mut candidates = Vec::new();
+    for (idx, (name, &value)) in feature_names.iter().zip(feature_values).enumerate() {
+        let weight = model.weights.get(idx).copied().unwrap_or(0.0);
+        if weight <= 0.0 {
+            continue;
+        }
+        let baseline_value = baseline
+            .and_then(|b| b.feature_means.get(name).copied())
+            .unwrap_or(0.0);
+        if value <= baseline_value {
+            continue;
+        }
+        let delta = baseline_value - value;
+        let logit_change = weight * delta;
+        candidates.push((idx, logit_change, baseline_value));
+    }
+
+    candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut new_values = feature_values.to_vec();
+    let mut changes = Vec::new();
+    let mut current_logit = original_logit;
+    for (idx, logit_change, baseline_value) in candidates.into_iter().take(max_changes) {
+        if current_logit <= target_logit {
+            break;
+        }
+        let from_value = new_values[idx];
+        let to_value = baseline_value;
+        new_values[idx] = to_value;
+        current_logit += logit_change;
+        changes.push(CounterfactualChange {
+            feature_name: feature_names[idx].clone(),
+            from_value,
+            to_value,
+            delta: to_value - from_value,
+            weight: model.weights.get(idx).copied().unwrap_or(0.0),
+        });
+    }
+
+    let achieved_score = sigmoid(current_logit);
+    if achieved_score > target_score {
+        notes.push("Target score not reached with available changes.".to_string());
+    }
+
+    CounterfactualExplanation {
+        original_score,
+        target_score,
+        achieved_score,
+        changes,
+        notes,
+    }
+}
+
+/// Analyse temporal risk evolution from a sequence of snapshots.
+pub fn analyse_temporal_risk(samples: &[TemporalSnapshot]) -> TemporalExplanation {
+    if samples.is_empty() {
+        return TemporalExplanation {
+            snapshots: Vec::new(),
+            score_delta: 0.0,
+            trend: "no data".to_string(),
+            notable_changes: Vec::new(),
+        };
+    }
+
+    let first = samples.first().unwrap();
+    let last = samples.last().unwrap();
+    let score_delta = last.score - first.score;
+    let trend = if score_delta > 0.05 {
+        "increasing".to_string()
+    } else if score_delta < -0.05 {
+        "decreasing".to_string()
+    } else {
+        "stable".to_string()
+    };
+
+    let mut notable_changes = Vec::new();
+    for window in samples.windows(2) {
+        let prev = &window[0];
+        let next = &window[1];
+        let delta = next.score - prev.score;
+        if delta.abs() >= 0.1 {
+            notable_changes.push(format!(
+                "Score changed from {:.2} to {:.2} between {} and {}.",
+                prev.score, next.score, prev.version_label, next.version_label
+            ));
+        }
+        if next.high_severity_count > prev.high_severity_count {
+            notable_changes.push(format!(
+                "High-severity findings increased from {} to {} at {}.",
+                prev.high_severity_count, next.high_severity_count, next.version_label
+            ));
+        }
+    }
+
+    TemporalExplanation {
+        snapshots: samples.to_vec(),
+        score_delta,
+        trend,
+        notable_changes,
+    }
+}
+
+/// Detect interactions between strong outlier features based on z-scores.
+pub fn detect_feature_interactions(
+    feature_map: &HashMap<String, f32>,
+    baseline: &BenignBaseline,
+    max_pairs: usize,
+) -> Vec<FeatureInteraction> {
+    let mut outliers: Vec<(String, f32)> = Vec::new();
+    for (name, &value) in feature_map {
+        let mean = baseline.feature_means.get(name).copied().unwrap_or(0.0);
+        let stddev = baseline.feature_stddevs.get(name).copied().unwrap_or(0.0);
+        if stddev == 0.0 {
+            continue;
+        }
+        let z_score = (value - mean) / stddev;
+        if z_score.abs() >= 2.0 {
+            outliers.push((name.clone(), z_score));
+        }
+    }
+
+    let mut interactions = Vec::new();
+    for i in 0..outliers.len() {
+        for j in (i + 1)..outliers.len() {
+            let (ref a, za) = outliers[i];
+            let (ref b, zb) = outliers[j];
+            let score = za.abs() * zb.abs();
+            interactions.push(FeatureInteraction {
+                feature_a: a.clone(),
+                feature_b: b.clone(),
+                interaction_score: score,
+                summary: format!(
+                    "{} and {} are both extreme outliers (z-scores {:.1}, {:.1}).",
+                    humanize_feature_name(a),
+                    humanize_feature_name(b),
+                    za,
+                    zb
+                ),
+            });
+        }
+    }
+
+    interactions.sort_by(|a, b| b.interaction_score.partial_cmp(&a.interaction_score).unwrap());
+    interactions.truncate(max_pairs);
+    interactions
+}
+
+fn linear_logit(model: &LinearModel, feature_values: &[f32]) -> f32 {
+    let mut sum = model.bias;
+    for (w, x) in model.weights.iter().zip(feature_values.iter()) {
+        sum += w * x;
+    }
+    sum
+}
+
+fn logit(p: f32) -> f32 {
+    (p / (1.0 - p)).ln()
+}
+
+fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
 }
 
 /// Extract JavaScript risk profile from findings
@@ -2342,5 +2585,80 @@ mod tests {
 
         let pred_medium = calibrate_prediction(0.5, &calibrator);
         assert!(pred_medium.interpretation.contains("Possibly") || pred_medium.interpretation.contains("Likely"));
+    }
+
+    #[test]
+    fn test_generate_counterfactual_linear() {
+        let model = LinearModel {
+            bias: 0.0,
+            weights: vec![1.0, 0.5, -0.2],
+        };
+        let feature_names = vec![
+            "feature_a".to_string(),
+            "feature_b".to_string(),
+            "feature_c".to_string(),
+        ];
+        let feature_values = vec![2.0, 1.0, 0.0];
+
+        let mut baseline = BenignBaseline::default();
+        baseline.feature_means.insert("feature_a".to_string(), 0.0);
+        baseline.feature_means.insert("feature_b".to_string(), 0.0);
+
+        let cf = generate_counterfactual_linear(
+            &model,
+            &feature_values,
+            &feature_names,
+            0.2,
+            2,
+            Some(&baseline),
+        );
+
+        assert!(cf.achieved_score <= cf.original_score);
+        assert!(!cf.changes.is_empty());
+    }
+
+    #[test]
+    fn test_analyse_temporal_risk() {
+        let samples = vec![
+            TemporalSnapshot {
+                version_label: "v1".to_string(),
+                score: 0.2,
+                high_severity_count: 1,
+                finding_count: 5,
+            },
+            TemporalSnapshot {
+                version_label: "v2".to_string(),
+                score: 0.45,
+                high_severity_count: 2,
+                finding_count: 8,
+            },
+            TemporalSnapshot {
+                version_label: "v3".to_string(),
+                score: 0.6,
+                high_severity_count: 3,
+                finding_count: 10,
+            },
+        ];
+
+        let explanation = analyse_temporal_risk(&samples);
+        assert_eq!(explanation.trend, "increasing");
+        assert!(explanation.score_delta > 0.0);
+    }
+
+    #[test]
+    fn test_detect_feature_interactions() {
+        let mut baseline = BenignBaseline::default();
+        baseline.feature_means.insert("feature_a".to_string(), 0.0);
+        baseline.feature_stddevs.insert("feature_a".to_string(), 1.0);
+        baseline.feature_means.insert("feature_b".to_string(), 0.0);
+        baseline.feature_stddevs.insert("feature_b".to_string(), 1.0);
+
+        let mut feature_map = HashMap::new();
+        feature_map.insert("feature_a".to_string(), 3.0);
+        feature_map.insert("feature_b".to_string(), 2.5);
+
+        let interactions = detect_feature_interactions(&feature_map, &baseline, 5);
+        assert_eq!(interactions.len(), 1);
+        assert!(interactions[0].interaction_score > 0.0);
     }
 }
