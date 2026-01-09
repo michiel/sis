@@ -99,6 +99,10 @@ enum Command {
         ml_explain: bool,
         #[arg(long, help = "Include advanced ML explainability (counterfactuals and interactions)")]
         ml_advanced: bool,
+        #[arg(long, help = "Compute ML temporal analysis across incremental updates")]
+        ml_temporal: bool,
+        #[arg(long, help = "Compute non-ML temporal signals across incremental updates")]
+        temporal_signals: bool,
         #[arg(long, help = "Path to benign baseline JSON for explanations")]
         ml_baseline: Option<PathBuf>,
         #[arg(long, help = "Path to calibration model JSON")]
@@ -187,6 +191,10 @@ enum Command {
         ml_explain: bool,
         #[arg(long, help = "Include advanced ML explainability (counterfactuals and interactions)")]
         ml_advanced: bool,
+        #[arg(long, help = "Compute ML temporal analysis across incremental updates")]
+        ml_temporal: bool,
+        #[arg(long, help = "Compute non-ML temporal signals across incremental updates")]
+        temporal_signals: bool,
         #[arg(long, help = "Path to benign baseline JSON for explanations")]
         ml_baseline: Option<PathBuf>,
         #[arg(long, help = "Path to calibration model JSON")]
@@ -339,6 +347,8 @@ fn main() -> Result<()> {
             ml_extended_features,
             ml_explain,
             ml_advanced,
+            ml_temporal,
+            temporal_signals,
             ml_baseline,
             ml_calibration,
             no_js_ast,
@@ -379,6 +389,8 @@ fn main() -> Result<()> {
             ml_extended_features,
             ml_explain,
             ml_advanced,
+            ml_temporal,
+            temporal_signals,
             ml_baseline.as_deref(),
             ml_calibration.as_deref(),
             !no_js_ast,
@@ -437,6 +449,8 @@ fn main() -> Result<()> {
             ml_extended_features,
             ml_explain,
             ml_advanced,
+            ml_temporal,
+            temporal_signals,
             ml_baseline,
             ml_calibration,
             no_js_ast,
@@ -460,6 +474,8 @@ fn main() -> Result<()> {
             ml_extended_features,
             ml_explain,
             ml_advanced,
+            ml_temporal,
+            temporal_signals,
             ml_baseline.as_deref(),
             ml_calibration.as_deref(),
             !no_js_ast,
@@ -574,6 +590,8 @@ fn run_scan(
     ml_extended_features: bool,
     ml_explain: bool,
     ml_advanced: bool,
+    ml_temporal: bool,
+    temporal_signals: bool,
     ml_baseline: Option<&std::path::Path>,
     ml_calibration: Option<&std::path::Path>,
     js_ast: bool,
@@ -632,10 +650,12 @@ fn run_scan(
     let ml_inference_requested = ml_extended_features
         || ml_explain
         || ml_advanced
+        || ml_temporal
         || ml_baseline.is_some()
         || ml_calibration.is_some();
+    let temporal_requested = temporal_signals || ml_temporal;
     if let Some(dir) = path {
-        if ml_inference_requested {
+        if ml_inference_requested || temporal_requested {
             return Err(anyhow!("ML inference is not supported for batch scans"));
         }
         let batch_parallel = opts.batch_parallel;
@@ -679,6 +699,31 @@ fn run_scan(
             }
             Err(err) => {
                 eprintln!("warning: ml_inference_error: {}", err);
+            }
+        }
+    }
+    if temporal_requested {
+        let (temporal_summary, temporal_snapshots, temporal_explanation) =
+            run_temporal_analysis(
+                &mmap,
+                &opts,
+                &detectors,
+                ml_model_dir,
+                ml_threshold,
+                ml_extended_features,
+                ml_explain,
+                ml_baseline,
+                ml_calibration,
+                ml_temporal,
+            )?;
+        report = report
+            .with_temporal_signals(temporal_summary)
+            .with_temporal_snapshots(temporal_snapshots);
+        if let (Some(ml), Some(explanation)) =
+            (report.ml_inference.as_mut(), temporal_explanation)
+        {
+            if let Some(expl) = ml.explanation.as_mut() {
+                expl.temporal_analysis = Some(explanation);
             }
         }
     }
@@ -772,6 +817,74 @@ fn run_ml_inference_for_scan(
     };
     let ctx = build_scan_context(mmap, opts)?;
     sis_pdf_core::ml_inference::run_ml_inference(&ctx, &report.findings, &config)
+}
+
+fn run_temporal_analysis(
+    mmap: &[u8],
+    opts: &sis_pdf_core::scan::ScanOptions,
+    detectors: &[Box<dyn sis_pdf_core::detect::Detector>],
+    ml_model_dir: Option<&std::path::Path>,
+    ml_threshold: f32,
+    ml_extended_features: bool,
+    ml_explain: bool,
+    ml_baseline: Option<&std::path::Path>,
+    ml_calibration: Option<&std::path::Path>,
+    ml_temporal: bool,
+) -> Result<(
+    Option<sis_pdf_core::report::TemporalSignalSummary>,
+    Option<Vec<sis_pdf_core::explainability::TemporalSnapshot>>,
+    Option<sis_pdf_core::explainability::TemporalExplanation>,
+)> {
+    let mut opts_temporal = opts.clone();
+    opts_temporal.ml_config = None;
+    let scans = sis_pdf_core::temporal::build_versioned_scans(mmap, &opts_temporal, detectors)?;
+    let temporal_summary = Some(sis_pdf_core::temporal::build_temporal_signal_summary(&scans));
+
+    if !ml_temporal {
+        return Ok((temporal_summary, None, None));
+    }
+    if !ml_explain {
+        return Err(anyhow!("--ml-temporal requires --ml-explain"));
+    }
+    let model_path = ml_model_dir.ok_or_else(|| anyhow!("--ml-model-dir is required for ML temporal analysis"))?;
+    let baseline_path = ml_baseline.ok_or_else(|| anyhow!("--ml-temporal requires --ml-baseline"))?;
+
+    let config = sis_pdf_core::ml_inference::MlInferenceConfig {
+        model_path: model_path.to_path_buf(),
+        baseline_path: Some(baseline_path.to_path_buf()),
+        calibration_path: ml_calibration.map(|p| p.to_path_buf()),
+        threshold: ml_threshold,
+        explain: false,
+        use_extended_features: ml_extended_features || ml_baseline.is_some(),
+        explain_advanced: false,
+    };
+
+    let mut snapshots = Vec::new();
+    for scan in &scans {
+        let inference = sis_pdf_core::ml_inference::run_ml_inference(
+            &scan.context,
+            &scan.report.findings,
+            &config,
+        )?;
+        let high_severity = scan
+            .report
+            .findings
+            .iter()
+            .filter(|f| matches!(f.severity, sis_pdf_core::model::Severity::High | sis_pdf_core::model::Severity::Critical))
+            .count();
+        snapshots.push(sis_pdf_core::explainability::TemporalSnapshot {
+            version_label: scan.label.clone(),
+            score: inference.prediction.calibrated_score,
+            high_severity_count: high_severity,
+            finding_count: scan.report.findings.len(),
+        });
+    }
+
+    let temporal_explanation = Some(
+        sis_pdf_core::explainability::analyse_temporal_risk(&snapshots),
+    );
+
+    Ok((temporal_summary, Some(snapshots), temporal_explanation))
 }
 
 fn run_scan_single(
@@ -1425,6 +1538,8 @@ fn run_report(
     ml_extended_features: bool,
     ml_explain: bool,
     ml_advanced: bool,
+    ml_temporal: bool,
+    temporal_signals: bool,
     ml_baseline: Option<&std::path::Path>,
     ml_calibration: Option<&std::path::Path>,
     js_ast: bool,
@@ -1479,8 +1594,10 @@ fn run_report(
     let ml_inference_requested = ml_extended_features
         || ml_explain
         || ml_advanced
+        || ml_temporal
         || ml_baseline.is_some()
         || ml_calibration.is_some();
+    let temporal_requested = temporal_signals || ml_temporal;
     if ml_inference_requested {
         match run_ml_inference_for_scan(
             &mmap,
@@ -1499,6 +1616,31 @@ fn run_report(
             }
             Err(err) => {
                 eprintln!("warning: ml_inference_error: {}", err);
+            }
+        }
+    }
+    if temporal_requested {
+        let (temporal_summary, temporal_snapshots, temporal_explanation) =
+            run_temporal_analysis(
+                &mmap,
+                &opts,
+                &detectors,
+                ml_model_dir,
+                ml_threshold,
+                ml_extended_features,
+                ml_explain,
+                ml_baseline,
+                ml_calibration,
+                ml_temporal,
+            )?;
+        report = report
+            .with_temporal_signals(temporal_summary)
+            .with_temporal_snapshots(temporal_snapshots);
+        if let (Some(ml), Some(explanation)) =
+            (report.ml_inference.as_mut(), temporal_explanation)
+        {
+            if let Some(expl) = ml.explanation.as_mut() {
+                expl.temporal_analysis = Some(explanation);
             }
         }
     }

@@ -2,6 +2,7 @@ pub mod detect;
 pub mod features;
 pub mod features_extended;
 pub mod explainability;
+pub mod temporal;
 pub mod ml;
 pub mod ml_inference;
 pub mod ml_models;

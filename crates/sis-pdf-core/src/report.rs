@@ -46,6 +46,10 @@ pub struct Report {
     #[serde(default)]
     pub ml_inference: Option<crate::ml_inference::MlInferenceResult>,
     #[serde(default)]
+    pub temporal_signals: Option<TemporalSignalSummary>,
+    #[serde(default)]
+    pub temporal_snapshots: Option<Vec<crate::explainability::TemporalSnapshot>>,
+    #[serde(default)]
     pub sandbox_summary: Option<SandboxSummary>,
 }
 
@@ -112,6 +116,8 @@ impl Report {
             structural_summary,
             ml_summary,
             ml_inference: None,
+            temporal_signals: None,
+            temporal_snapshots: None,
             sandbox_summary: None,
         }
     }
@@ -131,6 +137,22 @@ impl Report {
         ml_inference: Option<crate::ml_inference::MlInferenceResult>,
     ) -> Self {
         self.ml_inference = ml_inference;
+        self
+    }
+
+    pub fn with_temporal_signals(
+        mut self,
+        temporal_signals: Option<TemporalSignalSummary>,
+    ) -> Self {
+        self.temporal_signals = temporal_signals;
+        self
+    }
+
+    pub fn with_temporal_snapshots(
+        mut self,
+        temporal_snapshots: Option<Vec<crate::explainability::TemporalSnapshot>>,
+    ) -> Self {
+        self.temporal_snapshots = temporal_snapshots;
         self
     }
 }
@@ -169,6 +191,16 @@ pub struct MlSummary {
     pub mode: Option<String>,
     pub graph: Option<MlRunSummary>,
     pub traditional: Option<MlRunSummary>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TemporalSignalSummary {
+    pub revisions: usize,
+    pub new_high_severity: usize,
+    pub new_attack_surfaces: Vec<String>,
+    pub removed_findings: Vec<String>,
+    pub new_findings: Vec<String>,
+    pub structural_deltas: Vec<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -391,6 +423,26 @@ pub fn print_human(report: &Report) {
             }
         }
     }
+    if let Some(signals) = &report.temporal_signals {
+        println!();
+        println!("Temporal signals");
+        println!("  Revisions: {}", signals.revisions);
+        if signals.new_high_severity > 0 {
+            println!("  New high-severity findings: {}", signals.new_high_severity);
+        }
+        if !signals.new_attack_surfaces.is_empty() {
+            println!(
+                "  New attack surfaces: {}",
+                signals.new_attack_surfaces.join(", ")
+            );
+        }
+        if !signals.new_findings.is_empty() {
+            println!("  New findings: {}", signals.new_findings.len());
+        }
+        if !signals.removed_findings.is_empty() {
+            println!("  Removed findings: {}", signals.removed_findings.len());
+        }
+    }
     if let Some(resource) = resource_risk_summary(&report.findings) {
         println!();
         println!("Resource risks");
@@ -445,6 +497,22 @@ pub fn print_jsonl(report: &Report) -> Result<()> {
             "explanation": ml.explanation,
         });
         println!("{}", serde_json::to_string(&record)?);
+    }
+    if let Some(signals) = &report.temporal_signals {
+        let record = serde_json::json!({
+            "type": "temporal_signal_summary",
+            "summary": signals,
+        });
+        println!("{}", serde_json::to_string(&record)?);
+    }
+    if let Some(snapshots) = &report.temporal_snapshots {
+        for snapshot in snapshots {
+            let record = serde_json::json!({
+                "type": "ml_temporal_snapshot",
+                "snapshot": snapshot,
+            });
+            println!("{}", serde_json::to_string(&record)?);
+        }
     }
     Ok(())
 }
@@ -1563,6 +1631,48 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
             ml.explanation.as_ref(),
             &ml.prediction,
         ));
+    }
+
+    if let Some(signals) = &report.temporal_signals {
+        out.push_str("## Temporal signals\n\n");
+        out.push_str(&format!(
+            "- Revisions: {}\n",
+            signals.revisions
+        ));
+        if signals.new_high_severity > 0 {
+            out.push_str(&format!(
+                "- New high-severity findings: {}\n",
+                signals.new_high_severity
+            ));
+        }
+        if !signals.new_attack_surfaces.is_empty() {
+            out.push_str(&format!(
+                "- New attack surfaces: {}\n",
+                escape_markdown(&signals.new_attack_surfaces.join(", "))
+            ));
+        }
+        if !signals.structural_deltas.is_empty() {
+            out.push_str("- Structural deltas:\n");
+            for delta in signals.structural_deltas.iter().take(5) {
+                out.push_str(&format!(
+                    "  - {}\n",
+                    escape_markdown(delta)
+                ));
+            }
+        }
+        if !signals.new_findings.is_empty() {
+            out.push_str(&format!(
+                "- New findings: {}\n",
+                signals.new_findings.len()
+            ));
+        }
+        if !signals.removed_findings.is_empty() {
+            out.push_str(&format!(
+                "- Removed findings: {}\n",
+                signals.removed_findings.len()
+            ));
+        }
+        out.push('\n');
     }
 
     if let Some(resource) = resource_risk_summary(&report.findings) {
