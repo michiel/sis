@@ -599,6 +599,7 @@ crates/sis-pdf-core/src/
 
 ## See Also
 
-- [ML Signals Plan](../plans/20260109-ml-signals-and-explainability.md)
+- [ML Signals Plan](../NEXT_STEPS.md)
+- [Risk Profiling and Calibration](risk-profiling.md)
 - [Finding Specifications](findings.md)
 - [Analysis Documentation](analysis.md)
