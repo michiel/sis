@@ -962,6 +962,27 @@ impl EmbeddedContentFeatures {
 
 use crate::scan::ScanContext;
 
+/// Get extended feature names (333 names)
+pub fn extended_feature_names() -> Vec<String> {
+    let mut names = crate::features::feature_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    names.extend(AttackSurfaceFeatures::feature_names());
+    names.extend(SeverityFeatures::feature_names());
+    names.extend(ConfidenceFeatures::feature_names());
+    names.extend(FindingPresenceFeatures::feature_names());
+    names.extend(FindingCountFeatures::feature_names());
+    names.extend(JsSignalFeatures::feature_names());
+    names.extend(UriSignalFeatures::feature_names());
+    names.extend(ContentSignalFeatures::feature_names());
+    names.extend(SupplyChainFeatures::feature_names());
+    names.extend(StructuralAnomalyFeatures::feature_names());
+    names.extend(CryptoFeatures::feature_names());
+    names.extend(EmbeddedContentFeatures::feature_names());
+    names
+}
+
 /// Extract extended features from scan context and findings
 pub fn extract_extended_features(
     ctx: &ScanContext,

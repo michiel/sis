@@ -1157,8 +1157,9 @@ fn run_export_org(pdf: &str, format: &str, out: &PathBuf, enhanced: bool) -> Res
         let findings = &report.findings;
 
         // Extract suspicious paths
-        let action_chains = sis_pdf_pdf::path_finder::find_all_action_chains(&typed_graph);
-        let path_explanation = sis_pdf_core::explainability::extract_suspicious_paths(&action_chains, findings);
+        let path_finder = typed_graph.path_finder();
+        let action_chains = path_finder.find_all_action_chains();
+        let path_explanation = sis_pdf_core::explainability::extract_suspicious_paths(&action_chains, findings, None);
 
         // Create enhanced export with paths
         let export = sis_pdf_core::org_export::OrgExportWithPaths::enhanced(org, path_explanation);
@@ -1349,11 +1350,12 @@ fn run_export_features(
     label: Option<&str>,
     format: &str,
     out: Option<&std::path::Path>,
+    extended: bool,
 ) -> Result<()> {
     if path.is_some() && pdf.is_some() {
         return Err(anyhow!("provide either a PDF path or --path, not both"));
     }
-    let opts = sis_pdf_core::scan::ScanOptions {
+    let opts_template = sis_pdf_core::scan::ScanOptions {
         deep,
         max_decode_bytes,
         max_total_decoded_bytes,
@@ -1423,7 +1425,17 @@ fn run_export_features(
     } else {
         Box::new(std::io::stdout())
     };
-    let names = sis_pdf_core::features::feature_names();
+
+    // Get feature names based on extended flag
+    let names = if extended {
+        sis_pdf_core::features_extended::extended_feature_names()
+    } else {
+        sis_pdf_core::features::feature_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+    };
+
     if format == "csv" {
         let mut header = String::from("path,label");
         for name in &names {
@@ -1433,16 +1445,59 @@ fn run_export_features(
         header.push('\n');
         writer.write_all(header.as_bytes())?;
     }
+
+    // For extended features, we need detectors
+    let detectors = if extended {
+        Some(sis_pdf_detectors::default_detectors_with_settings(
+            sis_pdf_detectors::DetectorSettings {
+                js_ast: true,
+                js_sandbox: false,
+            },
+        ))
+    } else {
+        None
+    };
+
     for path in paths {
         let path_str = path.display().to_string();
         let mmap = mmap_file(&path_str)?;
-        let fv = sis_pdf_core::features::FeatureExtractor::extract_from_bytes(&mmap, &opts)?;
+
+        let feature_vec = if extended {
+            // Clone opts for this iteration
+            let opts = opts_template;
+
+            // Run full scan to get findings
+            let report = sis_pdf_core::runner::run_scan_with_detectors(&mmap, opts, detectors.as_ref().unwrap())?;
+
+            // Parse PDF again to create ScanContext for feature extraction
+            let graph = sis_pdf_pdf::parse_pdf(
+                &mmap,
+                sis_pdf_pdf::ParseOptions {
+                    recover_xref: opts_template.recover_xref,
+                    deep: opts_template.deep,
+                    strict: opts_template.strict,
+                    max_objstm_bytes: opts_template.max_decode_bytes,
+                    max_objects: opts_template.max_objects,
+                    max_objstm_total_bytes: opts_template.max_total_decoded_bytes,
+                },
+            )?;
+            let ctx = sis_pdf_core::scan::ScanContext::new(&mmap, graph, opts_template);
+
+            // Extract extended features
+            let extended_fv = sis_pdf_core::features_extended::extract_extended_features(&ctx, &report.findings);
+            extended_fv.as_f32_vec()
+        } else {
+            // Basic feature extraction
+            let fv = sis_pdf_core::features::FeatureExtractor::extract_from_bytes(&mmap, &opts_template)?;
+            fv.as_f32_vec()
+        };
+
         match format {
             "jsonl" => {
                 let record = serde_json::json!({
                     "path": path_str,
                     "label": label,
-                    "features": fv,
+                    "features": feature_vec,
                 });
                 writer.write_all(serde_json::to_string(&record)?.as_bytes())?;
                 writer.write_all(b"\n")?;
@@ -1452,7 +1507,7 @@ fn run_export_features(
                 row.push_str(&path_str);
                 row.push(',');
                 row.push_str(label.unwrap_or(""));
-                for v in fv.as_f32_vec() {
+                for v in feature_vec {
                     row.push(',');
                     row.push_str(&format!("{:.6}", v));
                 }
