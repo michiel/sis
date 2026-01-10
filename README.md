@@ -39,108 +39,58 @@ Key goals:
 - Two-phase analysis: fast triage by default, deeper decoding on demand.
 - Deterministic, stable finding IDs with reproducible evidence pointers.
 
-## Workspace layout
-
-```
-sis-pdf/
-  Cargo.toml
-  crates/
-    sis-pdf-core/      Core scan pipeline, models, reporting
-    sis-pdf-pdf/       PDF parsing, object graph, decoding
-    sis-pdf-detectors/ Detection rules
-    sis-pdf-ml-graph/  Graph ML inference utilities
-    sis-pdf/           CLI front-end
-    js-analysis/       JavaScript static and dynamic analysis
-  docs/                Specifications and analysis documentation
-  scripts/
-    test_helpers/      Development test fixtures and helper code
-```
-
 ## Features
 
-Core analysis:
-- PDF parser with recovery scanning and optional strict deviation tracking.
-- Object graph with xref/trailer awareness and deep ObjStm expansion.
-- Stream decoding with filter tracking, decode ratio metrics, and evidence spans.
-- Stable, deterministic finding IDs with dual-source evidence spans.
-- Differential parsing using an independent parser for cross-checking.
+- Viewer-tolerant PDF parsing with strict deviation tracking.
+- Deep object stream expansion and robust stream decoding with evidence spans.
+- Stable, deterministic finding IDs with reproducible evidence pointers.
+- Action chain detection across PDF actions, JavaScript, embedded files, and rich media.
+- JavaScript malware detection with 72+ finding IDs (see `docs/findings.md`).
+- Human-readable reports plus JSON, JSONL, and SARIF outputs.
+- Optional ML scoring and graph inference with ONNX Runtime.
 
-Detection surfaces:
-- Actions: OpenAction, Additional Actions, Launch, GoToR, URI, SubmitForm.
-- JavaScript malware detection with comprehensive static analysis (72+ finding IDs):
-  - Shellcode detection, memory corruption primitives, exploit kit signatures.
-  - Ransomware patterns, resource exhaustion, code injection vectors.
-  - Anti-analysis techniques, data exfiltration, persistence mechanisms.
-  - Supply chain attacks, network abuse, steganography, polyglot files.
-  - See `docs/js-detection-*.md` and `docs/findings.md`.
-- Optional JavaScript sandboxing for runtime API intent (feature: `js-sandbox`).
-- Embedded files, filespecs, and rich media constructs (3D, sound, movie).
-- Linearisation anomalies, page tree mismatches, and annotation action chains.
-- Font embedding anomalies and ICC profile stream checks.
-- Form technologies: AcroForm and XFA.
-- Decoder risks and decompression ratio anomalies.
-- Crypto indicators: signatures, DSS structures, and encryption dictionaries.
-- Content heuristics: phishing cues, image-only pages, invisible text, overlay links.
-- Structural anomalies: missing header/EOF, stream length mismatches, xref conflicts.
+## Install
 
-Reporting and evidence:
-- Human-readable reports and Markdown reports with impacts and remediation.
-- JSON, JSONL, and SARIF outputs for automation and CI workflows.
-- YARA rule generation with action and payload metadata.
-- ML feature extraction and optional classifier scoring with explanations.
-- Temporal signals for incremental updates (ML and non-ML).
-- Action chain synthesis and chain templates.
-- Input path tracking in JSON and reports.
-- Strict parse deviations grouped in the Markdown report.
-
-CLI workflows:
-- `docs/scenarios.md` for end-to-end operator workflows.
-- `sis scan` for triage, deep scans, strict mode, and focused trigger scans.
-- `sis detect` for filtering files by findings (outputs only files with ALL specified findings).
-- `sis report` for full Markdown reporting, with optional output file.
-- `sis explain` for individual finding inspection with evidence previews.
-- `sis extract` for JavaScript and embedded files.
-- `sis export-graph` for chain export in DOT or JSON.
-- `sis export-features` for ML dataset feature extraction.
-- `sis scan --ml-explain` for ML explanations, `--ml-temporal` and `--temporal-signals` for revision analysis.
-- Batch scanning with `--path` and `--glob` plus batch summaries.
-- Batch scans are parallel by default; use `--sequential` (alias `--seq`) to disable.
-- `sis config init` to create a default config, `sis config verify` to validate runtime setup.
-- `sis ml-health` to validate ORT runtime availability and selected provider.
-
-Testing and fixtures:
-- Golden test fixtures for action and JavaScript findings.
-- Fixtures for signatures, encryption, ObjStm payloads, and strict deviations.
-- Hostile JavaScript payload fixtures using real VirusShare malware samples for validation.
-- Regression tests covering crypto, ObjStm expansion, strict mode, and JavaScript malware detection.
-- 100% crash-free analysis on hostile payloads.
-
-## Build
+Linux (x86_64) and macOS (arm64):
 
 ```
-cargo build
+curl -fsSL https://raw.githubusercontent.com/michiel/sis-pdf/main/scripts/install.sh | sh
 ```
 
-To enable JavaScript sandboxing for runtime behavior analysis:
+Windows (PowerShell):
 
 ```
-cargo build --features js-sandbox
+irm https://raw.githubusercontent.com/michiel/sis-pdf/main/scripts/install.ps1 | iex
 ```
 
-## Quick start
+Custom install directory:
+
+```
+SIS_INSTALL_DIR=/path/to/bin curl -fsSL https://raw.githubusercontent.com/michiel/sis-pdf/main/scripts/install.sh | sh
+```
+
+You can also download release binaries directly from GitHub releases.
+
+## Examples
 
 ```
 # Triage scan
 sis scan path/to/file.pdf
 
+# Deep scan with Markdown report
+sis report --deep path/to/file.pdf -o report.md
+
 # JSON report
 sis scan path/to/file.pdf --json
 
-# Deep scan (decodes selected streams)
-sis scan path/to/file.pdf --deep
+# Explain a finding
+sis explain path/to/file.pdf PDF.JS.OBFUSCATION.001
 
-# Export features for ML pipelines
-sis export-features --path samples --glob "*.pdf" --format jsonl -o features.jsonl
+# Extract JavaScript
+sis extract js path/to/file.pdf -o extracted.js
+
+# Validate ML runtime
+sis ml-health --ml-provider auto --ml-provider-info
 ```
 
 ## Configuration
@@ -150,7 +100,14 @@ Config defaults to the platform user config directory, or pass `--config=PATH`.
 ```
 Linux:   ~/.config/sis/config.toml
 macOS:   ~/Library/Application Support/sis/config.toml
-Windows: %APPDATA%\\sis\\config.toml
+Windows: %APPDATA%\sis\config.toml
+```
+
+Generate a default config and validate it:
+
+```
+sis config init
+sis config verify
 ```
 
 Example (TOML):
@@ -169,49 +126,16 @@ ml_ort_dylib = "/path/to/libonnxruntime.so"
 ml_provider_info = true
 ```
 
-## Tests
+## Updates
 
 ```
-cargo test
+sis update
 ```
 
-## Fuzzing
+Or re-run the install script to pull the latest release.
 
-Install cargo-fuzz:
+## Documentation
 
-```
-cargo install cargo-fuzz
-```
-
-List targets:
-
-```
-cd fuzz
-cargo fuzz list
-```
-
-Run a target (examples):
-
-```
-cargo fuzz run lexer
-cargo fuzz run parser
-cargo fuzz run graph
-cargo fuzz run objstm
-cargo fuzz run decode_streams
-```
-
-Note: cargo-fuzz requires nightly (`cargo +nightly fuzz run graph`).
-
-To use a custom corpus, pass a directory path:
-
-```
-cargo fuzz run parser fuzz/corpus/parser
-```
-
-## Status
-
-This is a working implementation aligned to the spec in `docs/sis-pdf-spec.md`. It focuses on parsing correctness, evidence spans, and a practical rule set.
-
-JavaScript malware detection includes comprehensive static analysis across 22 malware categories with ~95% coverage of known PDF JavaScript malware patterns. See `docs/js-detection-roadmap.md` for implementation details and future enhancements.
-
-Expect iterative hardening and expansion.
+- Operator scenarios: `docs/scenarios.md`
+- JavaScript detection catalogue: `docs/findings.md`
+- Development notes and workspace details: `README-DEV.md`
