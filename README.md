@@ -35,7 +35,7 @@ _Smiley Is Suspicious_ (`sis`) is a PDF analyser that inventories PDF attack sur
 
 Key goals:
 - Viewer-tolerant parsing with recovery scanning for malformed PDFs.
-- Evidence spans for both raw file bytes and decoded artifacts.
+- Evidence spans for raw bytes and decoded artefacts.
 - Two-phase analysis: fast triage by default, deeper decoding on demand.
 - Deterministic, stable finding IDs with reproducible evidence pointers.
 
@@ -60,27 +60,27 @@ sis-pdf/
 
 Core analysis:
 - PDF parser with recovery scanning and optional strict deviation tracking.
-- Object graph with xref and trailer awareness plus deep object stream expansion.
+- Object graph with xref/trailer awareness and deep ObjStm expansion.
 - Stream decoding with filter tracking, decode ratio metrics, and evidence spans.
 - Stable, deterministic finding IDs with dual-source evidence spans.
 - Differential parsing using an independent parser for cross-checking.
 
 Detection surfaces:
 - Actions: OpenAction, Additional Actions, Launch, GoToR, URI, SubmitForm.
-- JavaScript malware detection with comprehensive static analysis (73 detection functions, 72 finding IDs):
+- JavaScript malware detection with comprehensive static analysis (72+ finding IDs):
   - Shellcode detection, memory corruption primitives, exploit kit signatures.
   - Ransomware patterns, resource exhaustion, code injection vectors.
   - Anti-analysis techniques, data exfiltration, persistence mechanisms.
   - Supply chain attacks, network abuse, steganography, polyglot files.
-  - ~95% coverage of known PDF JavaScript malware patterns (see `docs/js-detection-*.md`).
+  - See `docs/js-detection-*.md` and `docs/findings.md`.
 - Optional JavaScript sandboxing for runtime API intent (feature: `js-sandbox`).
 - Embedded files, filespecs, and rich media constructs (3D, sound, movie).
-- Linearization anomalies, page tree mismatches, and annotation action chains.
+- Linearisation anomalies, page tree mismatches, and annotation action chains.
 - Font embedding anomalies and ICC profile stream checks.
 - Form technologies: AcroForm and XFA.
 - Decoder risks and decompression ratio anomalies.
 - Crypto indicators: signatures, DSS structures, and encryption dictionaries.
-- Content heuristics: phishing cues, image-only pages, invisible text, and overlay links.
+- Content heuristics: phishing cues, image-only pages, invisible text, overlay links.
 - Structural anomalies: missing header/EOF, stream length mismatches, xref conflicts.
 
 Reporting and evidence:
@@ -105,6 +105,8 @@ CLI workflows:
 - `sis scan --ml-explain` for ML explanations, `--ml-temporal` and `--temporal-signals` for revision analysis.
 - Batch scanning with `--path` and `--glob` plus batch summaries.
 - Batch scans are parallel by default; use `--sequential` (alias `--seq`) to disable.
+- `sis config init` to create a default config, `sis config verify` to validate runtime setup.
+- `sis ml-health` to validate ORT runtime availability and selected provider.
 
 Testing and fixtures:
 - Golden test fixtures for action and JavaScript findings.
@@ -143,11 +145,28 @@ sis export-features --path samples --glob "*.pdf" --format jsonl -o features.jso
 
 ## Configuration
 
-Batch scan parallelism can be enabled in config:
+Config defaults to the platform user config directory, or pass `--config=PATH`.
 
-```yaml
-scan:
-  batch_parallel: false
+```
+Linux:   ~/.config/sis/config.toml
+macOS:   ~/Library/Application Support/sis/config.toml
+Windows: %APPDATA%\\sis\\config.toml
+```
+
+Example (TOML):
+
+```toml
+[logging]
+level = "warn"
+
+[scan]
+deep = true
+parallel = true
+
+ml_provider = "auto" # auto, cpu, cuda, migraphx, rocm, directml, coreml, onednn, openvino
+ml_provider_order = ["migraphx", "cuda", "cpu"]
+ml_ort_dylib = "/path/to/libonnxruntime.so"
+ml_provider_info = true
 ```
 
 ## Tests
@@ -181,6 +200,8 @@ cargo fuzz run objstm
 cargo fuzz run decode_streams
 ```
 
+Note: cargo-fuzz requires nightly (`cargo +nightly fuzz run graph`).
+
 To use a custom corpus, pass a directory path:
 
 ```
@@ -191,6 +212,6 @@ cargo fuzz run parser fuzz/corpus/parser
 
 This is a working implementation aligned to the spec in `docs/sis-pdf-spec.md`. It focuses on parsing correctness, evidence spans, and a practical rule set.
 
-JavaScript malware detection includes comprehensive static analysis with 73 detection functions covering 22 malware categories, providing ~95% coverage of known PDF JavaScript malware patterns. See `docs/js-detection-roadmap.md` for implementation details and future enhancements.
+JavaScript malware detection includes comprehensive static analysis across 22 malware categories with ~95% coverage of known PDF JavaScript malware patterns. See `docs/js-detection-roadmap.md` for implementation details and future enhancements.
 
 Expect iterative hardening and expansion.
