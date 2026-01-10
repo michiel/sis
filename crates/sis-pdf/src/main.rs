@@ -41,7 +41,10 @@ enum Command {
     #[command(subcommand)]
     Config(ConfigCommand),
     #[command(about = "Update sis from the latest GitHub release")]
-    Update,
+    Update {
+        #[arg(long, help = "Include prerelease builds when checking for updates")]
+        include_prerelease: bool,
+    },
     #[command(about = "Scan PDFs for suspicious indicators and report findings")]
     Scan {
         #[arg(value_name = "PDF", required_unless_present = "path")]
@@ -399,7 +402,9 @@ fn main() -> Result<()> {
             ConfigCommand::Init { path } => run_config_init(path.as_deref()),
             ConfigCommand::Verify { path } => run_config_verify(path.as_deref()),
         },
-        Command::Update => run_update(),
+        Command::Update {
+            include_prerelease,
+        } => run_update(include_prerelease),
         Command::Scan {
             pdf,
             path,
@@ -706,6 +711,10 @@ fn resolve_config_path(config: Option<&std::path::Path>) -> Option<PathBuf> {
 }
 
 fn default_config_path() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        return dirs::home_dir().map(|dir| dir.join(".config").join("sis").join("config.toml"));
+    }
     dirs::config_dir().map(|dir| dir.join("sis").join("config.toml"))
 }
 
@@ -750,6 +759,8 @@ struct Release {
     assets: Vec<ReleaseAsset>,
     #[serde(default)]
     draft: bool,
+    #[serde(default)]
+    prerelease: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -763,7 +774,7 @@ enum ArchiveFormat {
     Zip,
 }
 
-fn run_update() -> Result<()> {
+fn run_update(include_prerelease: bool) -> Result<()> {
     let (owner, repo) = github_repo()?;
     let (target, archive_format, bin_name) = current_release_target()?;
     let ext = match archive_format {
@@ -771,7 +782,11 @@ fn run_update() -> Result<()> {
         ArchiveFormat::Zip => "zip",
     };
     let suffix = format!("-{target}.{ext}");
-    let (release, asset) = fetch_release_with_asset(&owner, &repo, &suffix)?;
+    let (release, asset) = fetch_release_with_asset(&owner, &repo, &suffix, include_prerelease)?;
+    if is_up_to_date(&release.tag_name) {
+        eprintln!("sis is already up to date ({})", release.tag_name);
+        return Ok(());
+    }
     eprintln!("Downloading {}", asset.name);
     let temp_dir = tempdir()?;
     let archive_path = temp_dir.path().join(&asset.name);
@@ -782,6 +797,7 @@ fn run_update() -> Result<()> {
         .into_reader();
     let mut out = fs::File::create(&archive_path)?;
     std::io::copy(&mut reader, &mut out)?;
+    verify_release_checksum(&release, &asset, &archive_path)?;
     let extract_dir = temp_dir.path().join("extract");
     fs::create_dir_all(&extract_dir)?;
     match archive_format {
@@ -798,6 +814,7 @@ fn fetch_release_with_asset(
     owner: &str,
     repo: &str,
     suffix: &str,
+    include_prerelease: bool,
 ) -> Result<(Release, ReleaseAsset)> {
     let latest_url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
     if let Ok(release) = fetch_release(&latest_url) {
@@ -809,6 +826,9 @@ fn fetch_release_with_asset(
     let releases = fetch_release_list(&list_url)?;
     for release in releases {
         if release.draft {
+            continue;
+        }
+        if release.prerelease && !include_prerelease {
             continue;
         }
         if let Some(asset) = find_release_asset(&release, suffix) {
@@ -840,6 +860,108 @@ fn find_release_asset(release: &Release, suffix: &str) -> Option<ReleaseAsset> {
         .iter()
         .find(|asset| asset.name.starts_with("sis-") && asset.name.ends_with(suffix))
         .cloned()
+}
+
+fn is_up_to_date(tag: &str) -> bool {
+    let current = env!("CARGO_PKG_VERSION");
+    let trimmed = tag.strip_prefix('v').unwrap_or(tag);
+    trimmed == current
+}
+
+fn verify_release_checksum(
+    release: &Release,
+    asset: &ReleaseAsset,
+    archive_path: &std::path::Path,
+) -> Result<()> {
+    let Some(checksum_asset) = find_checksum_asset(release) else {
+        warn!(
+            asset = %asset.name,
+            "Release does not include checksum asset; skipping verification"
+        );
+        return Ok(());
+    };
+    let mut reader = ureq::get(&checksum_asset.browser_download_url)
+        .set("User-Agent", UPDATE_USER_AGENT)
+        .call()
+        .map_err(|err| anyhow!("failed to download {}: {err}", checksum_asset.name))?
+        .into_reader();
+    let mut contents = String::new();
+    reader.read_to_string(&mut contents)?;
+    let Some(expected) = parse_checksum(&contents, &asset.name) else {
+        return Err(anyhow!(
+            "checksum file {} does not include {}",
+            checksum_asset.name,
+            asset.name
+        ));
+    };
+    let actual = sha256_file(archive_path)?;
+    if expected != actual {
+        return Err(anyhow!(
+            "checksum mismatch for {} (expected {}, got {})",
+            asset.name,
+            expected,
+            actual
+        ));
+    }
+    eprintln!("Verified checksum for {}", asset.name);
+    Ok(())
+}
+
+fn find_checksum_asset(release: &Release) -> Option<ReleaseAsset> {
+    let tag = release.tag_name.as_str();
+    let preferred = format!("sis-{tag}-checksums.txt");
+    if let Some(asset) = release.assets.iter().find(|asset| asset.name == preferred) {
+        return Some(asset.clone());
+    }
+    release
+        .assets
+        .iter()
+        .find(|asset| {
+            let name = asset.name.to_lowercase();
+            (name.contains("checksum") || name.contains("sha256"))
+                && (name.ends_with(".txt") || name.ends_with(".sha256"))
+        })
+        .cloned()
+}
+
+fn parse_checksum(contents: &str, asset_name: &str) -> Option<String> {
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || !line.contains(asset_name) {
+            continue;
+        }
+        for token in line.split_whitespace() {
+            let token = token.trim_start_matches('*').trim();
+            if is_hex_64(token) {
+                return Some(token.to_lowercase());
+            }
+        }
+        if let Some(hash) = line.strip_prefix("sha256:") {
+            let hash = hash.trim();
+            if is_hex_64(hash) {
+                return Some(hash.to_lowercase());
+            }
+        }
+    }
+    None
+}
+
+fn is_hex_64(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn sha256_file(path: &std::path::Path) -> Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let read = file.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn github_repo() -> Result<(String, String)> {
@@ -932,7 +1054,12 @@ fn install_update(new_bin: &std::path::Path) -> Result<()> {
         stage_windows_update(new_bin, &current_exe)?;
         return Ok(());
     }
-    fs::copy(new_bin, &current_exe)?;
+    fs::copy(new_bin, &current_exe).map_err(|err| {
+        anyhow!(
+            "failed to replace {}: {err}. Try reinstalling via scripts/install.sh or update permissions.",
+            current_exe.display()
+        )
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -951,7 +1078,10 @@ fn stage_windows_update(new_bin: &std::path::Path, current_exe: &std::path::Path
         staged.display(),
         current_exe.display()
     );
-    ProcessCommand::new("cmd").args(["/C", &command]).spawn()?;
+    ProcessCommand::new("cmd")
+        .args(["/C", &command])
+        .spawn()
+        .map_err(|err| anyhow!("failed to stage update: {err}"))?;
     eprintln!("Update staged; restart the shell to pick up the new binary.");
     Ok(())
 }

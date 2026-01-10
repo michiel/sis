@@ -15,6 +15,9 @@ $ext = "zip"
 
 $apiUrl = "https://api.github.com/repos/$repo/releases?per_page=20"
 $releases = Invoke-RestMethod -Headers @{"User-Agent" = "sis-install"} -Uri $apiUrl
+if ($releases -is [System.Collections.IDictionary] -and $releases.message) {
+  throw "GitHub API error: $($releases.message)"
+}
 $suffix = "-$target.$ext"
 $release = $null
 $asset = $null
@@ -22,7 +25,7 @@ foreach ($entry in $releases) {
   if ($entry.draft) {
     continue
   }
-  $candidate = $entry.assets | Where-Object { $_.name -like "sis-*$suffix" } | Select-Object -First 1
+  $candidate = $entry.assets | Where-Object { $_.name -like "sis-*$suffix" -and $_.browser_download_url } | Select-Object -First 1
   if ($candidate) {
     $release = $entry
     $asset = $candidate

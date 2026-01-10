@@ -99,7 +99,7 @@ Config defaults to the platform user config directory, or pass `--config=PATH`.
 
 ```
 Linux:   ~/.config/sis/config.toml
-macOS:   ~/Library/Application Support/sis/config.toml
+macOS:   ~/.config/sis/config.toml
 Windows: %APPDATA%\sis\config.toml
 ```
 
@@ -133,6 +133,12 @@ sis update
 ```
 
 Or re-run the install script to pull the latest release.
+
+To include prerelease builds:
+
+```
+sis update --include-prerelease
+```
 
 ## Documentation
 

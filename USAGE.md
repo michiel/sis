@@ -121,7 +121,7 @@ RUST_LOG=sis_pdf=debug,sis_pdf_core=trace,sis_pdf_pdf=trace sis scan suspicious.
 
 By default, `sis` looks for a config file at:
 - Linux: `~/.config/sis/config.toml`
-- macOS: `~/Library/Application Support/sis/config.toml`
+- macOS: `~/.config/sis/config.toml`
 - Windows: `%APPDATA%\\sis\\config.toml`
 
 Override the config path:

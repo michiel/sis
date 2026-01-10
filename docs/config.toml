@@ -1,7 +1,7 @@
 # sis configuration (TOML)
 # Default path (when --config is not supplied):
 # - Linux:   ~/.config/sis/config.toml
-# - macOS:   ~/Library/Application Support/sis/config.toml
+# - macOS:   ~/.config/sis/config.toml
 # - Windows: %APPDATA%\sis\config.toml
 
 [logging]
