@@ -7,4 +7,7 @@ members = [
   "crates/sis-pdf-ml-graph",
   "crates/sis-pdf",
 ]
+exclude = [
+  "fuzz",
+]
 resolver = "2"

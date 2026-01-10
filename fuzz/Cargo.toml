@@ -12,3 +12,39 @@ debug = true
 
 [package.metadata]
 cargo-fuzz = true
+
+[[bin]]
+name = "decoder"
+path = "fuzz_targets/decoder.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "decode_streams"
+path = "fuzz_targets/decode_streams.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "graph"
+path = "fuzz_targets/graph.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "lexer"
+path = "fuzz_targets/lexer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "objstm"
+path = "fuzz_targets/objstm.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parser"
+path = "fuzz_targets/parser.rs"
+test = false
+doc = false
