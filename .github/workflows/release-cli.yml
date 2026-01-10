@@ -35,7 +35,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build CLI
-        run: cargo build --release -p sis-pdf --bin sis --target ${{ matrix.target }}
+        run: cargo build --release -p sis-pdf --bin sis --target ${{ matrix.target }} --features ml-graph
 
       - name: Package (linux/macos)
         if: runner.os != 'Windows'
