@@ -51,22 +51,30 @@ suffix="-$target.$ext"
 read -r tag url <<EOF_META
 $(printf "%s" "$release_json" | awk -v suffix="$suffix" '
   /"tag_name":/ {
-    tag=$2
-    gsub(/"|,/, "", tag)
+    if (match($0, /"tag_name":[[:space:]]*"[^"]+"/)) {
+      tag = substr($0, RSTART, RLENGTH)
+      sub(/.*"tag_name":[[:space:]]*"/, "", tag)
+      sub(/".*/, "", tag)
+    }
   }
   /"draft":/ {
-    draft=$2
-    gsub(/,/, "", draft)
-    skip=(draft=="true")
+    if ($0 ~ /"draft":[[:space:]]*true/) {
+      skip=1
+    } else if ($0 ~ /"draft":[[:space:]]*false/) {
+      skip=0
+    }
   }
   /"browser_download_url":/ {
     if (skip) { next }
     if ($0 ~ suffix && $0 ~ /sis-/) {
-      url=$2
-      gsub(/"|,/, "", url)
-      print tag
-      print url
-      exit
+      if (match($0, /"browser_download_url":[[:space:]]*"[^"]+"/)) {
+        url = substr($0, RSTART, RLENGTH)
+        sub(/.*"browser_download_url":[[:space:]]*"/, "", url)
+        sub(/".*/, "", url)
+        print tag
+        print url
+        exit
+      }
     }
   }
 ')
