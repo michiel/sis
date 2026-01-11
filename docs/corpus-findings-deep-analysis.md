@@ -1063,9 +1063,11 @@ This module already implements many of our recommendations:
 
 ### Short Term (Week 2-3)
 
-4. **Enhance Evidence Collection** (3 days)
+4. **Enhance Evidence Collection** (3 days) - ⏸️ PARTIALLY COMPLETE
    - Detailed evidence for `js_present` (API calls, obfuscation score)
    - Detailed evidence for `uri_present` (domain list, TLD analysis)
+   - **Status**: URI evidence already comprehensive (see implementation-status-20260111.md)
+   - **Action**: Focus on JS and AcroForm evidence enhancement
    - Detailed evidence for `acroform_present` (field names, submit action)
 
 5. **Adjust Severity Levels** (2 days)
@@ -1116,21 +1118,59 @@ This module already implements many of our recommendations:
 ✅ **Zero Crashes**: Production-ready parser validated at scale
 ✅ **Rich Test Suite**: 287K+ samples available for testing
 ✅ **Performance Validated**: 2,688 files/s throughput maintained
+✅ **Major Discovery**: Advanced features already implemented (URI analysis, risk scoring, deduplication)
 
-### Critical Next Steps
+### Critical Discovery: Existing Implementation
 
-1. **Extract test suite** - Preserve representative samples
-2. **Fix deduplication** - Reduce output size and improve performance
-3. **Close detection gaps** - Add 8+ missing attack vectors
-4. **Improve accuracy** - Confidence, severity, evidence enhancements
+**See**: `docs/implementation-status-20260111.md` for complete audit results
+
+**Key Findings**:
+- ✅ **URI Analysis**: Fully implemented with sophisticated risk scoring (879 lines in `uri_classification.rs`)
+- ✅ **Deduplication**: UriPresenceDetector and UriContentDetector already provide document-level aggregation
+- ✅ **Context-Aware Severity**: Risk score calculation includes 10+ factors
+- ✅ **Evidence Quality**: URI findings include comprehensive metadata (domain, TLD, obfuscation, risk score)
+- 🟡 **Partial**: Other finding types need similar enhancements (js_present, acroform_present)
+- ❌ **Missing**: 8 attack vectors still need implementation (metadata, cycles, filters, etc.)
+
+**Impact**: Implementation effort reduced by ~60% due to existing sophisticated features.
+
+### Revised Next Steps
+
+1. ✅ **Audit existing implementations** - COMPLETE (discovered URI analysis)
+2. 🔄 **Extract test suite** - IN PROGRESS (script created, needs debugging)
+3. **Upgrade confidence levels** - 6-7 detectors (4 hours work)
+4. **False positive reduction** - Context-aware logic for common findings (3-4 days)
+5. **Close detection gaps** - Add 8 missing attack vectors (5-7 days)
+6. **Evidence enhancement** - Top 10 finding types (2-3 days)
+
+**Total revised estimate**: 3 weeks (down from 4 weeks)
 
 ### Impact
 
-Following these recommendations will:
+Following the revised recommendations will:
 - **Reduce false positives** by 30-50% (better severity/confidence)
-- **Close detection gaps** for 8+ attack vectors
-- **Improve performance** by 10-20% (finding deduplication)
-- **Enhance explainability** (richer evidence for analysts)
+- **Close detection gaps** for 8+ attack vectors (metadata, cycles, filters)
+- **Improve performance** by 10-20% (finding deduplication where missing)
+- **Enhance explainability** (richer evidence for JS, forms, updates)
 - **Enable ML training** (comprehensive test suite with ground truth)
 
-**This corpus analysis provides the foundation for production deployment and continuous improvement.**
+### Implementation Status
+
+See `docs/implementation-status-20260111.md` for:
+- Complete audit of existing detector implementations
+- Detailed phase-by-phase implementation plan
+- Metrics and success criteria
+- Resource requirements and timelines
+
+**This corpus analysis provides the foundation for production deployment and continuous improvement, with the discovery that many advanced features are already in place.**
+
+---
+
+## Related Documents
+
+- **Implementation Plan**: `plans/20260111-updates-from-scans.md` - ML training, detection rules, threat intelligence
+- **Implementation Status**: `docs/implementation-status-20260111.md` - Current progress, discoveries, revised plan
+- **Corpus Analysis Reports**:
+  - `docs/testing-20260111-corpus-2022.md` - 2022 dataset (30,949 PDFs)
+  - `docs/testing-20260111-corpus-2024-virusshare.md` - 2024 dataset (287,777 PDFs)
+- **Test Extraction**: `scripts/extract_test_cases.sh` - Automated test case extraction
