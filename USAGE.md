@@ -220,6 +220,17 @@ Download the ONNX Runtime dynamic library for this host:
 sis ml ort download --write-config
 ```
 
+Checksum verification is automatic:
+- Embedded checksums for known versions are used when available
+- If no checksum is available, the tool will compute the SHA256, display it, and prompt for confirmation
+- You can override with manual checksum verification:
+
+```
+sis ml ort download --checksum-url https://mirror.example/onnxruntime-linux-x64-rocm-1.17.3.tgz.sha256
+sis ml ort download --checksum-file /path/to/onnxruntime.sha256
+sis ml ort download --checksum-sha256 <sha256>
+```
+
 Auto-configure ML runtime settings:
 
 ```
