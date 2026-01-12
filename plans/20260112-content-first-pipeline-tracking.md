@@ -17,21 +17,21 @@
 
 ## Phase 3 — Script expansion
 
-- [ ] Add script text classifiers (VBScript, PowerShell, bash, cmd, AppleScript)
-- [ ] Add XFA/XML `<script>` detection
-- [ ] Emit `vbscript_payload_present`, `powershell_payload_present`, `xfa_script_present`
+- [x] Add script text classifiers (VBScript, PowerShell, bash, cmd, AppleScript)
+- [x] Add XFA/XML `<script>` detection
+- [x] Emit `vbscript_payload_present`, `powershell_payload_present`, `xfa_script_present`
 
 ## Phase 4 — SWF/ActionScript deep scan
 
-- [ ] Parse SWF tags and detect `DoABC` / `DoABC2`
-- [ ] Extract strings and IOCs
-- [ ] Emit `actionscript_present`, `swf_url_iocs`
+- [x] Parse SWF tags and detect `DoABC` / `DoABC2`
+- [x] Extract strings and IOCs
+- [x] Emit `actionscript_present`, `swf_url_iocs`
 
 ## Phase 5 — Structural hardening and multi-parse reconciliation
 
-- [ ] Add carve-based parser mode and object provenance
-- [ ] Analyse shadow objects automatically
-- [ ] Emit `shadow_object_payload_divergence`, `parse_disagreement`
+- [x] Add carve-based parser mode and object provenance
+- [x] Analyse shadow objects automatically
+- [x] Emit `shadow_object_payload_divergence`, `parse_disagreement`
 
 ## Phase 6 — Benchmark harness
 

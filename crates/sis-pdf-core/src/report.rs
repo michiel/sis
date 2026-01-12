@@ -1272,6 +1272,16 @@ fn runtime_effect_for_finding(f: &Finding) -> String {
         "launch_action_present" => "External application launch is possible, increasing risk of system compromise.".into(),
         "submitform_present" => "Form data may be transmitted to remote endpoints.".into(),
         "embedded_file_present" | "filespec_present" => "Embedded files can be extracted or opened by the user or viewer.".into(),
+        "vbscript_payload_present"
+        | "powershell_payload_present"
+        | "bash_payload_present"
+        | "cmd_payload_present"
+        | "applescript_payload_present"
+        | "xfa_script_present"
+        | "actionscript_present"
+        | "swf_url_iocs" => {
+            "Script payload indicators suggest executable content that may run in viewer or host contexts.".into()
+        }
         "decoder_risk_present" | "decompression_ratio_suspicious" | "huge_image_dimensions" => {
             "Decoding may trigger resource exhaustion or vulnerable parser paths during rendering.".into()
         }
@@ -1285,6 +1295,8 @@ fn runtime_effect_for_finding(f: &Finding) -> String {
         | "content_validation_failed"
         | "embedded_payload_carved"
         | "nested_container_chain"
+        | "shadow_object_payload_divergence"
+        | "parse_disagreement"
         | "stream_length_mismatch"
         | "missing_pdf_header"
         | "missing_eof_marker"
@@ -1650,6 +1662,38 @@ pub(crate) fn impact_for_finding(f: &Finding) -> String {
         "nested_container_chain" => {
             "Archive entries contain nested file signatures, indicating staged or hidden payload delivery."
                 .into()
+        }
+        "shadow_object_payload_divergence" => {
+            "Shadowed object revisions differ in payload signatures, suggesting hidden or conflicting content."
+                .into()
+        }
+        "parse_disagreement" => {
+            "Carved objects disagree with parsed revisions, indicating parsing ambiguity or hidden content."
+                .into()
+        }
+        "vbscript_payload_present" => {
+            "VBScript indicators suggest embedded script content that may execute in viewer contexts.".into()
+        }
+        "powershell_payload_present" => {
+            "PowerShell indicators suggest a potential external script payload or dropper.".into()
+        }
+        "bash_payload_present" => {
+            "Shell script indicators suggest command execution content.".into()
+        }
+        "cmd_payload_present" => {
+            "Command shell indicators suggest direct command execution content.".into()
+        }
+        "applescript_payload_present" => {
+            "AppleScript indicators suggest macOS automation or execution content.".into()
+        }
+        "xfa_script_present" => {
+            "XFA/XML script tags increase executable surface inside form content.".into()
+        }
+        "actionscript_present" => {
+            "SWF ActionScript bytecode indicates executable content embedded in the document.".into()
+        }
+        "swf_url_iocs" => {
+            "SWF payloads contain URLs, suggesting external references or staged delivery.".into()
         }
         "embedded_file_present" | "filespec_present" => {
             "Embedded files and file specifications can deliver secondary payloads or hidden content."
