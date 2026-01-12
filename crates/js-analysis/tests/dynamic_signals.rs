@@ -35,6 +35,28 @@ fn sandbox_exec_records_calls() {
     }
 }
 
+#[cfg(feature = "js-sandbox")]
+#[test]
+fn sandbox_handles_app_doc_annots_payload() {
+    let options = DynamicOptions::default();
+    let payload = b"var z; var y; z = y = app.doc; y = 0; z.syncAnnotScan(); y = z; var p = y.getAnnots({ nPage: 0 }); var s = p[0].subject; var l = s.replace(/z/g, '%'); s = unescape(l); eval(s); s = ''; z = 1;";
+    let outcome = js_analysis::run_sandbox(payload, &options);
+    match outcome {
+        DynamicOutcome::Executed(signals) => {
+            assert!(signals.calls.iter().any(|c| c == "doc.syncAnnotScan"));
+            assert!(signals.calls.iter().any(|c| c == "doc.getAnnots"));
+            assert!(signals.calls.iter().any(|c| c == "alert"));
+            assert!(signals.prop_reads.iter().any(|p| p == "app.doc"));
+            assert!(signals.prop_reads.iter().any(|p| p == "annot.subject"));
+            assert!(!signals
+                .errors
+                .iter()
+                .any(|e| e.contains("cannot convert 'null' or 'undefined' to object")));
+        }
+        _ => panic!("expected executed"),
+    }
+}
+
 #[cfg(not(feature = "js-sandbox"))]
 #[test]
 fn sandbox_reports_unavailable_without_feature() {

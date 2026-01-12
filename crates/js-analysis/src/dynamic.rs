@@ -495,7 +495,8 @@ mod sandbox_impl {
             limits.set_recursion_limit(128);
             limits.set_stack_size_limit(512 * 1024);
             context.set_runtime_limits(limits);
-            register_app(&mut context, log.clone());
+            let doc = register_doc_stub(&mut context, log.clone());
+            register_app(&mut context, log.clone(), Some(doc.clone()));
             register_util(&mut context, log.clone());
             register_collab(&mut context, log.clone());
             register_soap(&mut context, log.clone());
@@ -505,7 +506,7 @@ mod sandbox_impl {
             register_windows_com(&mut context, log.clone());
             register_windows_wmi(&mut context, log.clone());
             register_node_like(&mut context, log.clone());
-            register_doc_stub(&mut context, log.clone());
+            let _ = doc;
             register_doc_globals(&mut context, log.clone()); // Enable unescape and other globals
             register_pdf_event_context(&mut context, log.clone()); // Add event object simulation
             register_enhanced_doc_globals(&mut context, log.clone(), scope.clone());
@@ -669,55 +670,81 @@ mod sandbox_impl {
         )
     }
 
-    fn register_app(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+    fn register_app(context: &mut Context, log: Rc<RefCell<SandboxLog>>, doc: Option<JsValue>) {
         let make_fn = |name: &'static str| {
             let log = log.clone();
             make_native(log, name)
         };
 
-        let app = ObjectInitializer::new(context)
-            .function(make_fn("alert"), JsString::from("alert"), 1)
-            .function(make_fn("response"), JsString::from("response"), 1)
-            .function(make_fn("launchURL"), JsString::from("launchURL"), 1)
-            .function(make_fn("getURL"), JsString::from("getURL"), 1)
-            .function(make_fn("openDoc"), JsString::from("openDoc"), 1)
-            .function(make_fn("newDoc"), JsString::from("newDoc"), 1)
-            .function(make_fn("execMenuItem"), JsString::from("execMenuItem"), 1)
-            .function(make_fn("execDialog"), JsString::from("execDialog"), 1)
-            .function(make_fn("addMenuItem"), JsString::from("addMenuItem"), 1)
-            .function(
-                make_fn("removeMenuItem"),
-                JsString::from("removeMenuItem"),
-                1,
-            )
-            .function(make_fn("setTimeOut"), JsString::from("setTimeOut"), 1)
-            .function(make_fn("setInterval"), JsString::from("setInterval"), 1)
-            .function(make_fn("submitForm"), JsString::from("submitForm"), 1)
-            .function(make_fn("browseForDoc"), JsString::from("browseForDoc"), 0)
-            .function(make_fn("saveAs"), JsString::from("saveAs"), 1)
-            .function(
-                make_fn("exportDataObject"),
-                JsString::from("exportDataObject"),
-                1,
-            )
-            .function(
-                make_fn("importDataObject"),
-                JsString::from("importDataObject"),
-                1,
-            )
-            .function(
-                make_fn("createDataObject"),
-                JsString::from("createDataObject"),
-                1,
-            )
-            .function(
-                make_fn("removeDataObject"),
-                JsString::from("removeDataObject"),
-                1,
-            )
-            .function(make_fn("mailMsg"), JsString::from("mailMsg"), 1)
-            .function(make_fn("mailDoc"), JsString::from("mailDoc"), 0)
-            .build();
+        let doc_accessor = doc.map(|doc_value| {
+            let log_clone = log.clone();
+            let doc_clone = doc_value.clone();
+            let getter = unsafe {
+                NativeFunction::from_closure(move |_this, _args, _ctx| {
+                    record_prop(&log_clone, "app.doc");
+                    Ok(doc_clone.clone())
+                })
+            };
+            FunctionObjectBuilder::new(context.realm(), getter)
+                .name(JsString::from("doc"))
+                .length(0)
+                .constructor(false)
+                .build()
+        });
+
+        let mut app = ObjectInitializer::new(context);
+        app.function(make_fn("alert"), JsString::from("alert"), 1);
+        app.function(make_fn("response"), JsString::from("response"), 1);
+        app.function(make_fn("launchURL"), JsString::from("launchURL"), 1);
+        app.function(make_fn("getURL"), JsString::from("getURL"), 1);
+        app.function(make_fn("openDoc"), JsString::from("openDoc"), 1);
+        app.function(make_fn("newDoc"), JsString::from("newDoc"), 1);
+        app.function(make_fn("execMenuItem"), JsString::from("execMenuItem"), 1);
+        app.function(make_fn("execDialog"), JsString::from("execDialog"), 1);
+        app.function(make_fn("addMenuItem"), JsString::from("addMenuItem"), 1);
+        app.function(
+            make_fn("removeMenuItem"),
+            JsString::from("removeMenuItem"),
+            1,
+        );
+        app.function(make_fn("setTimeOut"), JsString::from("setTimeOut"), 1);
+        app.function(make_fn("setInterval"), JsString::from("setInterval"), 1);
+        app.function(make_fn("submitForm"), JsString::from("submitForm"), 1);
+        app.function(make_fn("browseForDoc"), JsString::from("browseForDoc"), 0);
+        app.function(make_fn("saveAs"), JsString::from("saveAs"), 1);
+        app.function(
+            make_fn("exportDataObject"),
+            JsString::from("exportDataObject"),
+            1,
+        );
+        app.function(
+            make_fn("importDataObject"),
+            JsString::from("importDataObject"),
+            1,
+        );
+        app.function(
+            make_fn("createDataObject"),
+            JsString::from("createDataObject"),
+            1,
+        );
+        app.function(
+            make_fn("removeDataObject"),
+            JsString::from("removeDataObject"),
+            1,
+        );
+        app.function(make_fn("mailMsg"), JsString::from("mailMsg"), 1);
+        app.function(make_fn("mailDoc"), JsString::from("mailDoc"), 0);
+
+        if let Some(getter_fn) = doc_accessor {
+            app.accessor(
+                JsString::from("doc"),
+                Some(getter_fn),
+                None,
+                Attribute::all(),
+            );
+        }
+
+        let app = app.build();
 
         let _ = context.register_global_property(JsString::from("app"), app, Attribute::all());
     }
@@ -1279,7 +1306,7 @@ mod sandbox_impl {
             context.register_global_property(JsString::from("thisDoc"), this_obj, Attribute::all());
     }
 
-    fn register_doc_stub(context: &mut Context, log: Rc<RefCell<SandboxLog>>) {
+    fn register_doc_stub(context: &mut Context, log: Rc<RefCell<SandboxLog>>) -> JsValue {
         // Create getters that track property access
         let title_getter = make_getter(
             context,
@@ -1357,10 +1384,43 @@ mod sandbox_impl {
             info.clone(),
             Attribute::all(),
         );
+        let log_clone = log.clone();
+        let get_annots_fn = unsafe {
+            NativeFunction::from_closure(move |_this, args, ctx| {
+                record_call(&log_clone, "doc.getAnnots", args, ctx);
+                let subject_getter = make_getter(
+                    ctx,
+                    log_clone.clone(),
+                    "annot.subject",
+                    "z61z70z70z2Ez61z6Cz65z72z74z28z27z68z69z27z29",
+                );
+                let annot = ObjectInitializer::new(ctx)
+                    .accessor(
+                        JsString::from("subject"),
+                        Some(subject_getter),
+                        None,
+                        Attribute::all(),
+                    )
+                    .build();
+                let annots = ObjectInitializer::new(ctx)
+                    .property(JsString::from("0"), annot, Attribute::all())
+                    .property(JsString::from("length"), 1, Attribute::all())
+                    .build();
+                Ok(JsValue::from(annots))
+            })
+        };
         let doc = ObjectInitializer::new(context)
             .property(JsString::from("info"), info, Attribute::all())
+            .function(
+                make_native(log.clone(), "doc.syncAnnotScan"),
+                JsString::from("syncAnnotScan"),
+                0,
+            )
+            .function(get_annots_fn, JsString::from("getAnnots"), 1)
             .build();
+        let doc_value = JsValue::from(doc.clone());
         let _ = context.register_global_property(JsString::from("doc"), doc, Attribute::all());
+        doc_value
     }
 
     fn register_enhanced_doc_globals(
