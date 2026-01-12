@@ -35,6 +35,6 @@
 
 ## Phase 6 — Benchmark harness
 
-- [ ] Build corpus runner
-- [ ] Compare against `pdfid` / `pdf-parser` output
-- [ ] Track regressions and mismatches
+- [x] Build corpus runner
+- [x] Compare against `pdfid` / `pdf-parser` output
+- [x] Track regressions and mismatches
