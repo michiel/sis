@@ -2670,6 +2670,14 @@ fn print_repl_help() {
     println!("  findings.info      - Info severity findings");
     println!("  findings.kind KIND - Findings of specific kind");
     println!();
+    println!("Object inspection queries:");
+    println!("  object N           - Show object N (generation 0)");
+    println!("  object N G         - Show object N generation G");
+    println!("  objects.list       - List all object IDs");
+    println!("  objects.with TYPE  - Filter objects by type (e.g., Page, Font)");
+    println!("  trailer            - Show PDF trailer");
+    println!("  catalog            - Show PDF catalog");
+    println!();
     println!("REPL commands:");
     println!("  :json              - Toggle JSON output mode");
     println!("  :compact           - Toggle compact output mode");

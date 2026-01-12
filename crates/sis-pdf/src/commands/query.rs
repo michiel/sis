@@ -43,6 +43,8 @@ pub enum Query {
 
     // Object queries
     ShowObject(u32, u16),
+    ObjectsList,
+    ObjectsWithType(String),
 
     // Advanced queries
     Chains,
@@ -75,6 +77,7 @@ pub fn parse_query(input: &str) -> Result<Query> {
         "pages" => Ok(Query::Pages),
         "objects" => Ok(Query::ObjectsCount),
         "objects.count" => Ok(Query::ObjectsCount),
+        "objects.list" => Ok(Query::ObjectsList),
         "creator" => Ok(Query::Creator),
         "producer" => Ok(Query::Producer),
         "title" => Ok(Query::Title),
@@ -129,6 +132,11 @@ pub fn parse_query(input: &str) -> Result<Query> {
             // Try to parse findings.kind query
             if let Some(kind) = input.strip_prefix("findings.kind ") {
                 return Ok(Query::FindingsByKind(kind.to_string()));
+            }
+
+            // Try to parse objects.with query
+            if let Some(obj_type) = input.strip_prefix("objects.with ") {
+                return Ok(Query::ObjectsWithType(obj_type.to_string()));
             }
 
             Err(anyhow!("Unknown query: {}", input))
@@ -242,6 +250,26 @@ pub fn execute_query_with_context(
         Query::Modified => {
             let modified = get_metadata_field(ctx, "ModDate")?;
             Ok(QueryResult::Scalar(ScalarValue::String(modified)))
+        }
+        Query::ShowObject(obj, gen) => {
+            let obj_str = show_object(ctx, *obj, *gen)?;
+            Ok(QueryResult::Scalar(ScalarValue::String(obj_str)))
+        }
+        Query::ObjectsList => {
+            let objects = list_objects(ctx)?;
+            Ok(QueryResult::List(objects))
+        }
+        Query::ObjectsWithType(obj_type) => {
+            let objects = list_objects_with_type(ctx, obj_type)?;
+            Ok(QueryResult::List(objects))
+        }
+        Query::Trailer => {
+            let trailer_str = show_trailer(ctx)?;
+            Ok(QueryResult::Scalar(ScalarValue::String(trailer_str)))
+        }
+        Query::Catalog => {
+            let catalog_str = show_catalog(ctx)?;
+            Ok(QueryResult::Scalar(ScalarValue::String(catalog_str)))
         }
         _ => Err(anyhow!("Query not yet implemented: {:?}", query)),
     }
@@ -666,4 +694,153 @@ fn preview_text(text: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &trimmed[..max_len])
     }
+}
+
+/// Show a specific PDF object
+fn show_object(ctx: &ScanContext, obj: u32, gen: u16) -> Result<String> {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    // Find the object in the graph
+    if let Some(entry) = ctx.graph.get_object(obj, gen) {
+        let mut output = String::new();
+        output.push_str(&format!("Object {} {} obj\n", obj, gen));
+        output.push_str(&format_pdf_atom(&entry.atom, 0));
+        output.push_str("\nendobj");
+        Ok(output)
+    } else {
+        Err(anyhow!("Object {} {} not found", obj, gen))
+    }
+}
+
+/// Format a PDF atom for display
+fn format_pdf_atom(atom: &sis_pdf_pdf::object::PdfAtom, indent: usize) -> String {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    let indent_str = "  ".repeat(indent);
+
+    match atom {
+        PdfAtom::Null => format!("{}null", indent_str),
+        PdfAtom::Bool(b) => format!("{}{}", indent_str, b),
+        PdfAtom::Int(n) => format!("{}{}", indent_str, n),
+        PdfAtom::Real(f) => format!("{}{}", indent_str, f),
+        PdfAtom::Name(name) => {
+            format!("{}/{}", indent_str, String::from_utf8_lossy(&name.decoded))
+        }
+        PdfAtom::Str(s) => {
+            let bytes = match s {
+                sis_pdf_pdf::object::PdfStr::Literal { decoded, .. } => decoded,
+                sis_pdf_pdf::object::PdfStr::Hex { decoded, .. } => decoded,
+            };
+            format!("{}({})", indent_str, String::from_utf8_lossy(bytes))
+        }
+        PdfAtom::Array(arr) => {
+            let mut output = format!("{}[\n", indent_str);
+            for item in arr.iter() {
+                output.push_str(&format_pdf_atom(&item.atom, indent + 1));
+                output.push('\n');
+            }
+            output.push_str(&format!("{}]", indent_str));
+            output
+        }
+        PdfAtom::Dict(dict) => {
+            let mut output = format!("{}<<\n", indent_str);
+            for (key, value) in &dict.entries {
+                let key_str = String::from_utf8_lossy(&key.decoded);
+                output.push_str(&format!("{}  {}", indent_str, key_str));
+                output.push_str(" ");
+                output.push_str(&format_pdf_atom(&value.atom, 0).trim());
+                output.push('\n');
+            }
+            output.push_str(&format!("{}", indent_str));
+            output.push_str(">>");
+            output
+        }
+        PdfAtom::Stream(stream) => {
+            let mut output = format_pdf_atom(&PdfAtom::Dict(stream.dict.clone()), indent);
+            output.push_str("\nstream\n");
+            output.push_str("<stream data>");
+            output.push_str("\nendstream");
+            output
+        }
+        PdfAtom::Ref { obj, gen } => format!("{}{} {} R", indent_str, obj, gen),
+    }
+}
+
+/// List all object IDs
+fn list_objects(ctx: &ScanContext) -> Result<Vec<String>> {
+    let objects: Vec<String> = ctx
+        .graph
+        .objects
+        .iter()
+        .map(|entry| format!("{} {}", entry.obj, entry.gen))
+        .collect();
+    Ok(objects)
+}
+
+/// List objects with a specific type
+fn list_objects_with_type(ctx: &ScanContext, obj_type: &str) -> Result<Vec<String>> {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    let mut objects = Vec::new();
+    let search_type = if obj_type.starts_with('/') {
+        obj_type.to_string()
+    } else {
+        format!("/{}", obj_type)
+    };
+
+    for entry in &ctx.graph.objects {
+        if let Some(dict) = entry_dict(entry) {
+            // Look for /Type entry
+            if let Some((_, type_obj)) = dict.get_first(b"/Type") {
+                if let PdfAtom::Name(name) = &type_obj.atom {
+                    let type_name = String::from_utf8_lossy(&name.decoded);
+                    if type_name == search_type || type_name == &search_type[1..] {
+                        objects.push(format!("{} {} ({})", entry.obj, entry.gen, type_name));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(objects)
+}
+
+/// Show the PDF trailer
+fn show_trailer(ctx: &ScanContext) -> Result<String> {
+    if let Some(trailer) = ctx.graph.trailers.first() {
+        let mut output = String::from("<<\n");
+        for (key, value) in &trailer.entries {
+            let key_str = String::from_utf8_lossy(&key.decoded);
+            output.push_str(&format!("  {} ", key_str));
+            output.push_str(&format_pdf_atom(&value.atom, 0).trim());
+            output.push('\n');
+        }
+        output.push_str(">>");
+        Ok(output)
+    } else {
+        Err(anyhow!("No trailer found"))
+    }
+}
+
+/// Show the PDF catalog
+fn show_catalog(ctx: &ScanContext) -> Result<String> {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    // Find catalog from trailer /Root entry
+    if let Some(trailer) = ctx.graph.trailers.first() {
+        for (key, value) in &trailer.entries {
+            let key_bytes = &key.decoded;
+            if key_bytes.as_slice() == b"/Root" || key_bytes.as_slice() == b"Root" {
+                if let PdfAtom::Ref { obj, gen } = &value.atom {
+                    if let Some(catalog_entry) = ctx.graph.get_object(*obj, *gen) {
+                        let mut output = format!("Catalog (Object {} {})\n", obj, gen);
+                        output.push_str(&format_pdf_atom(&catalog_entry.atom, 0));
+                        return Ok(output);
+                    }
+                }
+            }
+        }
+    }
+
+    Err(anyhow!("Catalog not found"))
 }
