@@ -745,6 +745,7 @@ mod sandbox_impl {
         app.function(make_fn("getURL"), JsString::from("getURL"), 1);
         app.function(make_fn("openDoc"), JsString::from("openDoc"), 1);
         app.function(make_fn("newDoc"), JsString::from("newDoc"), 1);
+        app.function(make_fn("findComponent"), JsString::from("findComponent"), 1);
         app.function(make_fn("execMenuItem"), JsString::from("execMenuItem"), 1);
         app.function(make_fn("execDialog"), JsString::from("execDialog"), 1);
         app.function(make_fn("addMenuItem"), JsString::from("addMenuItem"), 1);
@@ -788,6 +789,16 @@ mod sandbox_impl {
         app.property(
             JsString::from("viewerType"),
             JsString::from("Reader"),
+            Attribute::all(),
+        );
+        app.property(
+            JsString::from("platform"),
+            JsString::from("WIN"),
+            Attribute::all(),
+        );
+        app.property(
+            JsString::from("language"),
+            JsString::from("en-AU"),
             Attribute::all(),
         );
 
@@ -1249,6 +1260,75 @@ mod sandbox_impl {
             JsString::from(SUBJECT_PAYLOAD),
             Attribute::all(),
         );
+
+        let adbe = ObjectInitializer::new(context)
+            .property(
+                JsString::from("Reader_Value_Asked"),
+                JsValue::from(false),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_Value_Asked"),
+                JsValue::from(false),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_Form_string_Reader_5x"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_Form_string_Reader_601"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_Form_string_Reader_6_7x"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_Form_string_Viewer_Older"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_Form_string_Viewer"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_string_Update_Reader_Desc"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_string_Update_Desc"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_string_Title"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Reader_Value_New_Version_URL"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("Viewer_Value_New_Version_URL"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .property(
+                JsString::from("SYSINFO"),
+                JsString::from(""),
+                Attribute::all(),
+            )
+            .build();
+        let _ = context.register_global_property(JsString::from("ADBE"), adbe, Attribute::all());
     }
 
     fn register_pdf_event_context(
@@ -1347,6 +1427,11 @@ mod sandbox_impl {
                 target_methods("event.target.getPageNumWords"),
                 JsString::from("getPageNumWords"),
                 1,
+            )
+            .function(
+                target_methods("event.target.getPageNthWord"),
+                JsString::from("getPageNthWord"),
+                3,
             )
             .function(
                 target_methods("event.target.print"),
@@ -1560,6 +1645,18 @@ mod sandbox_impl {
                 JsString::from("syncAnnotScan"),
                 0,
             )
+            .function(make_native(log.clone(), "doc.eval"), JsString::from("eval"), 1)
+            .function(make_native(log.clone(), "doc.unescape"), JsString::from("unescape"), 1)
+            .function(
+                make_native(log.clone(), "doc.getPageNumWords"),
+                JsString::from("getPageNumWords"),
+                1,
+            )
+            .function(
+                make_native(log.clone(), "doc.getPageNthWord"),
+                JsString::from("getPageNthWord"),
+                3,
+            )
             .function(get_annot_fn, JsString::from("getAnnot"), 2)
             .function(get_annots_fn, JsString::from("getAnnots"), 1)
             .build();
@@ -1669,6 +1766,8 @@ mod sandbox_impl {
         add(context, "addField", 1, log.clone());
         add(context, "removeField", 1, log.clone());
         add(context, "getField", 1, log.clone());
+        add(context, "getPageNumWords", 1, log.clone());
+        add(context, "getPageNthWord", 3, log.clone());
         let get_annot_fn = unsafe {
             let log = log.clone();
             NativeFunction::from_closure(move |_this, args, ctx| {
@@ -2343,6 +2442,16 @@ mod sandbox_impl {
         result = result.replace(";;", ";"); // Double semicolons
         result = result.replace("  ", " "); // Multiple spaces
         result = result.trim().to_string(); // Leading/trailing whitespace
+
+        if let Some(idx) = result.rfind(';') {
+            if !result[idx + 1..].trim().is_empty() {
+                result.truncate(idx + 1);
+            }
+        } else if let Some(idx) = result.rfind('}') {
+            if !result[idx + 1..].trim().is_empty() {
+                result.truncate(idx + 1);
+            }
+        }
 
         if result.trim_end().ends_with('(') {
             result.push_str("){}");

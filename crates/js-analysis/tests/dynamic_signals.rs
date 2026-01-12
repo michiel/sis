@@ -132,6 +132,40 @@ fn sandbox_handles_viewer_version_collab_payload() {
 
 #[cfg(feature = "js-sandbox")]
 #[test]
+fn sandbox_handles_adbe_reader_payload() {
+    let options = DynamicOptions::default();
+    let payload = br#"if (typeof(xfa_installed) == "undefined" || typeof(xfa_version) == "undefined" || xfa_version < 2.1) { if (app.viewerType == "Reader") { if (ADBE.Reader_Value_Asked != true) { if (app.viewerVersion < 6.0) { if (app.alert(ADBE.Viewer_Form_string_Reader_5x, 1, 1) == 1) this.getURL(ADBE.Reader_Value_New_Version_URL + ADBE.SYSINFO, false); ADBE.Reader_Value_Asked = true; } else if (app.viewerVersion < 7.0) { if (app.alert(ADBE.Viewer_Form_string_Reader_601, 1, 1) == 1) app.findComponent({cType:"App", cName:"Reader7", cDesc: ADBE.Viewer_string_Update_Reader_Desc}); ADBE.Reader_Value_Asked = true; } else { if (app.alert(ADBE.Viewer_Form_string_Reader_6_7x, 1, 1) == 1) app.findComponent({cType:"Plugin", cName:"XFA", cDesc: ADBE.Viewer_string_Update_Reader_Desc}); ADBE.Reader_Value_Asked = true; } } } }"#;
+    let outcome = js_analysis::run_sandbox(payload, &options);
+    match outcome {
+        DynamicOutcome::Executed(signals) => {
+            assert!(signals.calls.iter().any(|c| c == "alert"));
+            assert!(!signals
+                .errors
+                .iter()
+                .any(|e| e.contains("ADBE is not defined")));
+        }
+        _ => panic!("expected executed"),
+    }
+}
+
+#[cfg(feature = "js-sandbox")]
+#[test]
+fn sandbox_handles_page_word_helpers() {
+    let options = DynamicOptions::default();
+    let payload = b"var n = getPageNumWords(0); var w = getPageNthWord(0, 0, false);";
+    let outcome = js_analysis::run_sandbox(payload, &options);
+    match outcome {
+        DynamicOutcome::Executed(signals) => {
+            assert!(signals.calls.iter().any(|c| c == "getPageNumWords"));
+            assert!(signals.calls.iter().any(|c| c == "getPageNthWord"));
+            assert!(signals.errors.is_empty());
+        }
+        _ => panic!("expected executed"),
+    }
+}
+
+#[cfg(feature = "js-sandbox")]
+#[test]
 fn sandbox_handles_creator_subject_payloads() {
     let options = DynamicOptions::default();
     let payload = b"var b = this.creator; eval(unescape(this.creator.replace(/z/igm,'%'))); eval(unescape(this.subject.replace(/Hueputol/g, String.fromCharCode(0x3*0xC+0x1)).replace(/Dalbaeb/g,'B')));";
