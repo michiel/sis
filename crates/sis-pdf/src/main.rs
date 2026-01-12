@@ -18,6 +18,7 @@ use tempfile::tempdir;
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
 use tracing::{debug, error, info, warn, Level};
 use walkdir::WalkDir;
+use js_analysis::{DynamicOptions, DynamicOutcome};
 use zip::ZipArchive;
 const MAX_REPORT_BYTES: u64 = 50 * 1024 * 1024;
 const WARN_PDF_BYTES: u64 = 50 * 1024 * 1024;
@@ -39,6 +40,53 @@ const ORT_RELEASE_BASE: &str = "https://github.com/microsoft/onnxruntime/release
 struct Args {
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Serialize)]
+struct SandboxEvalReport {
+    path: String,
+    asset_type: String,
+    status: String,
+    timeout_ms: Option<u128>,
+    skip_reason: Option<String>,
+    skip_limit: Option<usize>,
+    skip_actual: Option<usize>,
+    signals: Option<SandboxSignalsReport>,
+}
+
+#[derive(Serialize)]
+struct SandboxSignalsReport {
+    errors: Vec<String>,
+    calls: Vec<String>,
+    call_args: Vec<String>,
+    urls: Vec<String>,
+    domains: Vec<String>,
+    prop_reads: Vec<String>,
+    call_count: usize,
+    unique_calls: usize,
+    unique_prop_reads: usize,
+    elapsed_ms: Option<u128>,
+    execution_stats: SandboxExecutionStats,
+    behavioral_patterns: Vec<SandboxBehaviorPattern>,
+}
+
+#[derive(Serialize)]
+struct SandboxExecutionStats {
+    total_function_calls: usize,
+    unique_function_calls: usize,
+    variable_promotions: usize,
+    error_recoveries: usize,
+    successful_recoveries: usize,
+    execution_depth: usize,
+}
+
+#[derive(Serialize)]
+struct SandboxBehaviorPattern {
+    name: String,
+    confidence: f64,
+    evidence: String,
+    severity: String,
+    metadata: std::collections::BTreeMap<String, String>,
 }
 #[derive(Subcommand)]
 enum Command {
@@ -211,6 +259,8 @@ enum Command {
         #[arg(long, default_value_t = 128 * 1024 * 1024)]
         max_extract_bytes: usize,
     },
+    #[command(subcommand, about = "Run sandbox evaluation for dynamic assets")]
+    Sandbox(SandboxCommand),
     #[command(about = "Generate a full Markdown report for a PDF scan")]
     Report {
         pdf: String,
@@ -412,6 +462,17 @@ enum Command {
         target: String,
         #[arg(short, long)]
         out: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum SandboxCommand {
+    #[command(about = "Evaluate a dynamic asset in the sandbox")]
+    Eval {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long = "type", default_value = "js", value_parser = ["js"])]
+        asset_type: String,
     },
 }
 
@@ -734,6 +795,9 @@ fn main() -> Result<()> {
             out,
             max_extract_bytes,
         } => run_extract(&kind, &pdf, &out, max_extract_bytes),
+        Command::Sandbox(cmd) => match cmd {
+            SandboxCommand::Eval { file, asset_type } => run_sandbox_eval(&file, &asset_type),
+        },
         Command::Report {
             pdf,
             deep,
@@ -963,6 +1027,85 @@ fn run_config_verify(path: Option<&std::path::Path>) -> Result<()> {
 
 fn default_config_template() -> &'static str {
     include_str!("../../../docs/config.toml")
+}
+
+fn run_sandbox_eval(path: &std::path::Path, asset_type: &str) -> Result<()> {
+    if asset_type != "js" {
+        return Err(anyhow!("unsupported sandbox type: {}", asset_type));
+    }
+    let bytes = fs::read(path)?;
+    let outcome = js_analysis::run_sandbox(&bytes, &DynamicOptions::default());
+    let report = match outcome {
+        DynamicOutcome::Executed(signals) => SandboxEvalReport {
+            path: path.display().to_string(),
+            asset_type: asset_type.to_string(),
+            status: "executed".to_string(),
+            timeout_ms: None,
+            skip_reason: None,
+            skip_limit: None,
+            skip_actual: None,
+            signals: Some(SandboxSignalsReport {
+                errors: signals.errors,
+                calls: signals.calls,
+                call_args: signals.call_args,
+                urls: signals.urls,
+                domains: signals.domains,
+                prop_reads: signals.prop_reads,
+                call_count: signals.call_count,
+                unique_calls: signals.unique_calls,
+                unique_prop_reads: signals.unique_prop_reads,
+                elapsed_ms: signals.elapsed_ms,
+                execution_stats: SandboxExecutionStats {
+                    total_function_calls: signals.execution_stats.total_function_calls,
+                    unique_function_calls: signals.execution_stats.unique_function_calls,
+                    variable_promotions: signals.execution_stats.variable_promotions,
+                    error_recoveries: signals.execution_stats.error_recoveries,
+                    successful_recoveries: signals.execution_stats.successful_recoveries,
+                    execution_depth: signals.execution_stats.execution_depth,
+                },
+                behavioral_patterns: signals
+                    .behavioral_patterns
+                    .into_iter()
+                    .map(|pattern| SandboxBehaviorPattern {
+                        name: pattern.name,
+                        confidence: pattern.confidence,
+                        evidence: pattern.evidence,
+                        severity: pattern.severity,
+                        metadata: pattern
+                            .metadata
+                            .into_iter()
+                            .collect::<std::collections::BTreeMap<_, _>>(),
+                    })
+                    .collect(),
+            }),
+        },
+        DynamicOutcome::TimedOut { timeout_ms } => SandboxEvalReport {
+            path: path.display().to_string(),
+            asset_type: asset_type.to_string(),
+            status: "timeout".to_string(),
+            timeout_ms: Some(timeout_ms),
+            skip_reason: None,
+            skip_limit: None,
+            skip_actual: None,
+            signals: None,
+        },
+        DynamicOutcome::Skipped {
+            reason,
+            limit,
+            actual,
+        } => SandboxEvalReport {
+            path: path.display().to_string(),
+            asset_type: asset_type.to_string(),
+            status: "skipped".to_string(),
+            timeout_ms: None,
+            skip_reason: Some(reason),
+            skip_limit: Some(limit),
+            skip_actual: Some(actual),
+            signals: None,
+        },
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
 }
 
 #[derive(Deserialize)]

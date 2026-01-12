@@ -57,6 +57,32 @@ fn sandbox_handles_app_doc_annots_payload() {
     }
 }
 
+#[cfg(feature = "js-sandbox")]
+#[test]
+fn sandbox_handles_app_plugins_eval_payloads() {
+    let options = DynamicOptions::default();
+    let payload = br#"var pr = null; var fnc = 'ev'; var sum = ''; app.doc.syncAnnotScan(); if (app.plugIns.length != 0) { var num = 1; pr = app.doc.getAnnots({ nPage: 0 }); sum = pr[num].subject; } var buf = ''; if (app.plugIns.length > 3) { fnc += 'a'; var arr = sum.split(/-/); for (var i = 1; i < arr.length; i++) { buf += String.fromCharCode('0x'+arr[i]); } fnc += 'l'; } if (app.plugIns.length >= 2) { app[fnc](buf); }"#;
+    let outcome = js_analysis::run_sandbox(payload, &options);
+    match outcome {
+        DynamicOutcome::Executed(signals) => {
+            assert!(signals.calls.iter().any(|c| c == "doc.syncAnnotScan"));
+            assert!(signals.calls.iter().any(|c| c == "doc.getAnnots"));
+            assert!(signals.calls.iter().any(|c| c == "app.eval"));
+            assert!(signals.prop_reads.iter().any(|p| p == "app.plugIns"));
+            assert!(signals.prop_reads.iter().any(|p| p == "annot.subject"));
+            assert!(!signals
+                .errors
+                .iter()
+                .any(|e| e.contains("cannot convert 'null' or 'undefined' to object")));
+            assert!(!signals
+                .errors
+                .iter()
+                .any(|e| e.contains("not a callable function")));
+        }
+        _ => panic!("expected executed"),
+    }
+}
+
 #[cfg(not(feature = "js-sandbox"))]
 #[test]
 fn sandbox_reports_unavailable_without_feature() {

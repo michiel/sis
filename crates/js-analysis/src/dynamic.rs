@@ -676,6 +676,36 @@ mod sandbox_impl {
             make_native(log, name)
         };
 
+        let plugins_value = {
+            let plugin = ObjectInitializer::new(context)
+                .property(JsString::from("name"), JsString::from("PlugIn"), Attribute::all())
+                .build();
+            let plugins = ObjectInitializer::new(context)
+                .property(JsString::from("0"), plugin.clone(), Attribute::all())
+                .property(JsString::from("1"), plugin.clone(), Attribute::all())
+                .property(JsString::from("2"), plugin.clone(), Attribute::all())
+                .property(JsString::from("3"), plugin, Attribute::all())
+                .property(JsString::from("length"), 4, Attribute::all())
+                .build();
+            JsValue::from(plugins)
+        };
+
+        let plugins_accessor = {
+            let log_clone = log.clone();
+            let plugins_clone = plugins_value.clone();
+            let getter = unsafe {
+                NativeFunction::from_closure(move |_this, _args, _ctx| {
+                    record_prop(&log_clone, "app.plugIns");
+                    Ok(plugins_clone.clone())
+                })
+            };
+            FunctionObjectBuilder::new(context.realm(), getter)
+                .name(JsString::from("plugIns"))
+                .length(0)
+                .constructor(false)
+                .build()
+        };
+
         let doc_accessor = doc.map(|doc_value| {
             let log_clone = log.clone();
             let doc_clone = doc_value.clone();
@@ -695,6 +725,7 @@ mod sandbox_impl {
         let mut app = ObjectInitializer::new(context);
         app.function(make_fn("alert"), JsString::from("alert"), 1);
         app.function(make_fn("response"), JsString::from("response"), 1);
+        app.function(make_fn("app.eval"), JsString::from("eval"), 1);
         app.function(make_fn("launchURL"), JsString::from("launchURL"), 1);
         app.function(make_fn("getURL"), JsString::from("getURL"), 1);
         app.function(make_fn("openDoc"), JsString::from("openDoc"), 1);
@@ -734,6 +765,13 @@ mod sandbox_impl {
         );
         app.function(make_fn("mailMsg"), JsString::from("mailMsg"), 1);
         app.function(make_fn("mailDoc"), JsString::from("mailDoc"), 0);
+
+        app.accessor(
+            JsString::from("plugIns"),
+            Some(plugins_accessor),
+            None,
+            Attribute::all(),
+        );
 
         if let Some(getter_fn) = doc_accessor {
             app.accessor(
@@ -1388,23 +1426,34 @@ mod sandbox_impl {
         let get_annots_fn = unsafe {
             NativeFunction::from_closure(move |_this, args, ctx| {
                 record_call(&log_clone, "doc.getAnnots", args, ctx);
-                let subject_getter = make_getter(
+                let subject_primary = make_getter(
                     ctx,
                     log_clone.clone(),
                     "annot.subject",
                     "z61z70z70z2Ez61z6Cz65z72z74z28z27z68z69z27z29",
                 );
-                let annot = ObjectInitializer::new(ctx)
+                let subject_secondary =
+                    make_getter(ctx, log_clone.clone(), "annot.subject", "z-41-42-43");
+                let annot_primary = ObjectInitializer::new(ctx)
                     .accessor(
                         JsString::from("subject"),
-                        Some(subject_getter),
+                        Some(subject_primary),
+                        None,
+                        Attribute::all(),
+                    )
+                    .build();
+                let annot_secondary = ObjectInitializer::new(ctx)
+                    .accessor(
+                        JsString::from("subject"),
+                        Some(subject_secondary),
                         None,
                         Attribute::all(),
                     )
                     .build();
                 let annots = ObjectInitializer::new(ctx)
-                    .property(JsString::from("0"), annot, Attribute::all())
-                    .property(JsString::from("length"), 1, Attribute::all())
+                    .property(JsString::from("0"), annot_primary, Attribute::all())
+                    .property(JsString::from("1"), annot_secondary, Attribute::all())
+                    .property(JsString::from("length"), 2, Attribute::all())
                     .build();
                 Ok(JsValue::from(annots))
             })

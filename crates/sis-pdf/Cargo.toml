@@ -31,6 +31,7 @@ sis-pdf-core = { path = "../sis-pdf-core" }
 sis-pdf-detectors = { path = "../sis-pdf-detectors" }
 sis-pdf-pdf = { path = "../sis-pdf-pdf" }
 sis-pdf-ml-graph = { path = "../sis-pdf-ml-graph", optional = true }
+js-analysis = { path = "../js-analysis", default-features = false }
 
 [features]
 ml-graph = ["sis-pdf-core/ml-graph", "sis-pdf-ml-graph"]
