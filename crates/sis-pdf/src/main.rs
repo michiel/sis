@@ -1,3 +1,5 @@
+mod commands;
+
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
@@ -90,7 +92,7 @@ struct SandboxBehaviorPattern {
 }
 #[derive(Subcommand)]
 enum Command {
-    #[command(subcommand)]
+    #[command(subcommand, about = "Manage sis configuration")]
     Config(ConfigCommand),
     #[command(subcommand, about = "Manage ML runtime configuration and ONNX Runtime")]
     Ml(MlCommand),
@@ -98,6 +100,27 @@ enum Command {
     Update {
         #[arg(long, help = "Include prerelease builds when checking for updates")]
         include_prerelease: bool,
+    },
+    #[command(about = "Query PDF structure, content, and findings")]
+    Query {
+        #[arg(help = "PDF file path")]
+        pdf: String,
+        #[arg(help = "Query string (e.g., 'pages', 'js', 'findings.high'). Omit for interactive REPL.")]
+        query: Option<String>,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+        #[arg(long, short = 'c', help = "Compact output (numbers only)")]
+        compact: bool,
+        #[arg(long, help = "Deep scan mode")]
+        deep: bool,
+        #[arg(long, default_value_t = 32 * 1024 * 1024)]
+        max_decode_bytes: usize,
+        #[arg(long, default_value_t = 256 * 1024 * 1024)]
+        max_total_decoded_bytes: usize,
+        #[arg(long)]
+        no_recover: bool,
+        #[arg(long, default_value_t = 500_000)]
+        max_objects: usize,
     },
     #[command(about = "Scan PDFs for suspicious indicators and report findings")]
     Scan {
@@ -220,45 +243,6 @@ enum Command {
         #[arg(long)]
         no_js_sandbox: bool,
     },
-    #[command(about = "Explain a specific finding with evidence details")]
-    Explain { pdf: String, finding_id: String },
-    #[command(about = "Detect files that contain specific findings")]
-    Detect {
-        #[arg(long)]
-        path: PathBuf,
-        #[arg(long, default_value = "*.pdf")]
-        glob: String,
-        #[arg(long, value_delimiter = ',', required = true)]
-        findings: Vec<String>,
-        #[arg(long)]
-        deep: bool,
-        #[arg(long, default_value_t = 32 * 1024 * 1024)]
-        max_decode_bytes: usize,
-        #[arg(long, default_value_t = 256 * 1024 * 1024)]
-        max_total_decoded_bytes: usize,
-        #[arg(long)]
-        no_recover: bool,
-        #[arg(long)]
-        strict: bool,
-        #[arg(long, default_value_t = 500_000)]
-        max_objects: usize,
-        #[arg(long, alias = "seq")]
-        sequential: bool,
-        #[arg(long)]
-        no_js_ast: bool,
-        #[arg(long)]
-        no_js_sandbox: bool,
-    },
-    #[command(about = "Extract JavaScript or embedded files from a PDF")]
-    Extract {
-        #[arg(value_parser = ["js", "embedded"])]
-        kind: String,
-        pdf: String,
-        #[arg(short, long)]
-        out: PathBuf,
-        #[arg(long, default_value_t = 128 * 1024 * 1024)]
-        max_extract_bytes: usize,
-    },
     #[command(subcommand, about = "Run sandbox evaluation for dynamic assets")]
     Sandbox(SandboxCommand),
     #[command(about = "Generate a full Markdown report for a PDF scan")]
@@ -335,134 +319,12 @@ enum Command {
         #[arg(long)]
         no_js_sandbox: bool,
     },
-    #[command(name = "ml-health", about = "Deprecated (use sis ml health)")]
-    MlHealth {
-        #[arg(long)]
-        ml_model_dir: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Preferred ML execution provider (auto, cpu, cuda, rocm, migraphx, directml, coreml, onednn, openvino)"
-        )]
-        ml_provider: Option<String>,
-        #[arg(long, help = "Comma-separated ML execution provider order override")]
-        ml_provider_order: Option<String>,
-        #[arg(long, help = "Print selected ML execution provider to STDERR")]
-        ml_provider_info: bool,
-        #[arg(long, help = "Path to ONNX Runtime dynamic library")]
-        ml_ort_dylib: Option<PathBuf>,
-        #[arg(long, help = "Prefer quantised ML models when available")]
-        ml_quantized: bool,
-        #[arg(long, help = "Override embedding batch size")]
-        ml_batch_size: Option<usize>,
-    },
-    #[command(about = "Export action chains from a scan as DOT or JSON")]
-    ExportGraph {
-        pdf: String,
-        #[arg(long)]
-        chains_only: bool,
-        #[arg(long, default_value = "dot", value_parser = ["dot", "json"])]
-        format: String,
-        #[arg(short, long)]
-        out: PathBuf,
-    },
-    #[command(about = "Export object reference graph with suspicious paths (DOT or JSON)")]
-    ExportOrg {
-        pdf: String,
-        #[arg(long, default_value = "dot", value_parser = ["dot", "json"])]
-        format: String,
-        #[arg(short, long)]
-        out: PathBuf,
-        #[arg(
-            long,
-            help = "Export basic graph only (no enhancements, paths, or classifications)"
-        )]
-        basic: bool,
-    },
-    #[command(about = "Export enhanced IR with findings and risk scores (text or JSON)")]
-    ExportIr {
-        pdf: String,
-        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
-        format: String,
-        #[arg(short, long)]
-        out: PathBuf,
-        #[arg(long, help = "Export basic IR only (no findings or risk analysis)")]
-        basic: bool,
-    },
-    #[command(about = "Export extended 333-feature vectors for ML pipelines")]
-    ExportFeatures {
-        #[arg(value_name = "PDF", required_unless_present = "path")]
-        pdf: Option<String>,
-        #[arg(long)]
-        path: Option<PathBuf>,
-        #[arg(long, default_value = "*.pdf")]
-        glob: String,
-        #[arg(long)]
-        deep: bool,
-        #[arg(long, default_value_t = 32 * 1024 * 1024)]
-        max_decode_bytes: usize,
-        #[arg(long, default_value_t = 256 * 1024 * 1024)]
-        max_total_decoded_bytes: usize,
-        #[arg(long)]
-        no_recover: bool,
-        #[arg(long)]
-        strict: bool,
-        #[arg(long)]
-        label: Option<String>,
-        #[arg(long, default_value = "jsonl", value_parser = ["jsonl", "csv"])]
-        format: String,
-        #[arg(short, long)]
-        out: Option<PathBuf>,
-        #[arg(long, help = "Export basic 35-feature vector only (legacy format)")]
-        basic: bool,
-        #[arg(long, help = "Include feature names in JSONL output records")]
-        feature_names: bool,
-    },
-    #[command(about = "Compute benign baseline from feature vectors")]
-    ComputeBaseline {
-        #[arg(long, help = "Path to JSONL file with benign feature vectors")]
-        input: PathBuf,
-        #[arg(short, long, help = "Output baseline JSON file")]
-        out: PathBuf,
-    },
-    #[command(about = "Analyze a PDF stream in chunks and stop on indicators")]
-    StreamAnalyze {
-        pdf: String,
-        #[arg(long, default_value_t = 64 * 1024)]
-        chunk_size: usize,
-        #[arg(long, default_value_t = 256 * 1024)]
-        max_buffer: usize,
-    },
-    #[command(about = "Correlate network intents across PDFs from JSONL input")]
-    CampaignCorrelate {
-        #[arg(long)]
-        input: PathBuf,
-        #[arg(short, long)]
-        out: Option<PathBuf>,
-    },
-    #[command(about = "Generate response YARA rules for a threat kind or report")]
-    ResponseGenerate {
-        #[arg(long)]
-        kind: Option<String>,
-        #[arg(long)]
-        from_report: Option<PathBuf>,
-        #[arg(short, long)]
-        out: Option<PathBuf>,
-    },
-    #[command(about = "Generate mutated PDFs for detection testing")]
-    Mutate {
-        pdf: String,
-        #[arg(short, long)]
-        out: PathBuf,
-        #[arg(long)]
-        scan: bool,
-    },
-    #[command(about = "Generate red-team evasive PDF fixtures")]
-    RedTeam {
-        #[arg(long)]
-        target: String,
-        #[arg(short, long)]
-        out: PathBuf,
-    },
+    #[command(subcommand, about = "Streaming analysis of PDF content")]
+    Stream(StreamCommand),
+    #[command(subcommand, about = "Correlate findings across multiple PDFs")]
+    Correlate(CorrelateCommand),
+    #[command(subcommand, about = "Generate test fixtures and response rules")]
+    Generate(GenerateCommand),
 }
 
 #[derive(Subcommand)]
@@ -548,6 +410,13 @@ enum MlCommand {
         #[arg(long, help = "Path to ONNX Runtime dynamic library")]
         ml_ort_dylib: Option<PathBuf>,
     },
+    #[command(about = "Compute benign baseline from feature vectors")]
+    ComputeBaseline {
+        #[arg(long, help = "Path to JSONL file with benign feature vectors")]
+        input: PathBuf,
+        #[arg(short, long, help = "Output baseline JSON file")]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -580,6 +449,58 @@ enum MlOrtCommand {
         checksum_sha256: Option<String>,
     },
 }
+
+#[derive(Subcommand)]
+enum StreamCommand {
+    #[command(about = "Analyze a PDF stream in chunks and stop on indicators", alias = "analyze")]
+    Analyse {
+        pdf: String,
+        #[arg(long, default_value_t = 64 * 1024)]
+        chunk_size: usize,
+        #[arg(long, default_value_t = 256 * 1024)]
+        max_buffer: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum CorrelateCommand {
+    #[command(about = "Correlate network intents across PDFs from JSONL input")]
+    Campaign {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum GenerateCommand {
+    #[command(about = "Generate response YARA rules for a threat kind or report")]
+    Response {
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long)]
+        from_report: Option<PathBuf>,
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+    #[command(about = "Generate mutated PDFs for detection testing")]
+    Mutate {
+        pdf: String,
+        #[arg(short, long)]
+        out: PathBuf,
+        #[arg(long)]
+        scan: bool,
+    },
+    #[command(about = "Generate red-team evasive PDF fixtures")]
+    RedTeam {
+        #[arg(long)]
+        target: String,
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let config_path = resolve_config_path_from_args(&args);
@@ -658,8 +579,45 @@ fn main() -> Result<()> {
                 ml_ort_dylib.as_deref(),
                 dry_run,
             ),
+            MlCommand::ComputeBaseline { input, out } => run_compute_baseline(&input, &out),
         },
         Command::Update { include_prerelease } => run_update(include_prerelease),
+        Command::Query {
+            query,
+            pdf,
+            json,
+            compact,
+            deep,
+            max_decode_bytes,
+            max_total_decoded_bytes,
+            no_recover,
+            max_objects,
+        } => {
+            if let Some(query_str) = query {
+                // One-shot query mode
+                run_query_oneshot(
+                    &query_str,
+                    &pdf,
+                    json,
+                    compact,
+                    deep,
+                    max_decode_bytes,
+                    max_total_decoded_bytes,
+                    !no_recover,
+                    max_objects,
+                )
+            } else {
+                // Interactive REPL mode
+                run_query_repl(
+                    &pdf,
+                    deep,
+                    max_decode_bytes,
+                    max_total_decoded_bytes,
+                    !no_recover,
+                    max_objects,
+                )
+            }
+        }
         Command::Scan {
             pdf,
             path,
@@ -763,40 +721,6 @@ fn main() -> Result<()> {
             !no_js_ast,
             !no_js_sandbox,
         ),
-        Command::Explain { pdf, finding_id } => run_explain(&pdf, &finding_id),
-        Command::Detect {
-            path,
-            glob,
-            findings,
-            deep,
-            max_decode_bytes,
-            max_total_decoded_bytes,
-            no_recover,
-            strict,
-            max_objects,
-            sequential,
-            no_js_ast,
-            no_js_sandbox,
-        } => run_detect(
-            &path,
-            &glob,
-            &findings,
-            deep,
-            max_decode_bytes,
-            max_total_decoded_bytes,
-            !no_recover,
-            strict,
-            max_objects,
-            sequential,
-            !no_js_ast,
-            !no_js_sandbox,
-        ),
-        Command::Extract {
-            kind,
-            pdf,
-            out,
-            max_extract_bytes,
-        } => run_extract(&kind, &pdf, &out, max_extract_bytes),
         Command::Sandbox(cmd) => match cmd {
             SandboxCommand::Eval {
                 file,
@@ -867,87 +791,27 @@ fn main() -> Result<()> {
             !no_js_ast,
             !no_js_sandbox,
         ),
-        Command::MlHealth {
-            ml_model_dir,
-            ml_provider,
-            ml_provider_order,
-            ml_provider_info,
-            ml_ort_dylib,
-            ml_quantized,
-            ml_batch_size,
-        } => {
-            warn!("ml-health is deprecated; use `sis ml health`");
-            run_ml_health(
-                ml_model_dir.as_deref(),
-                ml_provider.as_deref(),
-                ml_provider_order.as_deref(),
-                ml_provider_info,
-                ml_ort_dylib.as_deref(),
-                ml_quantized,
-                ml_batch_size,
-            )
-        }
-        Command::ExportGraph {
-            pdf,
-            chains_only,
-            format,
-            out,
-        } => run_export_graph(&pdf, chains_only, &format, &out),
-        Command::ExportOrg {
-            pdf,
-            format,
-            out,
-            basic,
-        } => run_export_org(&pdf, &format, &out, !basic),
-        Command::ExportIr {
-            pdf,
-            format,
-            out,
-            basic,
-        } => run_export_ir(&pdf, &format, &out, !basic),
-        Command::ExportFeatures {
-            pdf,
-            path,
-            glob,
-            deep,
-            max_decode_bytes,
-            max_total_decoded_bytes,
-            no_recover,
-            strict,
-            label,
-            format,
-            out,
-            basic,
-            feature_names,
-        } => run_export_features(
-            pdf.as_deref(),
-            path.as_deref(),
-            &glob,
-            deep,
-            max_decode_bytes,
-            max_total_decoded_bytes,
-            !no_recover,
-            strict,
-            label.as_deref(),
-            &format,
-            out.as_deref(),
-            !basic,
-            feature_names,
-        ),
-        Command::ComputeBaseline { input, out } => run_compute_baseline(&input, &out),
-        Command::StreamAnalyze {
-            pdf,
-            chunk_size,
-            max_buffer,
-        } => run_stream_analyze(&pdf, chunk_size, max_buffer),
-        Command::CampaignCorrelate { input, out } => run_campaign_correlate(&input, out.as_deref()),
-        Command::ResponseGenerate {
-            kind,
-            from_report,
-            out,
-        } => run_response_generate(kind.as_deref(), from_report.as_deref(), out.as_deref()),
-        Command::Mutate { pdf, out, scan } => run_mutate(&pdf, &out, scan),
-        Command::RedTeam { target, out } => run_redteam(&target, &out),
+        Command::Stream(cmd) => match cmd {
+            StreamCommand::Analyse {
+                pdf,
+                chunk_size,
+                max_buffer,
+            } => run_stream_analyze(&pdf, chunk_size, max_buffer),
+        },
+        Command::Correlate(cmd) => match cmd {
+            CorrelateCommand::Campaign { input, out } => {
+                run_campaign_correlate(&input, out.as_deref())
+            }
+        },
+        Command::Generate(cmd) => match cmd {
+            GenerateCommand::Response {
+                kind,
+                from_report,
+                out,
+            } => run_response_generate(kind.as_deref(), from_report.as_deref(), out.as_deref()),
+            GenerateCommand::Mutate { pdf, out, scan } => run_mutate(&pdf, &out, scan),
+            GenerateCommand::RedTeam { target, out } => run_redteam(&target, &out),
+        },
     }
 }
 
@@ -2601,6 +2465,227 @@ fn mmap_file(path: &str) -> Result<Mmap> {
     }
     unsafe { Mmap::map(&f).map_err(|e| anyhow!(e)) }
 }
+
+fn run_query_oneshot(
+    query_str: &str,
+    pdf_path: &str,
+    json: bool,
+    compact: bool,
+    deep: bool,
+    max_decode_bytes: usize,
+    max_total_decoded_bytes: usize,
+    recover_xref: bool,
+    max_objects: usize,
+) -> Result<()> {
+    use commands::query;
+
+    // Parse the query
+    let query = query::parse_query(query_str)
+        .map_err(|e| anyhow!("Failed to parse query: {}", e))?;
+
+    // Build scan options
+    let scan_options = query::ScanOptions {
+        deep,
+        max_decode_bytes,
+        max_total_decoded_bytes,
+        no_recover: !recover_xref,
+        max_objects,
+    };
+
+    // Execute the query
+    let result = query::execute_query(&query, std::path::Path::new(pdf_path), &scan_options)
+        .map_err(|e| anyhow!("Query execution failed: {}", e))?;
+
+    // Format and print the result
+    if json {
+        let output = query::format_json(query_str, pdf_path, &result)?;
+        println!("{}", output);
+    } else {
+        let output = query::format_result(&result, compact);
+        println!("{}", output);
+    }
+
+    Ok(())
+}
+
+fn run_query_repl(
+    pdf_path: &str,
+    deep: bool,
+    max_decode_bytes: usize,
+    max_total_decoded_bytes: usize,
+    recover_xref: bool,
+    max_objects: usize,
+) -> Result<()> {
+    use commands::query;
+    use rustyline::error::ReadlineError;
+    use rustyline::{DefaultEditor, Result as RustylineResult};
+
+    // Load and parse PDF once
+    eprintln!("Loading PDF: {}", pdf_path);
+    let bytes = std::fs::read(pdf_path)?;
+
+    let scan_options = query::ScanOptions {
+        deep,
+        max_decode_bytes,
+        max_total_decoded_bytes,
+        no_recover: !recover_xref,
+        max_objects,
+    };
+
+    // Build scan context (this is expensive, so we do it once)
+    let ctx = query::build_scan_context_public(&bytes, &scan_options)?;
+    eprintln!("PDF loaded. Enter queries (or 'help' for help, 'exit' to quit).\n");
+
+    // Initialize REPL editor with history
+    let mut rl = DefaultEditor::new()?;
+    let history_file = dirs::cache_dir()
+        .map(|d| d.join("sis").join("query_history.txt"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".sis_query_history"));
+
+    // Create cache directory if it doesn't exist
+    if let Some(parent) = history_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // Load history (ignore errors if file doesn't exist)
+    let _ = rl.load_history(&history_file);
+
+    // REPL state
+    let mut json_mode = false;
+    let mut compact_mode = false;
+
+    loop {
+        let prompt = "sis> ";
+        let readline = rl.readline(prompt);
+
+        match readline {
+            Ok(line) => {
+                let line = line.trim();
+
+                // Skip empty lines
+                if line.is_empty() {
+                    continue;
+                }
+
+                // Add to history
+                let _ = rl.add_history_entry(line);
+
+                // Handle REPL commands
+                match line {
+                    "exit" | "quit" | ":q" => {
+                        eprintln!("Goodbye!");
+                        break;
+                    }
+                    "help" | ":help" | "?" => {
+                        print_repl_help();
+                        continue;
+                    }
+                    ":json" => {
+                        json_mode = !json_mode;
+                        eprintln!("JSON mode: {}", if json_mode { "enabled" } else { "disabled" });
+                        continue;
+                    }
+                    ":compact" => {
+                        compact_mode = !compact_mode;
+                        eprintln!("Compact mode: {}", if compact_mode { "enabled" } else { "disabled" });
+                        continue;
+                    }
+                    _ => {}
+                }
+
+                // Parse and execute query
+                match query::parse_query(line) {
+                    Ok(q) => {
+                        match query::execute_query_with_context(&q, &ctx) {
+                            Ok(result) => {
+                                // Format and print result
+                                if json_mode {
+                                    match query::format_json(line, pdf_path, &result) {
+                                        Ok(output) => println!("{}", output),
+                                        Err(e) => eprintln!("Error formatting result: {}", e),
+                                    }
+                                } else {
+                                    let output = query::format_result(&result, compact_mode);
+                                    println!("{}", output);
+                                }
+                            }
+                            Err(e) => eprintln!("Query failed: {}", e),
+                        }
+                    }
+                    Err(e) => eprintln!("Invalid query: {}", e),
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                // Ctrl-C
+                eprintln!("^C");
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
+                // Ctrl-D
+                eprintln!("Goodbye!");
+                break;
+            }
+            Err(err) => {
+                eprintln!("Error: {:?}", err);
+                break;
+            }
+        }
+    }
+
+    // Save history
+    let _ = rl.save_history(&history_file);
+
+    Ok(())
+}
+
+fn print_repl_help() {
+    println!("Query Interface Help:");
+    println!();
+    println!("Metadata queries:");
+    println!("  pages              - Page count");
+    println!("  version            - PDF version");
+    println!("  creator            - Creator metadata");
+    println!("  producer           - Producer metadata");
+    println!("  title              - Document title");
+    println!("  created            - Creation date");
+    println!("  modified           - Modification date");
+    println!("  encrypted          - Encryption status");
+    println!("  filesize           - File size in bytes");
+    println!("  objects            - Object count");
+    println!();
+    println!("Content queries:");
+    println!("  js                 - Extract JavaScript");
+    println!("  js.count           - JavaScript count");
+    println!("  urls               - Extract URLs");
+    println!("  urls.count         - URL count");
+    println!("  embedded           - List embedded files");
+    println!("  embedded.count     - Embedded file count");
+    println!();
+    println!("Finding queries:");
+    println!("  findings           - List all findings");
+    println!("  findings.count     - Finding count");
+    println!("  findings.high      - High severity findings");
+    println!("  findings.medium    - Medium severity findings");
+    println!("  findings.low       - Low severity findings");
+    println!("  findings.info      - Info severity findings");
+    println!("  findings.kind KIND - Findings of specific kind");
+    println!();
+    println!("Object inspection queries:");
+    println!("  object N           - Show object N (generation 0)");
+    println!("  object N G         - Show object N generation G");
+    println!("  objects.list       - List all object IDs");
+    println!("  objects.with TYPE  - Filter objects by type (e.g., Page, Font)");
+    println!("  trailer            - Show PDF trailer");
+    println!("  catalog            - Show PDF catalog");
+    println!();
+    println!("REPL commands:");
+    println!("  :json              - Toggle JSON output mode");
+    println!("  :compact           - Toggle compact output mode");
+    println!("  help / ?           - Show this help");
+    println!("  exit / quit / :q   - Exit REPL");
+    println!();
+}
+
 fn run_scan(
     pdf: Option<&str>,
     path: Option<&std::path::Path>,
