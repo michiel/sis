@@ -19,6 +19,10 @@ mod sandbox_impl {
     use boa_engine::vm::RuntimeLimits;
     use boa_engine::{Context, JsArgs, JsString, JsValue, NativeFunction, Source};
 
+    const CREATOR_PAYLOAD: &str =
+        "z61z70z70z2Ez61z6Cz65z72z74z28z27z68z69z27z29";
+    const SUBJECT_PAYLOAD: &str = "Hueputol61Hueputol70Hueputol70Hueputol2EHueputol61Hueputol6CHueputol65Hueputol72Hueputol74Hueputol28Hueputol27Hueputol68Hueputol69Hueputol27Hueputol29";
+
     #[derive(Default, Clone)]
     struct SandboxLog {
         calls: Vec<String>,
@@ -765,6 +769,16 @@ mod sandbox_impl {
         );
         app.function(make_fn("mailMsg"), JsString::from("mailMsg"), 1);
         app.function(make_fn("mailDoc"), JsString::from("mailDoc"), 0);
+        app.property(
+            JsString::from("viewerVersion"),
+            JsValue::from(9),
+            Attribute::all(),
+        );
+        app.property(
+            JsString::from("viewerType"),
+            JsString::from("Reader"),
+            Attribute::all(),
+        );
 
         app.accessor(
             JsString::from("plugIns"),
@@ -1196,7 +1210,7 @@ mod sandbox_impl {
         // Register global PDF metadata properties (commonly accessed directly)
         let _ = context.register_global_property(
             JsString::from("creator"),
-            JsString::from("Adobe Acrobat 9.0"),
+            JsString::from(CREATOR_PAYLOAD),
             Attribute::all(),
         );
         let _ = context.register_global_property(
@@ -1221,7 +1235,7 @@ mod sandbox_impl {
         );
         let _ = context.register_global_property(
             JsString::from("subject"),
-            JsString::from("PDF Document"),
+            JsString::from(SUBJECT_PAYLOAD),
             Attribute::all(),
         );
     }
@@ -1254,10 +1268,37 @@ mod sandbox_impl {
             })
         };
 
+        let target_unescape_fn = unsafe {
+            let log = log.clone();
+            NativeFunction::from_closure(move |_this, args, ctx| {
+                record_call(&log, "event.target.unescape", args, ctx);
+                let input_arg = args.get_or_undefined(0);
+                let input = input_arg.to_string(ctx)?;
+                let input_str = input.to_std_string_escaped();
+                let result = decode_unescape(&input_str);
+                Ok(JsValue::from(JsString::from(result)))
+            })
+        };
+
+        let target_get_annots_fn = unsafe {
+            let log = log.clone();
+            NativeFunction::from_closure(move |_this, args, ctx| {
+                record_call(&log, "event.target.getAnnots", args, ctx);
+                Ok(build_annots(ctx, log.clone()))
+            })
+        };
+
         // Create a mock target object (represents the field or document)
         let target = ObjectInitializer::new(context)
             .property(JsString::from("parseInt"), parse_int_fn, Attribute::all())
             .function(target_eval_fn, JsString::from("eval"), 1)
+            .function(target_unescape_fn, JsString::from("unescape"), 1)
+            .function(
+                make_native(log.clone(), "event.target.syncAnnotScan"),
+                JsString::from("syncAnnotScan"),
+                0,
+            )
+            .function(target_get_annots_fn, JsString::from("getAnnots"), 1)
             .function(
                 target_methods("event.target.getField"),
                 JsString::from("getField"),
@@ -1365,6 +1406,10 @@ mod sandbox_impl {
         );
         let mod_date_getter =
             make_getter(context, log.clone(), "info.modDate", "D:19700101000000Z");
+        let creator_payload_getter =
+            make_getter(context, log.clone(), "doc.creator", CREATOR_PAYLOAD);
+        let subject_payload_getter =
+            make_getter(context, log.clone(), "doc.subject", SUBJECT_PAYLOAD);
 
         // Create info object with accessor properties for tracking
         let info = ObjectInitializer::new(context)
@@ -1426,40 +1471,44 @@ mod sandbox_impl {
         let get_annots_fn = unsafe {
             NativeFunction::from_closure(move |_this, args, ctx| {
                 record_call(&log_clone, "doc.getAnnots", args, ctx);
-                let subject_primary = make_getter(
-                    ctx,
-                    log_clone.clone(),
-                    "annot.subject",
-                    "z61z70z70z2Ez61z6Cz65z72z74z28z27z68z69z27z29",
-                );
-                let subject_secondary =
-                    make_getter(ctx, log_clone.clone(), "annot.subject", "z-41-42-43");
-                let annot_primary = ObjectInitializer::new(ctx)
-                    .accessor(
-                        JsString::from("subject"),
-                        Some(subject_primary),
-                        None,
-                        Attribute::all(),
-                    )
-                    .build();
-                let annot_secondary = ObjectInitializer::new(ctx)
-                    .accessor(
-                        JsString::from("subject"),
-                        Some(subject_secondary),
-                        None,
-                        Attribute::all(),
-                    )
-                    .build();
-                let annots = ObjectInitializer::new(ctx)
-                    .property(JsString::from("0"), annot_primary, Attribute::all())
-                    .property(JsString::from("1"), annot_secondary, Attribute::all())
-                    .property(JsString::from("length"), 2, Attribute::all())
-                    .build();
-                Ok(JsValue::from(annots))
+                Ok(build_annots(ctx, log_clone.clone()))
             })
         };
+        let collab = ObjectInitializer::new(context)
+            .function(
+                make_native(log.clone(), "Collab.getIcon"),
+                JsString::from("getIcon"),
+                1,
+            )
+            .function(
+                make_native(log.clone(), "Collab.collectEmailInfo"),
+                JsString::from("collectEmailInfo"),
+                0,
+            )
+            .build();
+        let media = ObjectInitializer::new(context)
+            .function(
+                make_native(log.clone(), "media.newPlayer"),
+                JsString::from("newPlayer"),
+                1,
+            )
+            .build();
         let doc = ObjectInitializer::new(context)
             .property(JsString::from("info"), info, Attribute::all())
+            .property(JsString::from("Collab"), collab, Attribute::all())
+            .property(JsString::from("media"), media.clone(), Attribute::all())
+            .accessor(
+                JsString::from("creator"),
+                Some(creator_payload_getter),
+                None,
+                Attribute::all(),
+            )
+            .accessor(
+                JsString::from("subject"),
+                Some(subject_payload_getter),
+                None,
+                Attribute::all(),
+            )
             .function(
                 make_native(log.clone(), "doc.syncAnnotScan"),
                 JsString::from("syncAnnotScan"),
@@ -1469,7 +1518,53 @@ mod sandbox_impl {
             .build();
         let doc_value = JsValue::from(doc.clone());
         let _ = context.register_global_property(JsString::from("doc"), doc, Attribute::all());
+        let _ = context.register_global_property(
+            JsString::from("creator"),
+            JsString::from(CREATOR_PAYLOAD),
+            Attribute::all(),
+        );
+        let _ = context.register_global_property(
+            JsString::from("subject"),
+            JsString::from(SUBJECT_PAYLOAD),
+            Attribute::all(),
+        );
+        let _ = context.register_global_property(JsString::from("media"), media, Attribute::all());
+        let _ = context.register_global_property(JsString::from("j"), JsValue::from(false), Attribute::all());
+        let _ = context.register_global_property(JsString::from("dada"), JsValue::from(false), Attribute::all());
+        let _ = context.register_global_callable(JsString::from("run"), 0, make_native(log.clone(), "run"));
         doc_value
+    }
+
+    fn build_annots(context: &mut Context, log: Rc<RefCell<SandboxLog>>) -> JsValue {
+        let subject_primary = make_getter(
+            context,
+            log.clone(),
+            "annot.subject",
+            "z61z70z70z2Ez61z6Cz65z72z74z28z27z68z69z27z29",
+        );
+        let subject_secondary = make_getter(context, log.clone(), "annot.subject", "z-41-42-43");
+        let annot_primary = ObjectInitializer::new(context)
+            .accessor(
+                JsString::from("subject"),
+                Some(subject_primary),
+                None,
+                Attribute::all(),
+            )
+            .build();
+        let annot_secondary = ObjectInitializer::new(context)
+            .accessor(
+                JsString::from("subject"),
+                Some(subject_secondary),
+                None,
+                Attribute::all(),
+            )
+            .build();
+        let annots = ObjectInitializer::new(context)
+            .property(JsString::from("0"), annot_primary, Attribute::all())
+            .property(JsString::from("1"), annot_secondary, Attribute::all())
+            .property(JsString::from("length"), 2, Attribute::all())
+            .build();
+        JsValue::from(annots)
     }
 
     fn register_enhanced_doc_globals(
@@ -1654,40 +1749,90 @@ mod sandbox_impl {
                 let input = input_arg.to_string(ctx)?;
                 let input_str = input.to_std_string_escaped();
 
-                // Implement basic URL unescape functionality
-                let mut result = String::new();
-                let mut chars = input_str.chars();
-
-                while let Some(ch) = chars.next() {
-                    if ch == '%' {
-                        // Try to parse hex escape sequence
-                        let hex1 = chars.next();
-                        let hex2 = chars.next();
-                        if let (Some(h1), Some(h2)) = (hex1, hex2) {
-                            if let Ok(byte_val) = u8::from_str_radix(&format!("{}{}", h1, h2), 16) {
-                                result.push(byte_val as char);
-                                continue;
-                            }
-                        }
-                        // If parsing failed, just add the % and continue
-                        result.push(ch);
-                        if let Some(h1) = hex1 {
-                            result.push(h1);
-                        }
-                        if let Some(h2) = hex2 {
-                            result.push(h2);
-                        }
-                    } else {
-                        result.push(ch);
-                    }
-                }
-
-                Ok(JsValue::from(JsString::from(result)))
+                Ok(JsValue::from(JsString::from(decode_unescape(&input_str))))
             })
         };
 
         let _ =
             context.register_global_builtin_callable(JsString::from("unescape"), 1, unescape_fn);
+    }
+
+    fn decode_unescape(input: &str) -> String {
+        let mut result = String::new();
+        let mut chars = input.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '%' {
+                if matches!(chars.peek(), Some('u') | Some('U')) {
+                    let _ = chars.next();
+                    let h1 = chars.next();
+                    let h2 = chars.next();
+                    let h3 = chars.next();
+                    let h4 = chars.next();
+                    if let (Some(a), Some(b), Some(c), Some(d)) = (h1, h2, h3, h4) {
+                        let hex = format!("{}{}{}{}", a, b, c, d);
+                        if let Ok(word) = u16::from_str_radix(&hex, 16) {
+                            if let Some(decoded) = char::from_u32(word as u32) {
+                                result.push(decoded);
+                                continue;
+                            }
+                        }
+                    }
+                    result.push(ch);
+                    result.push('u');
+                    if let Some(a) = h1 {
+                        result.push(a);
+                    }
+                    if let Some(b) = h2 {
+                        result.push(b);
+                    }
+                    if let Some(c) = h3 {
+                        result.push(c);
+                    }
+                    if let Some(d) = h4 {
+                        result.push(d);
+                    }
+                    continue;
+                }
+                let h1 = chars.next();
+                let h2 = chars.next();
+                if let (Some(a), Some(b)) = (h1, h2) {
+                    let hex = format!("{}{}", a, b);
+                    if let Ok(byte_val) = u8::from_str_radix(&hex, 16) {
+                        result.push(byte_val as char);
+                        continue;
+                    }
+                }
+                result.push(ch);
+                if let Some(a) = h1 {
+                    result.push(a);
+                }
+                if let Some(b) = h2 {
+                    result.push(b);
+                }
+            } else if ch == 'z' || ch == 'Z' {
+                let h1 = chars.next();
+                let h2 = chars.next();
+                if let (Some(a), Some(b)) = (h1, h2) {
+                    let hex = format!("{}{}", a, b);
+                    if let Ok(byte_val) = u8::from_str_radix(&hex, 16) {
+                        result.push(byte_val as char);
+                        continue;
+                    }
+                }
+                result.push(ch);
+                if let Some(a) = h1 {
+                    result.push(a);
+                }
+                if let Some(b) = h2 {
+                    result.push(b);
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+
+        result
     }
 
     fn register_enhanced_eval_v2(
@@ -1759,7 +1904,7 @@ mod sandbox_impl {
     }
 
     fn preprocess_eval_code(code: &str, scope: &Rc<RefCell<DynamicScope>>) -> String {
-        let mut result = code.to_string();
+        let mut result = code.replace('\u{0}', "");
 
         // Pattern 1: Simple var detection without complex regex
         if let Ok(var_regex) = regex::Regex::new(r"var\s+(\w+)\s*=") {

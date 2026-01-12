@@ -83,6 +83,91 @@ fn sandbox_handles_app_plugins_eval_payloads() {
     }
 }
 
+#[cfg(feature = "js-sandbox")]
+#[test]
+fn sandbox_handles_event_target_unescape_payload() {
+    let options = DynamicOptions::default();
+    let payload = b"var th = event.target; th.syncAnnotScan(); var p = th.getAnnots({ nPage: 0 }); var s = p[0].subject; var l = s.replace(/z/g, 'a%b'.replace(/[ab]/g, '')); s = th['unescape'](l); var e = th['eval']; e(s);";
+    let outcome = js_analysis::run_sandbox(payload, &options);
+    match outcome {
+        DynamicOutcome::Executed(signals) => {
+            assert!(signals
+                .calls
+                .iter()
+                .any(|c| c == "event.target.syncAnnotScan"));
+            assert!(signals
+                .calls
+                .iter()
+                .any(|c| c == "event.target.getAnnots"));
+            assert!(signals.calls.iter().any(|c| c == "event.target.unescape"));
+            assert!(signals.calls.iter().any(|c| c == "event.target.eval"));
+            assert!(!signals
+                .errors
+                .iter()
+                .any(|e| e.contains("cannot convert 'null' or 'undefined' to object")));
+            assert!(!signals
+                .errors
+                .iter()
+                .any(|e| e.contains("not a callable function")));
+        }
+        _ => panic!("expected executed"),
+    }
+}
+
+#[cfg(feature = "js-sandbox")]
+#[test]
+fn sandbox_handles_viewer_version_collab_payload() {
+    let options = DynamicOptions::default();
+    let payload =
+        b"var v = app.viewerVersion.toString(); v = v.replace(/\\D/g, ''); app.doc.Collab.getIcon('x');";
+    let outcome = js_analysis::run_sandbox(payload, &options);
+    match outcome {
+        DynamicOutcome::Executed(signals) => {
+            assert!(signals.calls.iter().any(|c| c == "Collab.getIcon"));
+            assert!(signals.prop_reads.iter().any(|p| p == "app.doc"));
+        }
+        _ => panic!("expected executed"),
+    }
+}
+
+#[cfg(feature = "js-sandbox")]
+#[test]
+fn sandbox_handles_creator_subject_payloads() {
+    let options = DynamicOptions::default();
+    let payload = b"var b = this.creator; eval(unescape(this.creator.replace(/z/igm,'%'))); eval(unescape(this.subject.replace(/Hueputol/g, String.fromCharCode(0x3*0xC+0x1)).replace(/Dalbaeb/g,'B')));";
+    let outcome = js_analysis::run_sandbox(payload, &options);
+    match outcome {
+        DynamicOutcome::Executed(signals) => {
+            assert!(signals.calls.iter().any(|c| c == "eval"));
+            assert!(signals.calls.iter().any(|c| c == "alert"));
+            assert!(!signals
+                .errors
+                .iter()
+                .any(|e| e.contains("Eval error")));
+        }
+        _ => panic!("expected executed"),
+    }
+}
+
+#[cfg(feature = "js-sandbox")]
+#[test]
+fn sandbox_handles_media_run_guard() {
+    let options = DynamicOptions::default();
+    let payload = b"j = true; run(); this.media.newPlayer(null);";
+    let outcome = js_analysis::run_sandbox(payload, &options);
+    match outcome {
+        DynamicOutcome::Executed(signals) => {
+            assert!(signals.calls.iter().any(|c| c == "run"));
+            assert!(signals.calls.iter().any(|c| c == "media.newPlayer"));
+            assert!(!signals
+                .errors
+                .iter()
+                .any(|e| e.contains("not a callable function")));
+        }
+        _ => panic!("expected executed"),
+    }
+}
+
 #[cfg(not(feature = "js-sandbox"))]
 #[test]
 fn sandbox_reports_unavailable_without_feature() {
