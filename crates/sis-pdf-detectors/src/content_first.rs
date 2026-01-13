@@ -791,7 +791,7 @@ fn declared_filter_invalid_finding(
         id: String::new(),
         surface: AttackSurface::StreamsAndFilters,
         kind: "declared_filter_invalid".to_string(),
-        severity: Severity::Medium,
+        severity: Severity::High,
         confidence,
         title: title.to_string(),
         description,
@@ -836,7 +836,7 @@ fn undeclared_compression_finding(
         id: String::new(),
         surface: AttackSurface::StreamsAndFilters,
         kind: "undeclared_compression_present".to_string(),
-        severity: Severity::Medium,
+        severity: Severity::High,
         confidence: Confidence::Probable,
         title: "Undeclared compression detected".to_string(),
         description: "Stream data looks compressed despite no declared filters.".to_string(),
@@ -920,7 +920,7 @@ fn carve_payloads(
                 id: String::new(),
                 surface: AttackSurface::StreamsAndFilters,
                 kind: "embedded_payload_carved".to_string(),
-                severity: Severity::Medium,
+                severity: Severity::High,
                 confidence: Confidence::Probable,
                 title: "Embedded payload carved".to_string(),
                 description: "Detected an embedded payload signature inside another object."
@@ -968,14 +968,14 @@ fn script_payload_findings(
     };
 
     let mut findings = Vec::new();
-    let mut push = |kind: &str, title: &str, description: &str| {
+    let mut push = |kind: &str, title: &str, description: &str, severity: Severity| {
         let mut meta = HashMap::new();
         meta.insert("blob.origin".to_string(), origin.to_string());
         findings.push(Finding {
             id: String::new(),
             surface: AttackSurface::StreamsAndFilters,
             kind: kind.to_string(),
-            severity: Severity::Medium,
+            severity,
             confidence: Confidence::Probable,
             title: title.to_string(),
             description: description.to_string(),
@@ -994,6 +994,7 @@ fn script_payload_findings(
             "vbscript_payload_present",
             "VBScript payload present",
             "VBScript indicators detected in content.",
+            Severity::High,
         );
     }
     if contains_any_ci(slice, &[b"powershell", b"invoke-expression", b"iex "]) {
@@ -1001,6 +1002,7 @@ fn script_payload_findings(
             "powershell_payload_present",
             "PowerShell payload present",
             "PowerShell indicators detected in content.",
+            Severity::High,
         );
     }
     if contains_any_ci(slice, &[b"#!/bin/bash", b"/bin/sh", b"bash -c"]) {
@@ -1008,6 +1010,7 @@ fn script_payload_findings(
             "bash_payload_present",
             "Shell payload present",
             "Shell script indicators detected in content.",
+            Severity::High,
         );
     }
     if contains_any_ci(slice, &[b"cmd.exe", b"cmd /c", b" /c "]) {
@@ -1015,6 +1018,7 @@ fn script_payload_findings(
             "cmd_payload_present",
             "Command payload present",
             "Command shell indicators detected in content.",
+            Severity::High,
         );
     }
     if contains_any_ci(slice, &[b"osascript", b"tell application", b"apple script"]) {
@@ -1022,6 +1026,7 @@ fn script_payload_findings(
             "applescript_payload_present",
             "AppleScript payload present",
             "AppleScript indicators detected in content.",
+            Severity::High,
         );
     }
     if contains_any_ci(slice, &[b"<script", b"<xfa", b"<xdp"]) && looks_like_xml(slice) {
@@ -1029,6 +1034,7 @@ fn script_payload_findings(
             "xfa_script_present",
             "XFA/XML script present",
             "Script tags detected inside XFA/XML content.",
+            Severity::Medium,
         );
     }
 
@@ -1328,7 +1334,7 @@ fn zip_container_findings(
                     id: String::new(),
                     surface: AttackSurface::StreamsAndFilters,
                     kind: "nested_container_chain".to_string(),
-                    severity: Severity::Medium,
+                    severity: Severity::High,
                     confidence: Confidence::Probable,
                     title: "Nested container chain detected".to_string(),
                     description: "ZIP entry contains a nested file signature.".to_string(),
