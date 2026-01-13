@@ -1,0 +1,74 @@
+# GitHub Pages Jekyll Configuration for sis-pdf
+
+# Site settings
+title: "Smiley Is Suspicious (sis-pdf)"
+description: "PDF analyzer for detecting suspicious constructs and attack surface"
+baseurl: "/sis-pdf"
+url: "https://michiel.github.io"
+
+# Theme
+theme: jekyll-theme-cayman
+# Alternative themes available on GitHub Pages:
+# - jekyll-theme-minimal
+# - jekyll-theme-architect
+# - jekyll-theme-slate
+# - jekyll-theme-tactile
+# - jekyll-theme-time-machine
+# - jekyll-theme-leap-day
+# - jekyll-theme-merlot
+# - jekyll-theme-midnight
+# - jekyll-theme-modernist
+# - jekyll-theme-primer
+# - jekyll-theme-hacker
+
+# Build settings
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    default_lang: bash
+
+# Collections
+collections_dir: docs
+
+# Exclude from processing
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor
+  - corpus_baseline_2026-01-11/
+  - config.toml
+
+# Plugins
+plugins:
+  - jekyll-relative-links
+  - jekyll-optional-front-matter
+  - jekyll-readme-index
+  - jekyll-titles-from-headings
+
+# Plugin settings
+relative_links:
+  enabled: true
+  collections: false
+
+optional_front_matter:
+  remove_originals: false
+
+readme_index:
+  enabled: true
+  remove_originals: false
+
+titles_from_headings:
+  enabled: true
+  strip_title: true
+  collections: false
+
+# GitHub metadata
+repository: michiel/sis-pdf
+github:
+  is_project_page: true
+  repository_url: https://github.com/michiel/sis-pdf
+
+# Show downloads button
+show_downloads: true

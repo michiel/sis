@@ -1,0 +1,15 @@
+# Gemfile for local GitHub Pages development
+
+source "https://rubygems.org"
+
+# GitHub Pages gem includes all supported plugins
+gem "github-pages", group: :jekyll_plugins
+
+# Optional: Windows and JRuby does not include zoneinfo files
+gem "tzinfo-data", platforms: [:mingw, :mswin, :x64_mingw, :jruby]
+
+# Optional: Performance booster for watching directories on Windows
+gem "wdm", "~> 0.1.1", platforms: [:mingw, :x64_mingw, :mswin]
+
+# Optional: kramdown v2 ships without the gfm parser by default
+gem "kramdown-parser-gfm"
