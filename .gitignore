@@ -16,7 +16,6 @@ demo_sample.js
 *.pdb
 *.txt
 *.jsonl
-*.py
-!scripts/evaluate-mwb-corpus.py
+/f*.py
 out/
 .env.local
