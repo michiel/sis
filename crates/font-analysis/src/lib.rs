@@ -1,6 +1,7 @@
 pub mod dynamic;
 pub mod model;
 pub mod static_scan;
+pub mod type1;
 
 pub use model::FontAnalysisConfig;
 
@@ -19,8 +20,16 @@ pub fn analyse_font(data: &[u8], config: &FontAnalysisConfig) -> DynamicAnalysis
     }
 
     let mut outcome = DynamicAnalysisOutcome::default();
+
+    // Check if this is a Type 1 font
+    if type1::is_type1_font(data) {
+        let type1_findings = type1::analyze_type1(data);
+        outcome.findings.extend(type1_findings);
+    }
+
     let static_outcome = analyse_static(data);
-    let mut findings = static_outcome.findings;
+    let mut findings = outcome.findings;
+    findings.extend(static_outcome.findings);
 
     let should_run_dynamic =
         config.dynamic_enabled && static_outcome.risk_score >= DYNAMIC_RISK_THRESHOLD;
