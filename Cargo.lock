@@ -1113,6 +1113,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "skrifa",
+ "toml",
  "ttf-parser",
 ]
 
