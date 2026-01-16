@@ -1,6 +1,6 @@
 # Font Analysis Enhancement Implementation Plan
 
-This plan implements comprehensive font security analysis for `sis-pdf` using Rust-native crates. The work addresses critical gaps in Type 1 font analysis, dynamic parsing, CVE detection, and emerging font format support.
+This plan implements comprehensive font security analysis for `sis-pdf` using Rust-native crates. All work happens within the existing `crates/font-analysis/` crate, which already provides basic static and dynamic analysis infrastructure.
 
 ## Scope
 
@@ -16,23 +16,36 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
 **Out of Scope (Future Work):**
 - ML-based risk scoring models (noted in Stage 4, deferred)
 - Optional FFI to FreeType (sandboxed C library integration)
+- Fuzz testing infrastructure (AFL/libAFL integration)
+- Dedicated fuzzing harnesses and continuous fuzzing
+
+## Existing Infrastructure
+
+**Current `crates/font-analysis/` Structure:**
+- `lib.rs` - Main entry point with `analyse_font()` function
+- `model.rs` - Data structures (`FontAnalysisConfig`, `DynamicAnalysisOutcome`, `FontFinding`)
+- `static_scan.rs` - Static analysis module
+- `dynamic.rs` - Dynamic analysis with timeout handling (currently minimal)
+- `tests/` - Test suite
+
+**Already Available:**
+- `skrifa` (v0.40) - Available under `dynamic` feature flag
+- Timeout mechanism using `std::sync::mpsc` and thread spawning
+- `FontAnalysisConfig` with `enabled`, `dynamic_enabled`, `dynamic_timeout_ms`, `max_fonts`
+- Finding generation infrastructure
 
 ## Dependencies
 
-**New Crates Required:**
+**New Crates to Add:**
 - `postscript` - Type 1 font parsing and charstring decoding
 - `ttf-parser` (≥0.15) - Safe TrueType/OpenType parsing with variable font support
 - `allsorts` - Advanced parsing including WOFF/WOFF2 and color fonts
-- `skrifa` or `fontations/read-fonts` - Memory-safe parsing (Chrome's font engine)
-- `libafl` or `cargo-afl` - Fuzzing infrastructure
-- `arbitrary` - Test input generation for fuzzing
-- `reqwest` - HTTP client for CVE feed fetching
+- `reqwest` - HTTP client for CVE feed fetching (tools only)
 - `once_cell` - Lazy static initialization for rule registry
 
-**Existing Crates:**
+**Existing Crates (from workspace):**
 - `serde`, `serde_yaml`, `serde_json` - Configuration and signature parsing
 - `tracing` - Structured logging and instrumentation
-- `tokio` - Async runtime for timeouts
 - `thiserror` - Error type definitions
 - `regex` - Pattern matching for CVE filtering
 
@@ -114,15 +127,14 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
 - [ ] CVE signature system loads YAML/JSON signatures
 - [ ] Signatures match against parsed font context
 - [ ] Automated CVE feed fetcher retrieves NVD updates
-- [ ] Fuzz harness runs under AFL/libAFL
 
 **Tests:**
 - Fonts with parse errors trigger `font.dynamic_parse_failure`
 - CVE-2025-27163 test case (hmtx/hhea mismatch) detected
 - CVE-2025-27164 test case (CFF2/maxp mismatch) detected
 - CVE-2023-26369 test case (EBSC OOB) detected
-- Fuzzer discovers at least one input causing timeout/budget exceeded
 - Signature matching correctly identifies known vulnerable fonts
+- Malformed font files trigger appropriate error handling
 
 **Implementation Tasks:**
 
@@ -155,7 +167,7 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
 - Generate findings: `font.cve_2025_27163`, `font.cve_2025_27164`, etc.
 
 ### 2.4 CVE Signature System
-- **File:** `crates/font-signatures/src/lib.rs` (new crate)
+- **File:** `crates/font-analysis/src/signatures.rs` (new module)
 - Define `Signature` struct:
   ```rust
   struct Signature {
@@ -177,16 +189,8 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
 - Use `reqwest` to fetch NVD JSON feeds
 - Filter for font-related CVEs (keywords: font, TrueType, CFF, Adobe, FreeType, Skia)
 - Parse CVE descriptions and generate signature templates
-- Output YAML signatures to `crates/font-signatures/signatures/`
+- Output YAML signatures to `crates/font-analysis/signatures/`
 - Run as GitHub Action on weekly schedule
-
-### 2.6 Fuzz Testing Infrastructure
-- **File:** `fuzz/fuzz_targets/dynamic_font_parser.rs`
-- Create AFL harness calling `DynamicParser::parse()`
-- Use `arbitrary` crate for input generation
-- Configure to run 10-minute time-limited fuzzing in CI
-- Report crashes and hangs as GitHub issues
-- Optional: libAFL integration for coverage-guided fuzzing
 
 **Status:** Not Started
 
@@ -362,20 +366,20 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
 
 ## Stage 5: Automation & Documentation
 
-**Goal:** Integrate CVE updates into CI, add fuzzing automation, and document all new features.
+**Goal:** Integrate CVE updates into CI and document all new features.
 
 **Success Criteria:**
 - [ ] GitHub Action runs CVE update weekly
-- [ ] Fuzzing runs in CI on every PR (time-limited)
 - [ ] New findings documented in `docs/findings.md`
 - [ ] Example binary demonstrates font analysis API
 - [ ] README updated with font analysis capabilities
+- [ ] All new modules have documentation comments
 
 **Tests:**
 - CI workflow executes successfully
-- Fuzzing discovers at least one timeout case
 - Documentation builds without errors
 - Example compiles and runs
+- All unit tests pass
 
 **Implementation Tasks:**
 
@@ -388,15 +392,7 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
   3. Create PR if signatures changed
   4. Auto-label for security team review
 
-### 5.2 Fuzzing Automation
-- **File:** `.github/workflows/fuzz.yml`
-- Run on: every PR, nightly builds
-- Time limit: 10 minutes per target
-- Targets: `dynamic_font_parser`, `type1_charstring`, `variable_font_parser`
-- Report: upload crash reproducers as artifacts
-- Notify: create GitHub issue on new crashes
-
-### 5.3 Documentation Updates
+### 5.2 Documentation Updates
 - **File:** `docs/findings.md`
 - Add sections for new findings:
   - Type 1 findings (3 new)
@@ -405,7 +401,7 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
   - Correlation findings (1 new)
 - Include: severity, description, remediation, examples
 
-### 5.4 Examples
+### 5.3 Examples
 - **File:** `examples/font_analysis.rs`
 - Demonstrate:
   - Loading a PDF with embedded fonts
@@ -414,7 +410,7 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
   - Configuring thresholds
 - Include sample PDFs in `examples/samples/`
 
-### 5.5 README Updates
+### 5.4 README Updates
 - **File:** `README.md`
 - Add "Font Security Analysis" section
 - List supported formats: Type 1, TrueType, CFF, Variable, Color, WOFF/WOFF2
@@ -443,6 +439,24 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
 - Monitor with `ptrace` or signal handlers
 - Convert crashes to `font.freetype_crash` findings
 
+### Fuzz Testing Infrastructure
+
+**Rationale:** Deferred due to CI resource requirements and complexity. Manual testing with malformed fonts covers immediate needs.
+
+**Future Considerations:**
+- AFL or libAFL integration for coverage-guided fuzzing
+- Dedicated fuzzing harnesses: `fuzz/fuzz_targets/dynamic_font_parser.rs`, `type1_charstring.rs`, `variable_font_parser.rs`
+- CI integration with time-limited runs (10 minutes per target)
+- Crash reproduction and automated issue filing
+- Corpus management with public font collections
+
+**Implementation Notes (if pursued later):**
+- Use `cargo-afl` or `cargo-fuzz` for harness setup
+- Seed corpus with Google Fonts, Adobe Source, and known CVE test cases
+- Mutation strategies: bit flips, table size manipulation, operator injection
+- Target: 1 million executions per week for comprehensive coverage
+- Report crashes as GitHub issues with reproducers
+
 ---
 
 ## Testing Strategy
@@ -456,12 +470,7 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
 - `tests/font_analysis_integration.rs` with real PDF samples
 - CVE test suite with known vulnerable fonts
 - Regression tests for false positives
-
-### Fuzzing
-- Continuous fuzzing with AFL/libAFL
-- Corpus: seed with public font collections (Google Fonts, Adobe)
-- Mutation strategies: bit flips, table resizing, operator injection
-- Goal: 1 million executions per week
+- Malformed font tests for error handling
 
 ### Performance Benchmarks
 - `benches/font_analysis.rs` using Criterion
@@ -475,10 +484,10 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
 ### Technical Risks
 1. **Crate maturity:** `postscript` crate may be unmaintained
    - Mitigation: Fork and maintain if necessary, or implement Type 1 parsing manually
-2. **Fuzzing scalability:** AFL may be slow on complex inputs
-   - Mitigation: Use libAFL for better performance, limit corpus size
-3. **False positives:** Heuristics may flag benign fonts
+2. **False positives:** Heuristics may flag benign fonts
    - Mitigation: Tune thresholds via config, collect feedback from users
+3. **CVE signature accuracy:** Automated signature generation may miss nuances
+   - Mitigation: Manual review of generated signatures, community contributions
 
 ### External Dependencies
 - NVD API availability for CVE feeds
@@ -486,7 +495,7 @@ This plan implements comprehensive font security analysis for `sis-pdf` using Ru
 - Font test corpora (Google Fonts, Adobe, etc.)
 
 ### Resource Requirements
-- CI compute time: +30 minutes/week for fuzzing
+- CI compute time: +5 minutes/week for CVE updates
 - Storage: ~100MB for CVE signatures and test fonts
 - Development time: ~8-12 weeks for 5 stages (2-3 weeks per stage)
 
