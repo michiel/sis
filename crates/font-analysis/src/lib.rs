@@ -1,9 +1,11 @@
 pub mod dynamic;
 pub mod model;
+pub mod signatures;
 pub mod static_scan;
 pub mod type1;
 
 pub use model::FontAnalysisConfig;
+pub use signatures::{Signature, SignatureRegistry};
 
 use std::collections::HashMap;
 use std::sync::mpsc;

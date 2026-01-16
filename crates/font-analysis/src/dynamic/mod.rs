@@ -3,7 +3,8 @@ mod variable_fonts;
 
 pub use parser::{parse_font, FontContext};
 
-use crate::model::FontFinding;
+use crate::model::{Confidence, FontFinding, Severity};
+use std::collections::HashMap;
 
 #[cfg(feature = "dynamic")]
 pub fn analyse(data: &[u8]) -> Result<(), String> {

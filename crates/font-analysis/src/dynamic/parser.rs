@@ -52,9 +52,9 @@ pub fn parse_font(data: &[u8]) -> Result<FontContext, String> {
     context.glyph_count_maxp = Some(face.number_of_glyphs());
 
     // Extract horizontal metrics info from hhea
-    if let Some(hhea_table) = face.tables().hhea {
-        context.num_h_metrics = Some(hhea_table.number_of_h_metrics());
-    }
+    // ttf-parser stores number_of_h_metrics as a public field
+    let hhea_table = face.tables().hhea;
+    context.num_h_metrics = Some(hhea_table.number_of_metrics);
 
     // Check for variable font tables
     context.has_gvar = face.tables().gvar.is_some();
