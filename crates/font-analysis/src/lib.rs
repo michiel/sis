@@ -79,7 +79,7 @@ pub fn analyse_font(data: &[u8], config: &FontAnalysisConfig) -> DynamicAnalysis
 
     // Run dynamic analysis if enabled
     if config.dynamic_enabled && dynamic::available() {
-        match run_dynamic_with_timeout(&font_data, config.dynamic_timeout_ms) {
+        match run_dynamic_with_timeout(&font_data, config.dynamic_timeout_ms, config) {
             Ok(dynamic_findings) => {
                 findings.extend(dynamic_findings);
             }
@@ -135,11 +135,16 @@ enum DynamicError {
     Failure(String),
 }
 
-fn run_dynamic_with_timeout(data: &[u8], timeout_ms: u64) -> Result<Vec<FontFinding>, DynamicError> {
+fn run_dynamic_with_timeout(
+    data: &[u8],
+    timeout_ms: u64,
+    config: &FontAnalysisConfig,
+) -> Result<Vec<FontFinding>, DynamicError> {
     let (tx, rx) = mpsc::channel();
     let payload = data.to_vec();
+    let config_clone = config.clone();
     std::thread::spawn(move || {
-        let findings = dynamic::analyze_with_findings(&payload);
+        let findings = dynamic::analyze_with_findings_and_config(&payload, &config_clone);
         let _ = tx.send(findings);
     });
 
