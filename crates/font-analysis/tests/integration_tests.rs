@@ -244,6 +244,75 @@ fn test_disabled_analysis() {
     );
 }
 
+/// Test TrueType VM detects excessive instructions
+#[cfg(feature = "dynamic")]
+#[test]
+fn test_ttf_excessive_instructions() {
+    let data = include_bytes!("fixtures/exploits/ttf_excessive_instructions.ttf");
+    let mut config = FontAnalysisConfig::default();
+    config.dynamic_enabled = true;
+
+    let outcome = analyse_font(data, &config);
+
+    // Should detect excessive instructions in hinting program
+    let has_hinting_issue = outcome
+        .findings
+        .iter()
+        .any(|f| f.kind == "font.ttf_hinting_suspicious");
+
+    assert!(
+        has_hinting_issue,
+        "Excessive instructions should be detected. Findings: {:?}",
+        outcome.findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+    );
+}
+
+/// Test TrueType VM detects stack overflow
+#[cfg(feature = "dynamic")]
+#[test]
+fn test_ttf_stack_overflow() {
+    let data = include_bytes!("fixtures/exploits/ttf_stack_overflow.ttf");
+    let mut config = FontAnalysisConfig::default();
+    config.dynamic_enabled = true;
+
+    let outcome = analyse_font(data, &config);
+
+    // Should detect stack overflow in hinting program
+    let has_hinting_issue = outcome
+        .findings
+        .iter()
+        .any(|f| f.kind == "font.ttf_hinting_suspicious");
+
+    assert!(
+        has_hinting_issue,
+        "Stack overflow should be detected. Findings: {:?}",
+        outcome.findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+    );
+}
+
+/// Test TrueType VM detects division by zero
+#[cfg(feature = "dynamic")]
+#[test]
+fn test_ttf_division_by_zero() {
+    let data = include_bytes!("fixtures/exploits/ttf_division_by_zero.ttf");
+    let mut config = FontAnalysisConfig::default();
+    config.dynamic_enabled = true;
+
+    let outcome = analyse_font(data, &config);
+
+    // Should detect division by zero in hinting program
+    let has_hinting_issue = outcome
+        .findings
+        .iter()
+        .any(|f| f.kind == "font.ttf_hinting_suspicious");
+
+    assert!(
+        has_hinting_issue,
+        "Division by zero should be detected. Findings: {:?}",
+        outcome.findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+    );
+}
+
 /// Test that multiple vulnerability signals triggers aggregate finding
 #[test]
 fn test_multiple_vulnerability_signals() {
