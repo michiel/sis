@@ -1,9 +1,11 @@
+pub mod context;
 pub mod dynamic;
 pub mod model;
 pub mod signatures;
 pub mod static_scan;
 pub mod type1;
 
+pub use context::AnalysisContext;
 pub use model::FontAnalysisConfig;
 pub use signatures::{Signature, SignatureRegistry};
 

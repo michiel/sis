@@ -1135,6 +1135,7 @@ dependencies = [
  "serde_yaml",
  "skrifa",
  "toml",
+ "tracing",
  "ttf-parser",
 ]
 
