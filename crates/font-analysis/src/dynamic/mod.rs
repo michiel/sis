@@ -2,7 +2,7 @@ mod parser;
 mod variable_fonts;
 mod ttf_vm;
 
-pub use parser::{parse_font, FontContext};
+pub use parser::{parse_font, FontContext, InvalidMagic, InstructionIssue, TableInfo};
 
 use crate::model::{Confidence, FontFinding, Severity};
 use std::collections::HashMap;

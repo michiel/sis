@@ -1,12 +1,15 @@
 /// Dynamic font parser using ttf-parser for comprehensive analysis
 
 #[cfg(feature = "dynamic")]
+use std::collections::HashMap;
+#[cfg(feature = "dynamic")]
 use ttf_parser::Face;
 
 /// Font context extracted from parsing
 #[cfg(feature = "dynamic")]
 #[derive(Debug, Clone)]
 pub struct FontContext {
+    // Existing fields for basic analysis
     pub glyph_count_maxp: Option<u16>,
     pub glyph_count_cff: Option<usize>,
     pub num_h_metrics: Option<u16>,
@@ -15,6 +18,34 @@ pub struct FontContext {
     pub has_cff2: bool,
     pub has_ebsc: bool,
     pub tables: Vec<TableInfo>,
+
+    // New fields for advanced pattern matching
+    pub file_length: usize,
+    pub table_map: HashMap<String, TableInfo>,
+    pub recursion_depths: HashMap<String, usize>,
+    pub table_references: HashMap<String, Vec<String>>,
+    pub invalid_magic_numbers: Vec<InvalidMagic>,
+    pub instruction_issues: Vec<InstructionIssue>,
+}
+
+/// Invalid magic number detected during parsing
+#[cfg(feature = "dynamic")]
+#[derive(Debug, Clone)]
+pub struct InvalidMagic {
+    pub table: String,
+    pub offset: usize,
+    pub expected: Vec<u8>,
+    pub actual: Vec<u8>,
+}
+
+/// Instruction stream issue detected during parsing
+#[cfg(feature = "dynamic")]
+#[derive(Debug, Clone)]
+pub struct InstructionIssue {
+    pub table: String,
+    pub offset: usize,
+    pub opcode: u8,
+    pub issue_type: String, // "invalid_opcode", "invalid_sequence"
 }
 
 #[cfg(not(feature = "dynamic"))]
@@ -33,6 +64,14 @@ pub struct TableInfo {
 #[derive(Debug, Clone)]
 pub struct TableInfo {}
 
+#[cfg(not(feature = "dynamic"))]
+#[derive(Debug, Clone)]
+pub struct InvalidMagic {}
+
+#[cfg(not(feature = "dynamic"))]
+#[derive(Debug, Clone)]
+pub struct InstructionIssue {}
+
 #[cfg(feature = "dynamic")]
 pub fn parse_font(data: &[u8]) -> Result<FontContext, String> {
     let face = Face::parse(data, 0).map_err(|e| format!("Failed to parse font: {:?}", e))?;
@@ -46,6 +85,13 @@ pub fn parse_font(data: &[u8]) -> Result<FontContext, String> {
         has_cff2: false,
         has_ebsc: false,
         tables: Vec::new(),
+        // Initialize new fields with defaults (full extraction in Stage 8)
+        file_length: data.len(),
+        table_map: HashMap::new(),
+        recursion_depths: HashMap::new(),
+        table_references: HashMap::new(),
+        invalid_magic_numbers: Vec::new(),
+        instruction_issues: Vec::new(),
     };
 
     // Extract glyph count from maxp
@@ -67,7 +113,17 @@ pub fn parse_font(data: &[u8]) -> Result<FontContext, String> {
     // Extract table information for analysis
     extract_tables(data, &mut context)?;
 
+    // Build table_map from tables for quick lookup
+    build_table_map(&mut context);
+
     Ok(context)
+}
+
+#[cfg(feature = "dynamic")]
+fn build_table_map(context: &mut FontContext) {
+    for table in &context.tables {
+        context.table_map.insert(table.tag.clone(), table.clone());
+    }
 }
 
 #[cfg(feature = "dynamic")]
