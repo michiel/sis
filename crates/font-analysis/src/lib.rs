@@ -1,9 +1,12 @@
+pub mod color_fonts;
 pub mod context;
 pub mod dynamic;
 pub mod model;
 pub mod signatures;
 pub mod static_scan;
 pub mod type1;
+pub mod variable_fonts;
+pub mod woff;
 
 pub use context::AnalysisContext;
 pub use model::FontAnalysisConfig;
@@ -25,19 +28,58 @@ pub fn analyse_font(data: &[u8], config: &FontAnalysisConfig) -> DynamicAnalysis
 
     let mut outcome = DynamicAnalysisOutcome::default();
 
+    // Handle WOFF/WOFF2 decompression
+    let font_data = if woff::is_woff(data) || woff::is_woff2(data) {
+        // Validate WOFF for decompression bombs before decompressing
+        outcome.findings.extend(woff::validate_woff_decompression(data));
+
+        // Attempt decompression if dynamic features enabled
+        #[cfg(feature = "dynamic")]
+        {
+            match woff::decompress_woff(data) {
+                Ok(decompressed) => decompressed,
+                Err(e) => {
+                    let mut meta = HashMap::new();
+                    meta.insert("error".to_string(), e);
+                    outcome.findings.push(FontFinding {
+                        kind: "font.woff_decompression_failed".into(),
+                        severity: Severity::Medium,
+                        confidence: Confidence::Probable,
+                        title: "WOFF decompression failed".into(),
+                        description: "Failed to decompress WOFF/WOFF2 font".into(),
+                        meta,
+                    });
+                    data.to_vec()
+                }
+            }
+        }
+        #[cfg(not(feature = "dynamic"))]
+        {
+            data.to_vec()
+        }
+    } else {
+        data.to_vec()
+    };
+
     // Check if this is a Type 1 font
-    if type1::is_type1_font(data) {
-        let type1_findings = type1::analyze_type1(data);
+    if type1::is_type1_font(&font_data) {
+        let type1_findings = type1::analyze_type1(&font_data);
         outcome.findings.extend(type1_findings);
     }
 
-    let static_outcome = analyse_static(data);
+    let static_outcome = analyse_static(&font_data);
     let mut findings = outcome.findings;
     findings.extend(static_outcome.findings);
 
+    // Run variable font analysis
+    findings.extend(variable_fonts::analyze_variable_font(&font_data));
+
+    // Run color font analysis
+    findings.extend(color_fonts::analyze_color_font(&font_data));
+
     // Run dynamic analysis if enabled
     if config.dynamic_enabled && dynamic::available() {
-        match run_dynamic_with_timeout(data, config.dynamic_timeout_ms) {
+        match run_dynamic_with_timeout(&font_data, config.dynamic_timeout_ms) {
             Ok(dynamic_findings) => {
                 findings.extend(dynamic_findings);
             }
