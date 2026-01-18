@@ -3,16 +3,17 @@
 /// This module analyzes color font tables (COLR, CPAL) for consistency
 /// and potential security issues.
 
+#[cfg(feature = "dynamic")]
 use std::collections::HashMap;
+#[cfg(feature = "dynamic")]
 use tracing::{debug, instrument, warn};
 
+#[cfg(feature = "dynamic")]
 use crate::model::{Confidence, FontFinding, Severity};
 
 /// Maximum safe number of palettes
+#[cfg(feature = "dynamic")]
 const MAX_SAFE_PALETTES: usize = 256;
-
-/// Maximum safe number of color layers per glyph
-const MAX_SAFE_LAYERS: usize = 1000;
 
 /// Analyze color font tables for inconsistencies
 #[cfg(feature = "dynamic")]

@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use crate::model::{Confidence, FontFinding, Severity};
 
-use super::charstring::{analyze_charstring, CharstringAnalysis};
+use super::charstring::{
+    analyze_charstring, CharstringAnalysis, MAX_SAFE_OPERATORS, MAX_SAFE_STACK_DEPTH,
+};
 use super::eexec::decrypt_eexec_auto;
 
 /// Analyze Type 1 font and generate findings
@@ -118,9 +120,10 @@ fn generate_findings_from_analysis(analysis: &CharstringAnalysis, findings: &mut
     }
 
     // Check for excessive stack depth
-    if analysis.max_stack_depth > 100 {
+    if analysis.max_stack_depth > MAX_SAFE_STACK_DEPTH {
         let mut meta = HashMap::new();
         meta.insert("max_stack_depth".to_string(), analysis.max_stack_depth.to_string());
+        meta.insert("threshold".to_string(), MAX_SAFE_STACK_DEPTH.to_string());
 
         findings.push(FontFinding {
             kind: "font.type1_excessive_stack".to_string(),
@@ -128,17 +131,18 @@ fn generate_findings_from_analysis(analysis: &CharstringAnalysis, findings: &mut
             confidence: Confidence::Probable,
             title: "Type 1 font with excessive stack usage".to_string(),
             description: format!(
-                "Font charstrings use excessive stack depth ({}), which may indicate an exploit attempt.",
-                analysis.max_stack_depth
+                "Font charstrings use excessive stack depth ({} > {}), which may indicate an exploit attempt.",
+                analysis.max_stack_depth, MAX_SAFE_STACK_DEPTH
             ),
             meta,
         });
     }
 
     // Check for large charstring programs
-    if analysis.total_operators > 10_000 {
+    if analysis.total_operators > MAX_SAFE_OPERATORS {
         let mut meta = HashMap::new();
         meta.insert("total_operators".to_string(), analysis.total_operators.to_string());
+        meta.insert("threshold".to_string(), MAX_SAFE_OPERATORS.to_string());
 
         findings.push(FontFinding {
             kind: "font.type1_large_charstring".to_string(),
@@ -146,8 +150,8 @@ fn generate_findings_from_analysis(analysis: &CharstringAnalysis, findings: &mut
             confidence: Confidence::Heuristic,
             title: "Type 1 font with large charstring program".to_string(),
             description: format!(
-                "Font contains {} charstring operators, which is unusually large.",
-                analysis.total_operators
+                "Font contains {} charstring operators (threshold: {}), which is unusually large.",
+                analysis.total_operators, MAX_SAFE_OPERATORS
             ),
             meta,
         });

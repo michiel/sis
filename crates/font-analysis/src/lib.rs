@@ -19,7 +19,8 @@ use std::time::Duration;
 use model::{Confidence, DynamicAnalysisOutcome, FontFinding, Severity};
 use static_scan::analyse_static;
 
-const DYNAMIC_RISK_THRESHOLD: u32 = 2;
+/// Threshold for flagging fonts with multiple vulnerability signals
+const DYNAMIC_RISK_THRESHOLD: usize = 2;
 
 pub fn analyse_font(data: &[u8], config: &FontAnalysisConfig) -> DynamicAnalysisOutcome {
     if !config.enabled {
@@ -115,13 +116,17 @@ pub fn analyse_font(data: &[u8], config: &FontAnalysisConfig) -> DynamicAnalysis
         }
     }
 
-    if findings.len() >= 2 {
+    if findings.len() >= DYNAMIC_RISK_THRESHOLD {
         findings.push(FontFinding {
             kind: "font.multiple_vuln_signals".into(),
             severity: Severity::High,
             confidence: Confidence::Probable,
             title: "Multiple font anomalies".into(),
-            description: "Font exhibits multiple anomalous signals.".into(),
+            description: format!(
+                "Font exhibits {} anomalous signals (threshold: {}).",
+                findings.len(),
+                DYNAMIC_RISK_THRESHOLD
+            ),
             meta: HashMap::new(),
         });
     }

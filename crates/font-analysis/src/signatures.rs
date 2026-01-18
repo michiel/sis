@@ -459,7 +459,7 @@ impl SignatureRegistry {
         context: &crate::dynamic::FontContext,
         table: &str,
         offset: usize,
-        expected: &str,
+        _expected: &str,  // Not used - validation already done in FontContext
     ) -> bool {
         context.invalid_magic_numbers.iter()
             .any(|m| m.table == table && m.offset == offset)

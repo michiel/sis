@@ -13,13 +13,15 @@ pub struct CharstringAnalysis {
 
 #[derive(Debug, Clone)]
 pub struct DangerousOperator {
-    pub position: usize,
     pub operator: String,
     pub context: String,
 }
 
-const MAX_SAFE_STACK_DEPTH: usize = 100;
-const MAX_SAFE_OPERATORS: usize = 10_000;
+/// Maximum safe stack depth for Type 1 charstrings
+pub const MAX_SAFE_STACK_DEPTH: usize = 100;
+
+/// Maximum safe number of operators in a charstring
+pub const MAX_SAFE_OPERATORS: usize = 10_000;
 
 /// Dangerous Type 1 operators that can be exploited
 const DANGEROUS_OPERATORS: &[&str] = &[
@@ -117,7 +119,7 @@ fn analyze_single_charstring(
         if DANGEROUS_OPERATORS.contains(token) {
             debug!(operator = token, position = pos, "Dangerous operator found");
             analysis.dangerous_ops.push(DangerousOperator {
-                position: pos,
+
                 operator: token.to_string(),
                 context: format!("{}:{}", name, pos),
             });
@@ -191,6 +193,22 @@ fn detect_blend_pattern(dangerous_ops: &[DangerousOperator]) -> bool {
 }
 
 /// Check if analysis indicates potential security issues
+///
+/// This is a convenience function that checks all security-relevant thresholds.
+/// Returns true if any of the following conditions are met:
+/// - Stack depth exceeds MAX_SAFE_STACK_DEPTH
+/// - Total operators exceed MAX_SAFE_OPERATORS
+/// - Dangerous operators are present
+/// - BLEND exploit pattern is detected
+///
+/// # Example
+/// ```ignore
+/// let analysis = analyze_charstring(font_data);
+/// if is_suspicious(&analysis) {
+///     // Handle suspicious font
+/// }
+/// ```
+#[allow(dead_code)]  // Public API for library consumers
 pub fn is_suspicious(analysis: &CharstringAnalysis) -> bool {
     analysis.max_stack_depth > MAX_SAFE_STACK_DEPTH
         || analysis.total_operators > MAX_SAFE_OPERATORS
@@ -209,14 +227,14 @@ mod tests {
         // Add multiple callothersubr and return
         for i in 0..4 {
             ops.push(DangerousOperator {
-                position: i,
+
                 operator: "callothersubr".to_string(),
                 context: format!("test:{}", i),
             });
         }
         for i in 0..4 {
             ops.push(DangerousOperator {
-                position: i + 4,
+
                 operator: "return".to_string(),
                 context: format!("test:{}", i + 4),
             });
@@ -228,7 +246,6 @@ mod tests {
     #[test]
     fn test_no_blend_pattern() {
         let ops = vec![DangerousOperator {
-            position: 0,
             operator: "callothersubr".to_string(),
             context: "test:0".to_string(),
         }];
@@ -239,7 +256,6 @@ mod tests {
     #[test]
     fn test_blend_operator() {
         let ops = vec![DangerousOperator {
-            position: 0,
             operator: "blend".to_string(),
             context: "test:0".to_string(),
         }];
@@ -274,7 +290,6 @@ mod tests {
             max_stack_depth: 10,
             total_operators: 100,
             dangerous_ops: vec![DangerousOperator {
-                position: 0,
                 operator: "callothersubr".to_string(),
                 context: "test:0".to_string(),
             }],

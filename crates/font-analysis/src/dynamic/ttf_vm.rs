@@ -9,12 +9,16 @@ use tracing::{debug, instrument, warn};
 
 use crate::model::{Confidence, FontFinding, Severity};
 
-/// TrueType VM execution limits
+/// TrueType VM execution limits (for future full VM execution)
+#[allow(dead_code)]
 const MAX_INSTRUCTIONS_PER_GLYPH: usize = 50_000;
+#[allow(dead_code)]
 const MAX_STACK_DEPTH: usize = 256;
+#[allow(dead_code)]
 const MAX_LOOP_ITERATIONS: usize = 10_000;
 
-/// VM execution state
+/// VM execution state (for future full VM execution)
+#[allow(dead_code)]
 #[derive(Debug)]
 struct VMState {
     stack: Vec<i32>,
