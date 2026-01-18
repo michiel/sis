@@ -1,8 +1,11 @@
 use anyhow::{anyhow, Result};
+use globset::Glob;
+use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::{self, json};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 use sis_pdf_core::model::Severity;
 use sis_pdf_core::scan::ScanContext;
@@ -1710,6 +1713,237 @@ fn cycle_to_json(idx: usize, cycle: &[(u32, u16)]) -> serde_json::Value {
         "length": cycle.len(),
         "path": path,
     })
+}
+
+/// Batch mode: Execute query across multiple PDF files in a directory
+///
+/// # Arguments
+/// * `query` - The query to execute
+/// * `path` - Directory to scan
+/// * `glob` - Glob pattern for file matching
+/// * `scan_options` - Scan configuration
+/// * `extract_to` - Optional extraction directory
+/// * `max_extract_bytes` - Maximum bytes to extract per file
+/// * `json` - Output in JSON format
+/// * `max_batch_files` - Maximum number of files to process
+/// * `max_batch_bytes` - Maximum total bytes to process
+/// * `max_walk_depth` - Maximum directory depth
+pub fn run_query_batch(
+    query: &Query,
+    path: &Path,
+    glob: &str,
+    scan_options: &ScanOptions,
+    extract_to: Option<&Path>,
+    max_extract_bytes: usize,
+    json: bool,
+    max_batch_files: usize,
+    max_batch_bytes: u64,
+    max_walk_depth: usize,
+) -> Result<()> {
+    use sis_pdf_core::security_log::{SecurityDomain, SecurityEvent};
+    use sis_pdf_core::model::Severity as SecuritySeverity;
+    use tracing::{error, Level};
+    use memmap2::Mmap;
+
+    // Compile glob matcher
+    let matcher = Glob::new(glob)?.compile_matcher();
+
+    // Walk directory and collect matching files
+    let iter = if path.is_file() {
+        WalkDir::new(path.parent().unwrap_or(path))
+            .follow_links(false)
+            .max_depth(max_walk_depth)
+    } else {
+        WalkDir::new(path)
+            .follow_links(false)
+            .max_depth(max_walk_depth)
+    };
+
+    let mut total_bytes = 0u64;
+    let mut file_count = 0usize;
+    let mut paths = Vec::new();
+
+    for entry in iter.into_iter().filter_map(Result::ok) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let entry_path = entry.path();
+        if !matcher.is_match(entry_path) {
+            continue;
+        }
+
+        file_count += 1;
+        if file_count > max_batch_files {
+            SecurityEvent {
+                level: Level::ERROR,
+                domain: SecurityDomain::Detection,
+                severity: SecuritySeverity::Medium,
+                kind: "batch_file_limit_exceeded",
+                policy: None,
+                object_id: None,
+                object_type: None,
+                vector: None,
+                technique: None,
+                confidence: None,
+                message: "Batch query file count exceeded",
+            }
+            .emit();
+            error!(
+                max_files = max_batch_files,
+                "Batch query file count exceeded"
+            );
+            return Err(anyhow!("batch file count exceeds limit"));
+        }
+
+        if let Ok(meta) = entry.metadata() {
+            total_bytes = total_bytes.saturating_add(meta.len());
+            if total_bytes > max_batch_bytes {
+                SecurityEvent {
+                    level: Level::ERROR,
+                    domain: SecurityDomain::Detection,
+                    severity: SecuritySeverity::Medium,
+                    kind: "batch_size_limit_exceeded",
+                    policy: None,
+                    object_id: None,
+                    object_type: None,
+                    vector: None,
+                    technique: None,
+                    confidence: None,
+                    message: "Batch query byte limit exceeded",
+                }
+                .emit();
+                error!(
+                    total_bytes = total_bytes,
+                    max_bytes = max_batch_bytes,
+                    "Batch query byte limit exceeded"
+                );
+                return Err(anyhow!("batch size exceeds limit"));
+            }
+        }
+        paths.push(entry_path.to_path_buf());
+    }
+
+    if paths.is_empty() {
+        return Err(anyhow!("no files matched {} in {}", glob, path.display()));
+    }
+
+    // Helper to mmap a file
+    fn mmap_file(path: &Path) -> Result<Mmap> {
+        let file = fs::File::open(path)?;
+        unsafe { memmap2::Mmap::map(&file).map_err(|e| anyhow!("mmap failed: {}", e)) }
+    }
+
+    // Process files in parallel using rayon
+    let thread_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let use_parallel = thread_count > 1 && paths.len() > 1;
+
+    let indexed_paths: Vec<(usize, PathBuf)> = paths.into_iter().enumerate().collect();
+
+    // Batch result structure
+    #[derive(Serialize)]
+    struct BatchResult {
+        path: String,
+        result: QueryResult,
+    }
+
+    let process_path = |path_buf: &PathBuf| -> Result<Option<BatchResult>> {
+        let path_str = path_buf.display().to_string();
+        let mmap = mmap_file(path_buf)?;
+
+        // Build scan context
+        let ctx = build_scan_context(&mmap, scan_options)?;
+
+        // Execute query
+        let result = execute_query_with_context(query, &ctx, extract_to, max_extract_bytes)?;
+
+        // Filter out empty results
+        let is_empty = match &result {
+            QueryResult::Scalar(ScalarValue::Number(n)) => *n == 0,
+            QueryResult::Scalar(ScalarValue::String(s)) => s.is_empty(),
+            QueryResult::Scalar(ScalarValue::Boolean(_)) => false,
+            QueryResult::List(l) => l.is_empty(),
+            QueryResult::Structure(_) => false,  // Always include structure results
+        };
+
+        if is_empty {
+            Ok(None)
+        } else {
+            Ok(Some(BatchResult {
+                path: path_str,
+                result,
+            }))
+        }
+    };
+
+    let results: Vec<(usize, Option<BatchResult>)> = if use_parallel {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(thread_count)
+            .build();
+        match pool {
+            Ok(pool) => pool.install(|| {
+                indexed_paths
+                    .par_iter()
+                    .map(|(idx, path_buf)| {
+                        process_path(path_buf).map(|res| (*idx, res))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })?,
+            Err(_) => {
+                // Fall back to sequential processing
+                indexed_paths
+                    .iter()
+                    .map(|(idx, path_buf)| {
+                        process_path(path_buf).map(|res| (*idx, res))
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
+        }
+    } else {
+        indexed_paths
+            .iter()
+            .map(|(idx, path_buf)| {
+                process_path(path_buf).map(|res| (*idx, res))
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+
+    // Sort by original index to preserve order
+    let mut sorted_results: Vec<_> = results.into_iter()
+        .filter_map(|(idx, res)| res.map(|r| (idx, r)))
+        .collect();
+    sorted_results.sort_by_key(|(idx, _)| *idx);
+
+    // Output results
+    if json {
+        let results_only: Vec<_> = sorted_results.into_iter().map(|(_, r)| r).collect();
+        println!("{}", serde_json::to_string_pretty(&results_only)?);
+    } else {
+        for (_, batch_result) in sorted_results {
+            match batch_result.result {
+                QueryResult::Scalar(ScalarValue::Number(n)) => {
+                    println!("{}: {}", batch_result.path, n)
+                }
+                QueryResult::Scalar(ScalarValue::String(s)) => {
+                    println!("{}: {}", batch_result.path, s)
+                }
+                QueryResult::Scalar(ScalarValue::Boolean(b)) => {
+                    println!("{}: {}", batch_result.path, b)
+                }
+                QueryResult::List(l) => {
+                    for item in l {
+                        println!("{}: {}", batch_result.path, item);
+                    }
+                }
+                QueryResult::Structure(j) => {
+                    println!("{}: {}", batch_result.path, serde_json::to_string_pretty(&j)?);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

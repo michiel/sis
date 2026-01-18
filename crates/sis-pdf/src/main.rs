@@ -103,8 +103,8 @@ enum Command {
     },
     #[command(about = "Query PDF structure, content, and findings")]
     Query {
-        #[arg(help = "PDF file path")]
-        pdf: String,
+        #[arg(help = "PDF file path (required unless --path is used)")]
+        pdf: Option<String>,
         #[arg(
             help = "Query string (e.g., 'pages', 'js', 'findings.high'). Omit for interactive REPL."
         )]
@@ -633,16 +633,34 @@ fn main() -> Result<()> {
             glob,
             max_extract_bytes,
         } => {
-            // Validate that path and pdf are mutually exclusive
-            if path.is_some() && !pdf.is_empty() {
-                return Err(anyhow!("cannot specify both --path and PDF file argument"));
-            }
+            // Validate that either path or pdf is provided, but not both
+            // Note: When using --path, the query string might be parsed as the PDF argument
+            // due to positional argument ordering. We need to handle this case.
+            let (actual_pdf, actual_query) = if path.is_some() {
+                // In batch mode, if both pdf and query are provided, the "pdf" is actually the query
+                match (&pdf, &query) {
+                    (Some(q), None) => (None, Some(q.clone())),
+                    (Some(_), Some(_)) => {
+                        return Err(anyhow!(
+                            "When using --path, provide only the query string as a positional argument"
+                        ));
+                    }
+                    (None, Some(q)) => (None, Some(q.clone())),
+                    (None, None) => (None, None),
+                }
+            } else {
+                // Single file mode
+                if pdf.is_none() {
+                    return Err(anyhow!("must specify either PDF file argument or --path"));
+                }
+                (pdf.clone(), query.clone())
+            };
 
-            if let Some(query_str) = query {
+            if let Some(query_str) = actual_query {
                 // One-shot query mode
                 run_query_oneshot(
                     &query_str,
-                    &pdf,
+                    actual_pdf.as_deref(),
                     json,
                     compact,
                     deep,
@@ -656,9 +674,12 @@ fn main() -> Result<()> {
                     max_extract_bytes,
                 )
             } else {
-                // Interactive REPL mode
+                // Interactive REPL mode requires a single PDF file
+                if path.is_some() {
+                    return Err(anyhow!("REPL mode requires a single PDF file, not --path"));
+                }
                 run_query_repl(
-                    &pdf,
+                    actual_pdf.as_deref().unwrap(),  // Safe because we validated above
                     deep,
                     max_decode_bytes,
                     max_total_decoded_bytes,
@@ -2528,7 +2549,7 @@ fn mmap_file(path: &str) -> Result<Mmap> {
 
 fn run_query_oneshot(
     query_str: &str,
-    pdf_path: &str,
+    pdf_path: Option<&str>,
     json: bool,
     compact: bool,
     deep: bool,
@@ -2543,16 +2564,6 @@ fn run_query_oneshot(
 ) -> Result<()> {
     use commands::query;
 
-    // Phase 3: Stub for batch mode (will be implemented in Phase 3)
-    if path.is_some() {
-        return Err(anyhow!(
-            "Batch mode (--path) not yet implemented. Coming in Phase 3."
-        ));
-    }
-
-    // Suppress unused parameter warnings for Phase 1
-    let _ = glob;
-
     // Parse the query
     let query =
         query::parse_query(query_str).map_err(|e| anyhow!("Failed to parse query: {}", e))?;
@@ -2566,7 +2577,24 @@ fn run_query_oneshot(
         max_objects,
     };
 
-    // Execute the query (Phase 2: extraction now supported)
+    // Phase 3: Batch mode - execute query across directory
+    if let Some(dir_path) = path {
+        return query::run_query_batch(
+            &query,
+            dir_path,
+            glob,
+            &scan_options,
+            extract_to,
+            max_extract_bytes,
+            json,
+            MAX_BATCH_FILES,
+            MAX_BATCH_BYTES,
+            MAX_WALK_DEPTH,
+        );
+    }
+
+    // Single file mode
+    let pdf_path = pdf_path.ok_or_else(|| anyhow!("PDF file path required for single file mode"))?;
     let result = query::execute_query(
         &query,
         std::path::Path::new(pdf_path),

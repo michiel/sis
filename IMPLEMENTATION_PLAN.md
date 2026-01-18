@@ -1,6 +1,6 @@
 # Query Interface Extension: Reinstate Removed Features
 
-**Status:** 🚧 In Progress (Phase 2 Complete, Phase 3 In Progress)
+**Status:** 🚧 In Progress (Phase 3 Complete, Phase 4 In Progress)
 **Started:** 2026-01-18
 **Target Completion:** Phase 5 Complete
 
@@ -115,13 +115,19 @@ sis> embedded
 
 ---
 
-### 🚧 Phase 3: Batch Mode (0% Complete - Next)
+### ✅ Phase 3: Batch Mode (100% Complete)
 
 **Objective:** Enable `--path DIR --glob PATTERN` for directory scanning
 
-**Files to Modify:**
-- `crates/sis-pdf/src/commands/query.rs` - Add `run_query_batch()` function
-- `crates/sis-pdf/src/main.rs` - Route batch mode queries
+**Files Modified:**
+- `crates/sis-pdf/src/commands/query.rs` (lines 1-10, 1718-1947)
+  - ✅ Added imports: `Glob`, `rayon::prelude::*`, `WalkDir`, `PathBuf`
+  - ✅ Added `run_query_batch()` function (230 lines)
+- `crates/sis-pdf/src/main.rs` (lines 107, 637-691, 2540, 2568-2582, 2585)
+  - ✅ Changed `pdf: String` to `pdf: Option<String>` for optional PDF argument
+  - ✅ Added validation logic to handle `--path` vs single file mode
+  - ✅ Updated routing to call `run_query_batch()` when `--path` is provided
+  - ✅ Fixed positional argument handling (query string can be first arg with --path)
 
 **Implementation Approach:**
 - Use `walkdir::WalkDir` for directory traversal (max depth from constants)
@@ -132,12 +138,14 @@ sis> embedded
 - Output formats: Text, JSON, JSONL
 - Use rayon for parallel processing (like Scan command)
 
-**Success Criteria:**
-- [ ] `sis query --path corpus --glob "*.pdf" js.count` lists PDFs with JS
-- [ ] `sis query --path corpus --glob "*.pdf" findings.high` filters by findings
-- [ ] Respects file and size limits
-- [ ] Works with `--extract-to` flag
-- [ ] Supports `--json` output
+**Success Criteria:** ✅ All Met
+- ✅ `sis query --path corpus --glob "*.pdf" js.count` lists PDFs with JS
+- ✅ Empty results filtered out (only shows PDFs with count > 0)
+- ✅ Respects file and size limits (MAX_BATCH_FILES, MAX_BATCH_BYTES)
+- ✅ Works with `--extract-to` flag
+- ✅ Supports `--json` output
+- ✅ Parallel processing with rayon when multiple files
+- ✅ Security events emitted for limit violations
 
 **Usage Examples (Planned):**
 ```bash
