@@ -3,13 +3,15 @@
 /// This module analyzes color font tables (COLR, CPAL) for consistency
 /// and potential security issues.
 
+use crate::model::FontFinding;
+
 #[cfg(feature = "dynamic")]
 use std::collections::HashMap;
 #[cfg(feature = "dynamic")]
 use tracing::{debug, instrument, warn};
 
 #[cfg(feature = "dynamic")]
-use crate::model::{Confidence, FontFinding, Severity};
+use crate::model::{Confidence, Severity};
 
 /// Maximum safe number of palettes
 #[cfg(feature = "dynamic")]
@@ -88,6 +90,7 @@ pub fn analyze_color_font(_font_data: &[u8]) -> Vec<FontFinding> {
 }
 
 /// Validate CPAL (Color Palette) table
+#[cfg(feature = "dynamic")]
 fn validate_cpal_table(font_data: &[u8]) -> Option<Vec<FontFinding>> {
     let mut findings = Vec::new();
 
@@ -165,6 +168,7 @@ fn validate_cpal_table(font_data: &[u8]) -> Option<Vec<FontFinding>> {
 }
 
 /// Validate COLR (Color Layer) table
+#[cfg(feature = "dynamic")]
 fn validate_colr_table(font_data: &[u8], font_num_glyphs: u16) -> Option<Vec<FontFinding>> {
     let mut findings = Vec::new();
 
@@ -246,11 +250,13 @@ fn validate_colr_table(font_data: &[u8], font_num_glyphs: u16) -> Option<Vec<Fon
 }
 
 /// Check if a table exists in the font
+#[cfg(feature = "dynamic")]
 fn has_table(font_data: &[u8], tag: &[u8; 4]) -> bool {
     find_table(font_data, tag).is_some()
 }
 
 /// Find a table in the font and return (offset, length)
+#[cfg(feature = "dynamic")]
 fn find_table(font_data: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {
     if font_data.len() < 12 {
         return None;
