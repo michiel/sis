@@ -3512,6 +3512,7 @@ name = "sis-pdf"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
  "dirs",
  "flate2",

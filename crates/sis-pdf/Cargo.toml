@@ -25,6 +25,7 @@ flate2 = "1.0"
 tar = "0.4"
 zip = "2.1"
 tracing = "0.1"
+blake3 = "1.5"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 walkdir = "2.5"
 rustyline = "14.0"
