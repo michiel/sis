@@ -75,6 +75,44 @@ Findings in this project include metadata fields for `severity`, `impact`, and `
   (parser logic in `crates/sis-pdf-pdf`, detectors in
   `crates/sis-pdf-detectors`, etc.).
 
+## Tracing & Logging Conventions
+
+- Use `tracing` macros for observability (`info!`, `debug!`, `warn!`, `error!`).
+- Prefer structured fields (`domain`, `kind`, `security`) over free-form text.
+- Avoid logging sensitive content (raw PDF bytes, extracted payloads, full paths) unless required for diagnostics.
+- Keep messages concise and stable; prefer adding context via fields.
+
+## Error Handling Guidelines
+
+- Treat untrusted PDFs defensively; prefer structured errors over panics.
+- Query errors should surface via `QueryResult::Error` with:
+  - `error_code` aligned to documented codes (e.g. `OBJ_NOT_FOUND`, `QUERY_SYNTAX_ERROR`, `FILE_READ_ERROR`).
+  - `message` suitable for human-readable output.
+  - `context` containing actionable metadata (paths, requested object id).
+- JSON/JSONL output must remain machine-parseable; text output can be concise.
+- Batch mode should continue processing after errors and emit error entries for failed files.
+
+## Query Interface Intent & Consistency
+
+- The `sis query` interface is a forensic tool; prioritise predictable, composable output.
+- Use explicit format control (`--format` or `--json` shorthand for `--format json`); keep conflict handling strict and clear.
+- Maintain stable field names across outputs and documents.
+- Predicate filtering (`--where`) should remain consistent across supported query types.
+- Stream decoding modes (`--raw`, `--decode`, `--hexdump`) should be explicit and mutually exclusive in behaviour.
+
+## Security Guidance
+
+- Assume PDFs and embedded payloads are hostile and may target this codebase specifically.
+- Construct parsing and decoding defensively (bounds checks, limits, and early exits).
+- Prefer secure defaults and explicit flags for risky operations (decoding, extraction).
+- Avoid unsafe resource usage; enforce size, recursion, and object limits.
+
+## Performance & Scale
+
+- Balance deep analysis and artefact recovery with throughput for large-scale processing.
+- Optimise for rapid handling of very large corpora (500,000+ PDFs) without sacrificing safety.
+- Keep batch mode resilient; avoid per-file failures halting pipelines.
+
 ## Testing Guidelines
 
 - Tests are standard Rust integration tests in `crates/*/tests/`.
