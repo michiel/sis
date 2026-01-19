@@ -93,9 +93,27 @@ sis query js file.pdf
 sis query urls file.pdf
 sis query events file.pdf
 
+# Reference lookup
+sis query file.pdf ref 52 0
+
+# Predicate filtering
+sis query js file.pdf --where "length > 1024 AND entropy > 5.0"
+sis query urls file.pdf --where "length > 25"
+sis query events file.pdf --where "filter == 'document'"
+sis query findings file.pdf --where "filter == 'high'"
+
+# Streaming output
+sis query js.count file.pdf --format jsonl
+
+# Extraction decode controls
+sis query js file.pdf --extract-to /tmp/out --raw
+sis query js file.pdf --extract-to /tmp/out --hexdump
+
 # Interactive REPL mode
 sis query file.pdf
 ```
+
+Predicate filtering is available on the most common query types (js, embedded, objects, urls, events, findings). For field mappings and examples, see `docs/query-predicates.md`. Structured error output is documented in `docs/query-errors.md`.
 
 ### Finding Explanation
 
