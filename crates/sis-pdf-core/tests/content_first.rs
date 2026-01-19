@@ -29,7 +29,9 @@ fn opts() -> ScanOptions {
 fn detects_content_first_phase1_findings() {
     let bytes = include_bytes!("fixtures/content_first_phase1.pdf");
     let detectors = sis_pdf_detectors::default_detectors();
-    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, opts(), &detectors)
+    let mut options = opts();
+    options.deep = true;
+    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, options, &detectors)
         .expect("scan should succeed");
     let kinds: std::collections::HashSet<&str> =
         report.findings.iter().map(|f| f.kind.as_str()).collect();
