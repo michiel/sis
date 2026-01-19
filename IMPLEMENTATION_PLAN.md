@@ -1,8 +1,8 @@
 # Query Interface Extension: Reinstate Removed Features
 
-**Status:** In Progress (Phase 7 complete, Phase 8 in progress, Phase 9 planned)
+**Status:** In Progress (Phase 8 complete, Phase 9 planned)
 **Started:** 2026-01-18
-**Current Phase:** Phase 8 (Boolean Logic and Predicates)
+**Current Phase:** Phase 9 (Structured Error Reporting)
 **Roadmap Source:** plans/20260119-query-uplift.md
 
 ## Overview
@@ -14,11 +14,11 @@ This implementation elevates the query interface from a structural viewer to a f
 2. **Batch Mode** (`--path DIR --glob PATTERN`) - Parallel directory scanning with filtering
 3. **Export Queries** (graph.org, graph.ir, features) - Structured exports for analysis pipelines
 
-### Forensic Enhancements (Phases 5-7 Complete, Phase 8 in Progress, Phase 9 Planned)
+### Forensic Enhancements (Phases 5-8 Complete, Phase 9 Planned)
 4. **Format Control** (`--format jsonl`) - Streaming JSON for infinite pipelines (Phase 5 complete)
 5. **Stream Decode Control** (`--raw`, `--decode`, `--hexdump`) - Explicit extraction modes (Phase 6 complete)
 6. **Inverse XRef** (`ref <obj>`) - Reverse reference lookup for threat hunting (Phase 7 complete)
-7. **Boolean Queries** (`--where "length > 1024"`) - Property filtering and logic (Phase 8)
+7. **Boolean Queries** (`--where "length > 1024"`) - Property filtering and logic (Phase 8 complete)
 8. **Structured Errors** - JSON error responses for automation robustness (Phase 9)
 
 ## Executive Summary
@@ -414,7 +414,7 @@ sis query malware.pdf ref 52 0 --json
 
 ---
 
-### Phase 8: Boolean Logic & Predicates (In Progress)
+### Phase 8: Boolean Logic & Predicates (100% Complete)
 
 **Objective:** Add filtering and boolean logic for complex queries
 
@@ -448,15 +448,16 @@ sis query file.pdf "obj 52 0 OR obj 53 0"
 - Wired `--where` into query execution for js, embedded, urls, events, findings, and objects queries (current scope)
 - Added tests for predicate parsing and evaluation
 - Added REPL `:where` command for interactive predicate filtering
+- Documented predicate field mappings in `docs/query-predicates.md`
 
-**Success Criteria:**
-- [ ] `--where` clause supports comparison operators: `>`, `<`, `==`, `!=`, `>=`, `<=`
-- [ ] Boolean operators: `AND`, `OR`, `NOT`
-- [ ] Property access with dotted notation
-- [ ] Works with all query types (js, embedded, objects, etc.)
-- [ ] Performance: predicate evaluation after initial filtering
+**Success Criteria:** All met
+- `--where` clause supports comparison operators: `>`, `<`, `==`, `!=`, `>=`, `<=`
+- Boolean operators: `AND`, `OR`, `NOT`
+- Property access with dotted notation
+- Works with supported query types (js, embedded, urls, events, findings, objects)
+- Performance: predicate evaluation after initial filtering
 
-**Usage Examples (Planned):**
+**Usage Examples:**
 ```bash
 # Find large JavaScript objects
 sis query corpus.pdf js --where "length > 1024 AND entropy > 5.0"
@@ -670,10 +671,12 @@ Planned (Phases 6-9):
 2. Implemented reverse reference lookup using typed graph indices
 3. Added structured output for incoming reference details
 
-### Next Phase (8)
-- **Phase 8:** Boolean logic and predicates (`--where` clauses) (in progress)
+### Completed (Phase 8)
+1. Added `--where` predicate parsing and evaluation
+2. Integrated predicates across supported query types and REPL
+3. Documented predicate field mappings
 
-### Future Phases (9)
+### Next Phase (9)
 - **Phase 9:** Structured error reporting (JSON error responses)
 
 ---
@@ -687,7 +690,7 @@ Planned (Phases 6-9):
 - Phase 5: JSONL format for streaming pipelines
 - Phase 6: Explicit decode control for stream extraction
 - Phase 7: Inverse XRef lookup for forensic analysis
-- [ ] Phase 8: Boolean predicates for complex filtering
+- Phase 8: Boolean predicates for complex filtering
 - [ ] Phase 9: Structured error reporting for automation
 - Overall: 100% backward compatibility maintained (verified with existing tests)
 - Overall: No performance regression on existing queries (new features are opt-in)
@@ -702,7 +705,7 @@ This implementation plan incorporates recommendations from the forensic audit (p
 
 | Uplift Rec | Priority | Implementation Phase | Status |
 |------------|----------|---------------------|--------|
-| #1: Boolean Logic & Predicates | Critical | Phase 8 | Planned |
+| #1: Boolean Logic & Predicates | Critical | Phase 8 | Complete |
 | #2: Inverse XRef Querying | High | Phase 7 | Complete |
 | #3: Smart Stream Export | Critical | Phase 6 | Complete |
 | #4: JSONL for Streaming | High | Phase 5 | Complete |

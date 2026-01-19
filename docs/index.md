@@ -113,6 +113,8 @@ sis query js file.pdf --extract-to /tmp/out --hexdump
 sis query file.pdf
 ```
 
+For predicate field mappings, see `docs/query-predicates.md`.
+
 ### Finding Explanation
 
 ```bash

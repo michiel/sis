@@ -21,6 +21,9 @@ sis query file.pdf ref 52 0
 sis query js file.pdf --where "length > 1024"
 sis query urls file.pdf --where "length > 25"
 sis query events file.pdf --where "filter == 'page'"
+
+# Predicate reference
+cat docs/query-predicates.md
 ```
 
 ---
