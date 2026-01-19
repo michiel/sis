@@ -142,6 +142,12 @@ enum Command {
             default_value_t = 128 * 1024 * 1024
         )]
         max_extract_bytes: usize,
+        #[arg(long, help = "Extract raw stream bytes without decoding filters")]
+        raw: bool,
+        #[arg(long, help = "Decode stream filters (default)")]
+        decode: bool,
+        #[arg(long, help = "Write hex + ASCII dump output for extracted streams")]
+        hexdump: bool,
     },
     #[command(about = "Scan PDFs for suspicious indicators and report findings")]
     Scan {
@@ -640,6 +646,9 @@ fn main() -> Result<()> {
             path,
             glob,
             max_extract_bytes,
+            raw,
+            decode,
+            hexdump,
         } => {
             let mut output_format = commands::query::OutputFormat::parse(&format)?;
             if json {
@@ -654,6 +663,20 @@ fn main() -> Result<()> {
                     output_format = commands::query::OutputFormat::Json;
                 }
             }
+            let decode_flags = [raw, decode, hexdump];
+            let decode_count = decode_flags.iter().filter(|flag| **flag).count();
+            if decode_count > 1 {
+                return Err(anyhow!(
+                    "Use only one of --raw, --decode, or --hexdump"
+                ));
+            }
+            let decode_mode = if raw {
+                commands::query::DecodeMode::Raw
+            } else if hexdump {
+                commands::query::DecodeMode::Hexdump
+            } else {
+                commands::query::DecodeMode::Decode
+            };
 
             // Validate that either path or pdf is provided, but not both
             // Note: When using --path, the query string might be parsed as the PDF argument
@@ -694,6 +717,7 @@ fn main() -> Result<()> {
                     path.as_deref(),
                     &glob,
                     max_extract_bytes,
+                    decode_mode,
                 )
             } else {
                 // Interactive REPL mode requires a single PDF file
@@ -718,6 +742,7 @@ fn main() -> Result<()> {
                     extract_to.as_deref(),
                     max_extract_bytes,
                     output_format,
+                    decode_mode,
                 )
             }
         }
@@ -2592,6 +2617,7 @@ fn run_query_oneshot(
     path: Option<&std::path::Path>,
     glob: &str,
     max_extract_bytes: usize,
+    decode_mode: commands::query::DecodeMode,
 ) -> Result<()> {
     use commands::query;
 
@@ -2618,6 +2644,7 @@ fn run_query_oneshot(
             &scan_options,
             extract_to,
             max_extract_bytes,
+            decode_mode,
             output_format,
             MAX_BATCH_FILES,
             MAX_BATCH_BYTES,
@@ -2633,6 +2660,7 @@ fn run_query_oneshot(
         &scan_options,
         extract_to,
         max_extract_bytes,
+        decode_mode,
     )
     .map_err(|e| anyhow!("Query execution failed: {}", e))?;
 
@@ -2665,6 +2693,7 @@ fn run_query_repl(
     extract_to: Option<&std::path::Path>,
     max_extract_bytes: usize,
     output_format: commands::query::OutputFormat,
+    decode_mode: commands::query::DecodeMode,
 ) -> Result<()> {
     use commands::query;
     use rustyline::error::ReadlineError;
@@ -2785,7 +2814,13 @@ fn run_query_repl(
                                 continue;
                             }
                         };
-                        match query::execute_query_with_context(&q, &ctx, extract_to, max_extract_bytes) {
+                        match query::execute_query_with_context(
+                            &q,
+                            &ctx,
+                            extract_to,
+                            max_extract_bytes,
+                            decode_mode,
+                        ) {
                             Ok(result) => {
                                 // Format and print result
                                 if jsonl_mode {

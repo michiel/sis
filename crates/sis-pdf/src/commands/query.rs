@@ -34,6 +34,13 @@ impl OutputFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeMode {
+    Decode,
+    Raw,
+    Hexdump,
+}
+
 /// Query types supported by the interface
 #[derive(Debug, Clone)]
 pub enum Query {
@@ -260,6 +267,7 @@ pub fn execute_query_with_context(
     ctx: &ScanContext,
     extract_to: Option<&Path>,
     max_extract_bytes: usize,
+    decode_mode: DecodeMode,
 ) -> Result<QueryResult> {
     match query {
         Query::Pages => {
@@ -322,7 +330,7 @@ pub fn execute_query_with_context(
         Query::JavaScript => {
             if let Some(extract_path) = extract_to {
                 // Extract to disk
-                let written = write_js_files(ctx, extract_path, max_extract_bytes)?;
+                let written = write_js_files(ctx, extract_path, max_extract_bytes, decode_mode)?;
                 Ok(QueryResult::List(written))
             } else {
                 // Return preview list
@@ -347,7 +355,8 @@ pub fn execute_query_with_context(
         Query::Embedded => {
             if let Some(extract_path) = extract_to {
                 // Extract to disk
-                let written = write_embedded_files(ctx, extract_path, max_extract_bytes)?;
+                let written =
+                    write_embedded_files(ctx, extract_path, max_extract_bytes, decode_mode)?;
                 Ok(QueryResult::List(written))
             } else {
                 // Return preview list
@@ -493,6 +502,7 @@ pub fn execute_query(
     scan_options: &ScanOptions,
     extract_to: Option<&Path>,
     max_extract_bytes: usize,
+    decode_mode: DecodeMode,
 ) -> Result<QueryResult> {
     // Read PDF file
     let bytes = fs::read(pdf_path)?;
@@ -501,7 +511,7 @@ pub fn execute_query(
     let ctx = build_scan_context(&bytes, scan_options)?;
 
     // Delegate to execute_query_with_context
-    execute_query_with_context(query, &ctx, extract_to, max_extract_bytes)
+    execute_query_with_context(query, &ctx, extract_to, max_extract_bytes, decode_mode)
 }
 
 /// Scan options for query execution
@@ -1139,6 +1149,14 @@ fn string_bytes(s: &sis_pdf_pdf::object::PdfStr<'_>) -> Vec<u8> {
     }
 }
 
+fn string_raw_bytes(s: &sis_pdf_pdf::object::PdfStr<'_>) -> Vec<u8> {
+    use sis_pdf_pdf::object::PdfStr;
+    match s {
+        PdfStr::Literal { raw, .. } => raw.to_vec(),
+        PdfStr::Hex { raw, .. } => raw.to_vec(),
+    }
+}
+
 fn embedded_filename(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> {
     use sis_pdf_pdf::object::PdfAtom;
 
@@ -1167,26 +1185,64 @@ fn extract_obj_bytes(
     bytes: &[u8],
     obj: &sis_pdf_pdf::object::PdfObj<'_>,
     max_bytes: usize,
+    decode_mode: DecodeMode,
 ) -> Option<Vec<u8>> {
     use sis_pdf_pdf::object::PdfAtom;
 
     match &obj.atom {
-        PdfAtom::Str(s) => Some(string_bytes(s)),
-        PdfAtom::Stream(st) => sis_pdf_pdf::decode::decode_stream(bytes, st, max_bytes)
-            .ok()
-            .map(|d| d.data),
+        PdfAtom::Str(s) => match decode_mode {
+            DecodeMode::Raw => Some(string_raw_bytes(s)),
+            DecodeMode::Decode | DecodeMode::Hexdump => Some(string_bytes(s)),
+        },
+        PdfAtom::Stream(st) => stream_bytes_for_mode(bytes, st, max_bytes, decode_mode).ok(),
         PdfAtom::Ref { .. } => {
             let entry = graph.resolve_ref(obj)?;
             match &entry.atom {
-                PdfAtom::Str(s) => Some(string_bytes(s)),
-                PdfAtom::Stream(st) => sis_pdf_pdf::decode::decode_stream(bytes, st, max_bytes)
-                    .ok()
-                    .map(|d| d.data),
+                PdfAtom::Str(s) => match decode_mode {
+                    DecodeMode::Raw => Some(string_raw_bytes(s)),
+                    DecodeMode::Decode | DecodeMode::Hexdump => Some(string_bytes(s)),
+                },
+                PdfAtom::Stream(st) => {
+                    stream_bytes_for_mode(bytes, st, max_bytes, decode_mode).ok()
+                }
                 _ => None,
             }
         }
         _ => None,
     }
+}
+
+fn stream_bytes_for_mode(
+    bytes: &[u8],
+    stream: &sis_pdf_pdf::object::PdfStream<'_>,
+    max_bytes: usize,
+    decode_mode: DecodeMode,
+) -> Result<Vec<u8>> {
+    match decode_mode {
+        DecodeMode::Decode | DecodeMode::Hexdump => {
+            let decoded = sis_pdf_pdf::decode::decode_stream(bytes, stream, max_bytes)?;
+            Ok(decoded.data)
+        }
+        DecodeMode::Raw => raw_stream_bytes(bytes, stream, max_bytes),
+    }
+}
+
+fn raw_stream_bytes(
+    bytes: &[u8],
+    stream: &sis_pdf_pdf::object::PdfStream<'_>,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    let span = stream.data_span;
+    let start = span.start as usize;
+    let end = span.end as usize;
+    if start >= end || end > bytes.len() {
+        return Err(anyhow!("invalid stream span"));
+    }
+    let data = &bytes[start..end];
+    if max_bytes > 0 && data.len() > max_bytes {
+        return Err(anyhow!("stream exceeds extract byte limit"));
+    }
+    Ok(data.to_vec())
 }
 
 /// Sanitize filename to prevent path traversal attacks
@@ -1249,7 +1305,12 @@ fn sha256_hex(data: &[u8]) -> String {
 }
 
 /// Write JavaScript files to disk and return list of written files
-fn write_js_files(ctx: &ScanContext, extract_to: &Path, max_bytes: usize) -> Result<Vec<String>> {
+fn write_js_files(
+    ctx: &ScanContext,
+    extract_to: &Path,
+    max_bytes: usize,
+    decode_mode: DecodeMode,
+) -> Result<Vec<String>> {
     use std::fs;
 
     // Create output directory
@@ -1261,14 +1322,29 @@ fn write_js_files(ctx: &ScanContext, extract_to: &Path, max_bytes: usize) -> Res
     for entry in &ctx.graph.objects {
         if let Some(dict) = entry_dict(entry) {
             if let Some((_, obj)) = dict.get_first(b"/JS") {
-                if let Some(data) = extract_obj_bytes(&ctx.graph, ctx.bytes, obj, max_bytes) {
-                    let filename = format!("js_{}_{}.js", entry.obj, entry.gen);
+                if let Some(data) =
+                    extract_obj_bytes(&ctx.graph, ctx.bytes, obj, max_bytes, decode_mode)
+                {
+                    let base_name = format!("js_{}_{}", entry.obj, entry.gen);
+                    let (filename, output_bytes, mode_label) = match decode_mode {
+                        DecodeMode::Decode => (
+                            format!("{base_name}.js"),
+                            data.clone(),
+                            "decode",
+                        ),
+                        DecodeMode::Raw => (format!("{base_name}.raw"), data.clone(), "raw"),
+                        DecodeMode::Hexdump => (
+                            format!("{base_name}.hex"),
+                            format_hexdump(&data).into_bytes(),
+                            "hexdump",
+                        ),
+                    };
                     let filepath = extract_to.join(&filename);
                     let hash = sha256_hex(&data);
 
-                    fs::write(&filepath, &data)?;
+                    fs::write(&filepath, &output_bytes)?;
 
-                    let info = format!(
+                    let mut info = format!(
                         "{}: {} bytes, sha256={}, object={}_{}",
                         filename,
                         data.len(),
@@ -1276,6 +1352,10 @@ fn write_js_files(ctx: &ScanContext, extract_to: &Path, max_bytes: usize) -> Res
                         entry.obj,
                         entry.gen
                     );
+                    info.push_str(&format!(", mode={}", mode_label));
+                    if decode_mode == DecodeMode::Hexdump {
+                        info.push_str(&format!(", hexdump_bytes={}", output_bytes.len()));
+                    }
                     written_files.push(info);
                     count += 1;
                 }
@@ -1292,6 +1372,7 @@ fn write_embedded_files(
     ctx: &ScanContext,
     extract_to: &Path,
     max_bytes: usize,
+    decode_mode: DecodeMode,
 ) -> Result<Vec<String>> {
     use sis_pdf_pdf::object::PdfAtom;
     use std::fs;
@@ -1307,12 +1388,9 @@ fn write_embedded_files(
         if let PdfAtom::Stream(st) = &entry.atom {
             // Check if this is an embedded file
             if st.dict.has_name(b"/Type", b"/EmbeddedFile") {
-                if let Ok(decoded) =
-                    sis_pdf_pdf::decode::decode_stream(ctx.bytes, st, max_bytes)
-                {
+                if let Ok(data) = stream_bytes_for_mode(ctx.bytes, st, max_bytes, decode_mode) {
                     // Check size limit
-                    if max_bytes > 0 && total_bytes.saturating_add(decoded.data.len()) > max_bytes
-                    {
+                    if max_bytes > 0 && total_bytes.saturating_add(data.len()) > max_bytes {
                         eprintln!(
                             "Embedded extraction budget exceeded ({} bytes), stopping",
                             max_bytes
@@ -1325,25 +1403,38 @@ fn write_embedded_files(
                         format!("embedded_{}_{}.bin", entry.obj, entry.gen)
                     });
                     let safe_name = sanitize_embedded_filename(&name);
-                    let filepath = extract_to.join(&safe_name);
+                    let (filename, output_bytes, mode_label) = match decode_mode {
+                        DecodeMode::Decode => (safe_name, data.clone(), "decode"),
+                        DecodeMode::Raw => (format!("{safe_name}.raw"), data.clone(), "raw"),
+                        DecodeMode::Hexdump => (
+                            format!("{safe_name}.hex"),
+                            format_hexdump(&data).into_bytes(),
+                            "hexdump",
+                        ),
+                    };
+                    let filepath = extract_to.join(&filename);
 
                     // Detect file type and calculate hash
-                    let hash = sha256_hex(&decoded.data);
-                    let file_type = magic_type(&decoded.data);
-                    let data_len = decoded.data.len();
+                    let hash = sha256_hex(&data);
+                    let file_type = magic_type(&data);
+                    let data_len = data.len();
 
                     // Write file
-                    fs::write(&filepath, decoded.data)?;
+                    fs::write(&filepath, &output_bytes)?;
 
-                    let info = format!(
+                    let mut info = format!(
                         "{}: {} bytes, type={}, sha256={}, object={}_{}",
-                        safe_name,
+                        filename,
                         data_len,
                         file_type,
                         hash,
                         entry.obj,
                         entry.gen
                     );
+                    info.push_str(&format!(", mode={}", mode_label));
+                    if decode_mode == DecodeMode::Hexdump {
+                        info.push_str(&format!(", hexdump_bytes={}", output_bytes.len()));
+                    }
                     written_files.push(info);
 
                     total_bytes = total_bytes.saturating_add(data_len);
@@ -1369,6 +1460,35 @@ fn preview_text(text: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &trimmed[..max_len])
     }
+}
+
+fn format_hexdump(data: &[u8]) -> String {
+    let mut output = String::new();
+    for (line_idx, chunk) in data.chunks(16).enumerate() {
+        let offset = line_idx * 16;
+        output.push_str(&format!("{offset:08x}  "));
+        for i in 0..16 {
+            if i < chunk.len() {
+                output.push_str(&format!("{:02x} ", chunk[i]));
+            } else {
+                output.push_str("   ");
+            }
+            if i == 7 {
+                output.push(' ');
+            }
+        }
+        output.push_str(" |");
+        for &byte in chunk {
+            let ch = if byte.is_ascii_graphic() || byte == b' ' {
+                byte as char
+            } else {
+                '.'
+            };
+            output.push(ch);
+        }
+        output.push_str("|\n");
+    }
+    output
 }
 
 /// Show a specific PDF object
@@ -1869,6 +1989,7 @@ fn cycle_to_json(idx: usize, cycle: &[(u32, u16)]) -> serde_json::Value {
 /// * `scan_options` - Scan configuration
 /// * `extract_to` - Optional extraction directory
 /// * `max_extract_bytes` - Maximum bytes to extract per file
+/// * `decode_mode` - Stream decode behaviour for extraction
 /// * `output_format` - Output format override
 /// * `max_batch_files` - Maximum number of files to process
 /// * `max_batch_bytes` - Maximum total bytes to process
@@ -1880,6 +2001,7 @@ pub fn run_query_batch(
     scan_options: &ScanOptions,
     extract_to: Option<&Path>,
     max_extract_bytes: usize,
+    decode_mode: DecodeMode,
     output_format: OutputFormat,
     max_batch_files: usize,
     max_batch_bytes: u64,
@@ -2001,7 +2123,8 @@ pub fn run_query_batch(
         let ctx = build_scan_context(&mmap, scan_options)?;
 
         // Execute query
-        let result = execute_query_with_context(query, &ctx, extract_to, max_extract_bytes)?;
+        let result =
+            execute_query_with_context(query, &ctx, extract_to, max_extract_bytes, decode_mode)?;
 
         // Filter out empty results
         let is_empty = match &result {
@@ -2217,5 +2340,14 @@ mod tests {
         assert_eq!(value["query"], json!("js.count"));
         assert_eq!(value["file"], json!("sample.pdf"));
         assert_eq!(value["result"], json!(12));
+    }
+
+    #[test]
+    fn format_hexdump_renders_offsets_and_ascii() {
+        let data = b"ABC";
+        let output = format_hexdump(data);
+        assert!(output.starts_with("00000000"));
+        assert!(output.contains("41 42 43"));
+        assert!(output.contains("|ABC|"));
     }
 }

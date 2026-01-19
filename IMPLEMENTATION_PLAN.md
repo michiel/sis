@@ -1,8 +1,8 @@
 # Query Interface Extension: Reinstate Removed Features
 
-**Status:** In Progress (Phase 5 complete, Phases 6-9 planned)
+**Status:** In Progress (Phase 6 complete, Phases 7-9 planned)
 **Started:** 2026-01-18
-**Current Phase:** Phase 6 (Stream Export Enhancement)
+**Current Phase:** Phase 7 (Inverse XRef Querying)
 **Roadmap Source:** plans/20260119-query-uplift.md
 
 ## Overview
@@ -14,26 +14,26 @@ This implementation elevates the query interface from a structural viewer to a f
 2. **Batch Mode** (`--path DIR --glob PATTERN`) - Parallel directory scanning with filtering
 3. **Export Queries** (graph.org, graph.ir, features) - Structured exports for analysis pipelines
 
-### Forensic Enhancements (Phase 5 Complete, Phases 6-9 Planned)
+### Forensic Enhancements (Phases 5-6 Complete, Phases 7-9 Planned)
 4. **Format Control** (`--format jsonl`) - Streaming JSON for infinite pipelines (Phase 5 complete)
-5. **Stream Decode Control** (`--raw`, `--decode`, `--hexdump`) - Explicit extraction modes (Phase 6)
+5. **Stream Decode Control** (`--raw`, `--decode`, `--hexdump`) - Explicit extraction modes (Phase 6 complete)
 6. **Inverse XRef** (`ref <obj>`) - Reverse reference lookup for threat hunting (Phase 7)
 7. **Boolean Queries** (`--where "length > 1024"`) - Property filtering and logic (Phase 8)
 8. **Structured Errors** - JSON error responses for automation robustness (Phase 9)
 
 ## Executive Summary
 
-### What's Complete (Phases 1-5)
+### What's Complete (Phases 1-6)
 The query interface now supports:
 - **Safe file extraction** with path traversal protection and size limits
 - **Parallel batch processing** for analysing entire PDF corpora
 - **5 export formats** (DOT, JSON, text, CSV) for graphs, IR, and features
 - **100% backward compatibility** with existing queries
 - **Format flags** (`--format` with JSONL support and `--json` shorthand)
+- **Explicit stream decode control** for extraction (`--raw`, `--decode`, `--hexdump`)
 
-### What's Next (Phases 6-9)
+### What's Next (Phases 7-9)
 Building on this foundation, we'll add forensic-grade capabilities:
-- **Phase 6:** Explicit decode control (`--raw` vs `--decode` vs `--hexdump`)
 - **Phase 7:** Reverse reference lookup to find what triggers malicious objects
 - **Phase 8:** Boolean predicates to filter without external scripting
 - **Phase 9:** Structured error reporting for robust automation
@@ -330,16 +330,16 @@ sis query file.pdf features --json
 
 ---
 
-### Phase 6: Stream Export Enhancement (0% Complete - Future)
+### Phase 6: Stream Export Enhancement (100% Complete)
 
 **Objective:** Add explicit decode control for stream extraction
 
 **Priority:** Critical (Forensic predictability and safety)
 
-**Files to Modify:**
-- `crates/sis-pdf/src/main.rs` - Add `--raw`, `--decode`, `--hexdump` flags
-- `crates/sis-pdf/src/commands/query.rs` - Update extraction logic to support decode modes
-- `crates/sis-pdf/src/commands/query.rs` - Add hexdump formatter
+**Files Modified:**
+- `crates/sis-pdf/src/main.rs` - Added `--raw`, `--decode`, `--hexdump` flags with conflict validation
+- `crates/sis-pdf/src/commands/query.rs` - Updated extraction logic to support decode modes
+- `crates/sis-pdf/src/commands/query.rs` - Added hexdump formatter
 
 **Decode Modes:**
 - `--decode` (default) - Apply filters (decompress) and output canonical bytes
@@ -348,17 +348,21 @@ sis query file.pdf features --json
 
 **Implementation Details:**
 - Current behaviour: Phase 2 implementation always decodes streams
-- Enhancement: Make decode behaviour explicit and controllable
+- Enhancement: Explicit decode mode handling in extraction helpers
 - Safety: `--raw` enables steganalysis and integrity verification
+- Hexdump output writes `.hex` files alongside extracted payloads
 
-**Success Criteria:**
-- [ ] `--extract-to` with `--raw` outputs compressed bytes
-- [ ] `--extract-to` with `--decode` outputs decompressed payload (default)
-- [ ] `--extract-to` with `--hexdump` outputs hex+ASCII format
-- [ ] Works with both JavaScript and embedded file extraction
-- [ ] Documented decode semantics in help text
+**Success Criteria:** All met
+- `--extract-to` with `--raw` outputs compressed bytes
+- `--extract-to` with `--decode` outputs decompressed payload (default)
+- `--extract-to` with `--hexdump` outputs hex+ASCII format
+- Works with both JavaScript and embedded file extraction
+- Documented decode semantics in help text
 
-**Usage Examples (Planned):**
+**Testing (Completed):**
+- Added unit test for hexdump formatting
+
+**Usage Examples:**
 ```bash
 # Default: Decode streams (existing behaviour)
 sis query malware.pdf js --extract-to /tmp/analysis
@@ -367,7 +371,8 @@ sis query malware.pdf js --extract-to /tmp/analysis
 sis query malware.pdf js --extract-to /tmp/raw --raw
 
 # Hexdump for visual inspection
-sis query malware.pdf js --extract-to /tmp/hex --hexdump | less
+sis query malware.pdf js --extract-to /tmp/hex --hexdump
+less /tmp/hex/js_*.hex
 ```
 
 ---
@@ -519,6 +524,7 @@ sis query --path corpus --glob "*.pdf" js.count --format jsonl | jq 'select(.sta
 ### Unit Tests (Completed)
 - Output format parsing and override behaviour
 - JSONL output formatting for query results
+- Hexdump formatting for extraction output
 
 ### Unit Tests (Pending)
 - [ ] `sanitize_embedded_filename()` for path traversal protection
@@ -650,11 +656,15 @@ Planned (Phases 6-9):
 4. Updated help text with format examples
 5. Added conflict handling for `--json` vs `--format`
 
-### Next Phase (6)
-- **Phase 6:** Stream export enhancement (`--raw`, `--decode`, `--hexdump`)
+### Completed (Phase 6)
+1. Added decode mode flags (`--raw`, `--decode`, `--hexdump`)
+2. Implemented decode mode handling in extraction helpers
+3. Added hexdump output support for extracted payloads
+
+### Next Phase (7)
+- **Phase 7:** Inverse XRef querying (`ref <obj> <gen>`)
 
 ### Future Phases (7-9)
-- **Phase 7:** Inverse XRef querying (`ref <obj> <gen>`)
 - **Phase 8:** Boolean logic and predicates (`--where` clauses)
 - **Phase 9:** Structured error reporting (JSON error responses)
 
@@ -667,7 +677,7 @@ Planned (Phases 6-9):
 - Phase 3: Batch mode processes multiple PDFs with parallel processing
 - Phase 4: All export formats produce valid output
 - Phase 5: JSONL format for streaming pipelines
-- [ ] Phase 6: Explicit decode control for stream extraction
+- Phase 6: Explicit decode control for stream extraction
 - [ ] Phase 7: Inverse XRef lookup for forensic analysis
 - [ ] Phase 8: Boolean predicates for complex filtering
 - [ ] Phase 9: Structured error reporting for automation
@@ -686,7 +696,7 @@ This implementation plan incorporates recommendations from the forensic audit (p
 |------------|----------|---------------------|--------|
 | #1: Boolean Logic & Predicates | Critical | Phase 8 | Planned |
 | #2: Inverse XRef Querying | High | Phase 7 | Planned |
-| #3: Smart Stream Export | Critical | Phase 6 | Planned |
+| #3: Smart Stream Export | Critical | Phase 6 | Complete |
 | #4: JSONL for Streaming | High | Phase 5 | Complete |
 | #5: Defensive Sanitisation | Medium | Phase 2 | Complete |
 | #6: Structured Errors | Medium | Phase 9 | Planned |
