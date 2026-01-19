@@ -120,6 +120,8 @@ enum Command {
         format: String,
         #[arg(long, short = 'c', help = "Compact output (numbers only)")]
         compact: bool,
+        #[arg(long, help = "Filter results with a predicate expression")]
+        r#where: Option<String>,
         #[arg(long, help = "Deep scan mode")]
         deep: bool,
         #[arg(long, default_value_t = 32 * 1024 * 1024)]
@@ -637,6 +639,7 @@ fn main() -> Result<()> {
             json,
             format,
             compact,
+            r#where,
             deep,
             max_decode_bytes,
             max_total_decoded_bytes,
@@ -663,6 +666,10 @@ fn main() -> Result<()> {
                     output_format = commands::query::OutputFormat::Json;
                 }
             }
+            let predicate = match r#where {
+                Some(where_clause) => Some(commands::query::parse_predicate(&where_clause)?),
+                None => None,
+            };
             let decode_flags = [raw, decode, hexdump];
             let decode_count = decode_flags.iter().filter(|flag| **flag).count();
             if decode_count > 1 {
@@ -718,6 +725,7 @@ fn main() -> Result<()> {
                     &glob,
                     max_extract_bytes,
                     decode_mode,
+                    predicate.as_ref(),
                 )
             } else {
                 // Interactive REPL mode requires a single PDF file
@@ -743,6 +751,7 @@ fn main() -> Result<()> {
                     max_extract_bytes,
                     output_format,
                     decode_mode,
+                    predicate.as_ref(),
                 )
             }
         }
@@ -2618,6 +2627,7 @@ fn run_query_oneshot(
     glob: &str,
     max_extract_bytes: usize,
     decode_mode: commands::query::DecodeMode,
+    predicate: Option<&commands::query::PredicateExpr>,
 ) -> Result<()> {
     use commands::query;
 
@@ -2645,6 +2655,7 @@ fn run_query_oneshot(
             extract_to,
             max_extract_bytes,
             decode_mode,
+            predicate,
             output_format,
             MAX_BATCH_FILES,
             MAX_BATCH_BYTES,
@@ -2661,6 +2672,7 @@ fn run_query_oneshot(
         extract_to,
         max_extract_bytes,
         decode_mode,
+        predicate,
     )
     .map_err(|e| anyhow!("Query execution failed: {}", e))?;
 
@@ -2694,6 +2706,7 @@ fn run_query_repl(
     max_extract_bytes: usize,
     output_format: commands::query::OutputFormat,
     decode_mode: commands::query::DecodeMode,
+    predicate: Option<&commands::query::PredicateExpr>,
 ) -> Result<()> {
     use commands::query;
     use rustyline::error::ReadlineError;
@@ -2737,6 +2750,7 @@ fn run_query_repl(
     );
     let mut jsonl_mode = output_format == query::OutputFormat::Jsonl;
     let mut compact_mode = false;
+    let mut predicate_expr = predicate.cloned();
 
     loop {
         let prompt = "sis> ";
@@ -2755,6 +2769,23 @@ fn run_query_repl(
                 let _ = rl.add_history_entry(line);
 
                 // Handle REPL commands
+                if let Some(rest) = line.strip_prefix(":where") {
+                    let expr = rest.trim();
+                    if expr.is_empty() {
+                        predicate_expr = None;
+                        eprintln!("Predicate cleared");
+                    } else {
+                        match query::parse_predicate(expr) {
+                            Ok(parsed) => {
+                                predicate_expr = Some(parsed);
+                                eprintln!("Predicate set");
+                            }
+                            Err(err) => eprintln!("Invalid predicate: {}", err),
+                        }
+                    }
+                    continue;
+                }
+
                 match line {
                     "exit" | "quit" | ":q" => {
                         eprintln!("Goodbye!");
@@ -2820,6 +2851,7 @@ fn run_query_repl(
                             extract_to,
                             max_extract_bytes,
                             decode_mode,
+                            predicate_expr.as_ref(),
                         ) {
                             Ok(result) => {
                                 // Format and print result
@@ -2926,6 +2958,7 @@ fn print_repl_help() {
     println!("  :json              - Toggle JSON output mode");
     println!("  :jsonl             - Toggle JSONL output mode");
     println!("  :compact           - Toggle compact output mode");
+    println!("  :where EXPR        - Set predicate filter (blank clears)");
     println!("  help / ?           - Show this help");
     println!("  exit / quit / :q   - Exit REPL");
     println!();

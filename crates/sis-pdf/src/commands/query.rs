@@ -41,6 +41,52 @@ pub enum DecodeMode {
     Hexdump,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum PredicateExpr {
+    And(Box<PredicateExpr>, Box<PredicateExpr>),
+    Or(Box<PredicateExpr>, Box<PredicateExpr>),
+    Not(Box<PredicateExpr>),
+    Compare {
+        field: PredicateField,
+        op: PredicateOp,
+        value: PredicateValue,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredicateField {
+    Length,
+    Filter,
+    Type,
+    Subtype,
+    Entropy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredicateOp {
+    Eq,
+    NotEq,
+    Gt,
+    Lt,
+    Gte,
+    Lte,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PredicateValue {
+    Number(f64),
+    String(String),
+}
+
+#[derive(Debug, Clone)]
+struct PredicateContext {
+    length: usize,
+    filter: Option<String>,
+    type_name: String,
+    subtype: Option<String>,
+    entropy: f64,
+}
+
 /// Query types supported by the interface
 #[derive(Debug, Clone)]
 pub enum Query {
@@ -241,6 +287,367 @@ pub fn parse_query(input: &str) -> Result<Query> {
     }
 }
 
+pub fn parse_predicate(input: &str) -> Result<PredicateExpr> {
+    let mut parser = PredicateParser::new(input);
+    let expr = parser.parse_expr()?;
+    parser.expect_end()?;
+    Ok(expr)
+}
+
+struct PredicateParser<'a> {
+    lexer: PredicateLexer<'a>,
+    lookahead: Option<PredicateToken>,
+}
+
+impl<'a> PredicateParser<'a> {
+    fn new(input: &'a str) -> Self {
+        Self {
+            lexer: PredicateLexer::new(input),
+            lookahead: None,
+        }
+    }
+
+    fn parse_expr(&mut self) -> Result<PredicateExpr> {
+        self.parse_or()
+    }
+
+    fn parse_or(&mut self) -> Result<PredicateExpr> {
+        let mut expr = self.parse_and()?;
+        while self.peek_is_keyword("OR") {
+            self.next_token();
+            let rhs = self.parse_and()?;
+            expr = PredicateExpr::Or(Box::new(expr), Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn parse_and(&mut self) -> Result<PredicateExpr> {
+        let mut expr = self.parse_not()?;
+        while self.peek_is_keyword("AND") {
+            self.next_token();
+            let rhs = self.parse_not()?;
+            expr = PredicateExpr::And(Box::new(expr), Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn parse_not(&mut self) -> Result<PredicateExpr> {
+        if self.peek_is_keyword("NOT") {
+            self.next_token();
+            let expr = self.parse_not()?;
+            Ok(PredicateExpr::Not(Box::new(expr)))
+        } else {
+            self.parse_primary()
+        }
+    }
+
+    fn parse_primary(&mut self) -> Result<PredicateExpr> {
+        if self.peek_is_token(&PredicateToken::LParen) {
+            self.next_token();
+            let expr = self.parse_expr()?;
+            self.expect_token(&PredicateToken::RParen)?;
+            Ok(expr)
+        } else {
+            self.parse_comparison()
+        }
+    }
+
+    fn parse_comparison(&mut self) -> Result<PredicateExpr> {
+        let field_name = self.expect_ident()?;
+        let field = parse_predicate_field(&field_name)?;
+        let op = self.expect_op()?;
+        let value = self.expect_value()?;
+        Ok(PredicateExpr::Compare { field, op, value })
+    }
+
+    fn expect_value(&mut self) -> Result<PredicateValue> {
+        match self.next_token().ok_or_else(|| anyhow!("Expected value"))? {
+            PredicateToken::Number(value) => Ok(PredicateValue::Number(value)),
+            PredicateToken::String(value) => Ok(PredicateValue::String(value)),
+            token => Err(anyhow!("Unexpected token in value: {:?}", token)),
+        }
+    }
+
+    fn expect_op(&mut self) -> Result<PredicateOp> {
+        match self.next_token().ok_or_else(|| anyhow!("Expected operator"))? {
+            PredicateToken::Op(op) => Ok(op),
+            token => Err(anyhow!("Unexpected token in operator: {:?}", token)),
+        }
+    }
+
+    fn expect_ident(&mut self) -> Result<String> {
+        match self.next_token().ok_or_else(|| anyhow!("Expected identifier"))? {
+            PredicateToken::Ident(value) => Ok(value),
+            token => Err(anyhow!("Unexpected token in identifier: {:?}", token)),
+        }
+    }
+
+    fn expect_token(&mut self, expected: &PredicateToken) -> Result<()> {
+        let token = self.next_token().ok_or_else(|| anyhow!("Expected token"))?;
+        if &token == expected {
+            Ok(())
+        } else {
+            Err(anyhow!("Expected {:?}, got {:?}", expected, token))
+        }
+    }
+
+    fn peek_is_keyword(&mut self, keyword: &str) -> bool {
+        matches!(self.peek_token(), Some(PredicateToken::Keyword(k)) if k == keyword)
+    }
+
+    fn peek_is_token(&mut self, token: &PredicateToken) -> bool {
+        matches!(self.peek_token(), Some(current) if current == *token)
+    }
+
+    fn peek_token(&mut self) -> Option<PredicateToken> {
+        if self.lookahead.is_none() {
+            self.lookahead = self.lexer.next_token();
+        }
+        self.lookahead.clone()
+    }
+
+    fn next_token(&mut self) -> Option<PredicateToken> {
+        if let Some(token) = self.lookahead.take() {
+            Some(token)
+        } else {
+            self.lexer.next_token()
+        }
+    }
+
+    fn expect_end(&mut self) -> Result<()> {
+        if self.next_token().is_some() {
+            Err(anyhow!("Unexpected trailing input in predicate"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum PredicateToken {
+    Ident(String),
+    String(String),
+    Number(f64),
+    Op(PredicateOp),
+    Keyword(String),
+    LParen,
+    RParen,
+}
+
+struct PredicateLexer<'a> {
+    input: &'a str,
+    bytes: &'a [u8],
+    index: usize,
+}
+
+impl<'a> PredicateLexer<'a> {
+    fn new(input: &'a str) -> Self {
+        Self {
+            input,
+            bytes: input.as_bytes(),
+            index: 0,
+        }
+    }
+
+    fn next_token(&mut self) -> Option<PredicateToken> {
+        self.skip_whitespace();
+        if self.index >= self.bytes.len() {
+            return None;
+        }
+
+        let ch = self.bytes[self.index];
+        match ch {
+            b'(' => {
+                self.index += 1;
+                Some(PredicateToken::LParen)
+            }
+            b')' => {
+                self.index += 1;
+                Some(PredicateToken::RParen)
+            }
+            b'\'' | b'"' => self.lex_string(ch),
+            b'>' | b'<' | b'=' | b'!' => self.lex_operator(),
+            b'0'..=b'9' => self.lex_number(),
+            _ => {
+                if is_ident_start(ch) {
+                    self.lex_identifier()
+                } else {
+                    self.index += 1;
+                    self.next_token()
+                }
+            }
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self.index < self.bytes.len() && self.bytes[self.index].is_ascii_whitespace() {
+            self.index += 1;
+        }
+    }
+
+    fn lex_string(&mut self, quote: u8) -> Option<PredicateToken> {
+        self.index += 1;
+        let mut out = String::new();
+        while self.index < self.bytes.len() {
+            let ch = self.bytes[self.index];
+            self.index += 1;
+            if ch == quote {
+                break;
+            }
+            if ch == b'\\' && self.index < self.bytes.len() {
+                let escaped = self.bytes[self.index];
+                self.index += 1;
+                out.push(escaped as char);
+            } else {
+                out.push(ch as char);
+            }
+        }
+        Some(PredicateToken::String(out))
+    }
+
+    fn lex_operator(&mut self) -> Option<PredicateToken> {
+        let start = self.index;
+        let end = usize::min(self.index + 2, self.bytes.len());
+        let slice = &self.bytes[start..end];
+        let op = if slice.starts_with(b">=") {
+            self.index += 2;
+            Some(PredicateOp::Gte)
+        } else if slice.starts_with(b"<=") {
+            self.index += 2;
+            Some(PredicateOp::Lte)
+        } else if slice.starts_with(b"==") {
+            self.index += 2;
+            Some(PredicateOp::Eq)
+        } else if slice.starts_with(b"!=") {
+            self.index += 2;
+            Some(PredicateOp::NotEq)
+        } else {
+            let ch = self.bytes[self.index];
+            self.index += 1;
+            match ch {
+                b'>' => Some(PredicateOp::Gt),
+                b'<' => Some(PredicateOp::Lt),
+                _ => None,
+            }
+        };
+
+        op.map(PredicateToken::Op)
+    }
+
+    fn lex_number(&mut self) -> Option<PredicateToken> {
+        let start = self.index;
+        let mut seen_dot = false;
+        while self.index < self.bytes.len() {
+            let ch = self.bytes[self.index];
+            if ch == b'.' && !seen_dot {
+                seen_dot = true;
+                self.index += 1;
+                continue;
+            }
+            if !ch.is_ascii_digit() {
+                break;
+            }
+            self.index += 1;
+        }
+
+        let value = self.input[start..self.index].parse::<f64>().ok()?;
+        Some(PredicateToken::Number(value))
+    }
+
+    fn lex_identifier(&mut self) -> Option<PredicateToken> {
+        let start = self.index;
+        self.index += 1;
+        while self.index < self.bytes.len() {
+            let ch = self.bytes[self.index];
+            if is_ident_continue(ch) {
+                self.index += 1;
+            } else {
+                break;
+            }
+        }
+        let ident = &self.input[start..self.index];
+        let upper = ident.to_ascii_uppercase();
+        match upper.as_str() {
+            "AND" | "OR" | "NOT" => Some(PredicateToken::Keyword(upper)),
+            _ => Some(PredicateToken::Ident(ident.to_string())),
+        }
+    }
+}
+
+fn is_ident_start(ch: u8) -> bool {
+    ch.is_ascii_alphabetic() || ch == b'_'
+}
+
+fn is_ident_continue(ch: u8) -> bool {
+    ch.is_ascii_alphanumeric() || ch == b'_' || ch == b'.'
+}
+
+fn parse_predicate_field(name: &str) -> Result<PredicateField> {
+    let lower = name.to_ascii_lowercase();
+    let field = if lower.ends_with(".length") || lower == "length" {
+        PredicateField::Length
+    } else if lower.ends_with(".filter") || lower == "filter" {
+        PredicateField::Filter
+    } else if lower.ends_with(".type") || lower == "type" {
+        PredicateField::Type
+    } else if lower.ends_with(".subtype") || lower == "subtype" {
+        PredicateField::Subtype
+    } else if lower.ends_with(".entropy") || lower == "entropy" {
+        PredicateField::Entropy
+    } else {
+        return Err(anyhow!("Unknown predicate field: {}", name));
+    };
+    Ok(field)
+}
+
+impl PredicateExpr {
+    fn evaluate(&self, ctx: &PredicateContext) -> bool {
+        match self {
+            PredicateExpr::And(lhs, rhs) => lhs.evaluate(ctx) && rhs.evaluate(ctx),
+            PredicateExpr::Or(lhs, rhs) => lhs.evaluate(ctx) || rhs.evaluate(ctx),
+            PredicateExpr::Not(expr) => !expr.evaluate(ctx),
+            PredicateExpr::Compare { field, op, value } => match field {
+                PredicateField::Length => compare_number(ctx.length as f64, *op, value),
+                PredicateField::Entropy => compare_number(ctx.entropy, *op, value),
+                PredicateField::Filter => compare_string(ctx.filter.as_deref(), *op, value),
+                PredicateField::Type => compare_string(Some(ctx.type_name.as_str()), *op, value),
+                PredicateField::Subtype => compare_string(ctx.subtype.as_deref(), *op, value),
+            },
+        }
+    }
+}
+
+fn compare_number(lhs: f64, op: PredicateOp, value: &PredicateValue) -> bool {
+    let rhs = match value {
+        PredicateValue::Number(value) => *value,
+        PredicateValue::String(_) => return false,
+    };
+    match op {
+        PredicateOp::Eq => lhs == rhs,
+        PredicateOp::NotEq => lhs != rhs,
+        PredicateOp::Gt => lhs > rhs,
+        PredicateOp::Lt => lhs < rhs,
+        PredicateOp::Gte => lhs >= rhs,
+        PredicateOp::Lte => lhs <= rhs,
+    }
+}
+
+fn compare_string(lhs: Option<&str>, op: PredicateOp, value: &PredicateValue) -> bool {
+    let rhs = match value {
+        PredicateValue::String(value) => value.as_str(),
+        PredicateValue::Number(_) => return false,
+    };
+    let lhs = match lhs {
+        Some(value) => value,
+        None => return false,
+    };
+    match op {
+        PredicateOp::Eq => lhs == rhs,
+        PredicateOp::NotEq => lhs != rhs,
+        _ => false,
+    }
+}
+
 pub fn apply_output_format(query: Query, format: OutputFormat) -> Result<Query> {
     let resolved = match format {
         OutputFormat::Json | OutputFormat::Jsonl => match query {
@@ -291,14 +698,27 @@ pub fn execute_query_with_context(
     extract_to: Option<&Path>,
     max_extract_bytes: usize,
     decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
 ) -> Result<QueryResult> {
+    if predicate.is_some()
+        && !matches!(
+            query,
+            Query::JavaScript
+                | Query::JavaScriptCount
+                | Query::Embedded
+                | Query::EmbeddedCount
+        )
+    {
+        ensure_predicate_supported(query)?;
+    }
+
     match query {
         Query::Pages => {
             let count = count_pages(ctx)?;
             Ok(QueryResult::Scalar(ScalarValue::Number(count as i64)))
         }
         Query::ObjectsCount => {
-            let count = ctx.graph.objects.len();
+            let count = count_objects(ctx, decode_mode, max_extract_bytes, predicate)?;
             Ok(QueryResult::Scalar(ScalarValue::Number(count as i64)))
         }
         Query::Creator => {
@@ -351,18 +771,30 @@ pub fn execute_query_with_context(
             Ok(QueryResult::Structure(json!(findings)))
         }
         Query::JavaScript => {
+            if predicate.is_some() {
+                ensure_predicate_supported(query)?;
+            }
             if let Some(extract_path) = extract_to {
                 // Extract to disk
-                let written = write_js_files(ctx, extract_path, max_extract_bytes, decode_mode)?;
+                let written = write_js_files(
+                    ctx,
+                    extract_path,
+                    max_extract_bytes,
+                    decode_mode,
+                    predicate,
+                )?;
                 Ok(QueryResult::List(written))
             } else {
                 // Return preview list
-                let js_code = extract_javascript(ctx)?;
+                let js_code = extract_javascript(ctx, decode_mode, predicate)?;
                 Ok(QueryResult::List(js_code))
             }
         }
         Query::JavaScriptCount => {
-            let js_code = extract_javascript(ctx)?;
+            if predicate.is_some() {
+                ensure_predicate_supported(query)?;
+            }
+            let js_code = extract_javascript(ctx, decode_mode, predicate)?;
             Ok(QueryResult::Scalar(ScalarValue::Number(
                 js_code.len() as i64
             )))
@@ -376,19 +808,30 @@ pub fn execute_query_with_context(
             Ok(QueryResult::Scalar(ScalarValue::Number(urls.len() as i64)))
         }
         Query::Embedded => {
+            if predicate.is_some() {
+                ensure_predicate_supported(query)?;
+            }
             if let Some(extract_path) = extract_to {
                 // Extract to disk
-                let written =
-                    write_embedded_files(ctx, extract_path, max_extract_bytes, decode_mode)?;
+                let written = write_embedded_files(
+                    ctx,
+                    extract_path,
+                    max_extract_bytes,
+                    decode_mode,
+                    predicate,
+                )?;
                 Ok(QueryResult::List(written))
             } else {
                 // Return preview list
-                let embedded = extract_embedded_files(ctx)?;
+                let embedded = extract_embedded_files(ctx, decode_mode, predicate)?;
                 Ok(QueryResult::List(embedded))
             }
         }
         Query::EmbeddedCount => {
-            let embedded = extract_embedded_files(ctx)?;
+            if predicate.is_some() {
+                ensure_predicate_supported(query)?;
+            }
+            let embedded = extract_embedded_files(ctx, decode_mode, predicate)?;
             Ok(QueryResult::Scalar(ScalarValue::Number(
                 embedded.len() as i64
             )))
@@ -406,11 +849,12 @@ pub fn execute_query_with_context(
             Ok(QueryResult::Scalar(ScalarValue::String(obj_str)))
         }
         Query::ObjectsList => {
-            let objects = list_objects(ctx)?;
+            let objects = list_objects(ctx, decode_mode, max_extract_bytes, predicate)?;
             Ok(QueryResult::List(objects))
         }
         Query::ObjectsWithType(obj_type) => {
-            let objects = list_objects_with_type(ctx, obj_type)?;
+            let objects =
+                list_objects_with_type(ctx, obj_type, decode_mode, max_extract_bytes, predicate)?;
             Ok(QueryResult::List(objects))
         }
         Query::Trailer => {
@@ -530,6 +974,7 @@ pub fn execute_query(
     extract_to: Option<&Path>,
     max_extract_bytes: usize,
     decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
 ) -> Result<QueryResult> {
     // Read PDF file
     let bytes = fs::read(pdf_path)?;
@@ -538,7 +983,14 @@ pub fn execute_query(
     let ctx = build_scan_context(&bytes, scan_options)?;
 
     // Delegate to execute_query_with_context
-    execute_query_with_context(query, &ctx, extract_to, max_extract_bytes, decode_mode)
+    execute_query_with_context(
+        query,
+        &ctx,
+        extract_to,
+        max_extract_bytes,
+        decode_mode,
+        predicate,
+    )
 }
 
 /// Scan options for query execution
@@ -808,20 +1260,41 @@ pub fn format_jsonl(query: &str, file: &str, result: &QueryResult) -> Result<Str
 }
 
 /// Extract JavaScript code from PDF
-fn extract_javascript(ctx: &ScanContext) -> Result<Vec<String>> {
+fn extract_javascript(
+    ctx: &ScanContext,
+    decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
     let mut js_code = Vec::new();
 
     for entry in &ctx.graph.objects {
         // Check for /JS entry in dictionary or stream
         if let Some(dict) = entry_dict(entry) {
             if let Some((_, obj)) = dict.get_first(b"/JS") {
-                if let Some(code) = extract_obj_text(&ctx.graph, ctx.bytes, obj) {
-                    js_code.push(format!(
-                        "Object {}_{}: {}",
-                        entry.obj,
-                        entry.gen,
-                        preview_text(&code, 200)
-                    ));
+                if let Some((bytes, meta)) = extract_obj_with_metadata(
+                    &ctx.graph,
+                    ctx.bytes,
+                    obj,
+                    32 * 1024 * 1024,
+                    decode_mode,
+                ) {
+                    if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
+                        if let Some(code) = extract_obj_text(&ctx.graph, ctx.bytes, obj) {
+                            js_code.push(format!(
+                                "Object {}_{}: {}",
+                                entry.obj,
+                                entry.gen,
+                                preview_text(&code, 200)
+                            ));
+                        } else if decode_mode == DecodeMode::Raw {
+                            js_code.push(format!(
+                                "Object {}_{}: {} bytes (raw)",
+                                entry.obj,
+                                entry.gen,
+                                bytes.len()
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -860,7 +1333,11 @@ fn extract_urls(ctx: &ScanContext) -> Result<Vec<String>> {
 }
 
 /// Extract embedded files information from PDF
-fn extract_embedded_files(ctx: &ScanContext) -> Result<Vec<String>> {
+fn extract_embedded_files(
+    ctx: &ScanContext,
+    decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
     use sis_pdf_pdf::object::PdfAtom;
 
     let mut embedded = Vec::new();
@@ -868,31 +1345,45 @@ fn extract_embedded_files(ctx: &ScanContext) -> Result<Vec<String>> {
     for entry in &ctx.graph.objects {
         if let PdfAtom::Stream(st) = &entry.atom {
             if st.dict.has_name(b"/Type", b"/EmbeddedFile") {
-                let name = embedded_filename(&st.dict)
-                    .unwrap_or_else(|| format!("embedded_{}_{}.bin", entry.obj, entry.gen));
-
-                // Get file size if possible
-                let size = st
-                    .dict
-                    .get_first(b"/Length")
-                    .and_then(|(_, obj)| {
-                        if let PdfAtom::Int(n) = &obj.atom {
-                            Some(*n as usize)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-
-                embedded.push(format!(
-                    "{} ({}_{}, {} bytes)",
-                    name, entry.obj, entry.gen, size
-                ));
+                let data = stream_bytes_for_mode(ctx.bytes, st, 32 * 1024 * 1024, decode_mode)?;
+                let meta = PredicateContext {
+                    length: data.len(),
+                    filter: filter_name(&st.dict),
+                    type_name: "Stream".to_string(),
+                    subtype: subtype_name(&st.dict),
+                    entropy: entropy_score(&data),
+                };
+                if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
+                    let name = embedded_filename(&st.dict)
+                        .unwrap_or_else(|| format!("embedded_{}_{}.bin", entry.obj, entry.gen));
+                    embedded.push(format!(
+                        "{} ({}_{}, {} bytes)",
+                        name,
+                        entry.obj,
+                        entry.gen,
+                        data.len()
+                    ));
+                }
             }
         }
     }
 
     Ok(embedded)
+}
+
+fn ensure_predicate_supported(query: &Query) -> Result<()> {
+    match query {
+        Query::JavaScript
+        | Query::JavaScriptCount
+        | Query::Embedded
+        | Query::EmbeddedCount
+        | Query::ObjectsCount
+        | Query::ObjectsList
+        | Query::ObjectsWithType(_) => Ok(()),
+        _ => Err(anyhow!(
+            "Predicate filtering is only supported for js, embedded, and objects queries"
+        )),
+    }
 }
 
 /// Extract event triggers from PDF
@@ -1184,6 +1675,141 @@ fn string_raw_bytes(s: &sis_pdf_pdf::object::PdfStr<'_>) -> Vec<u8> {
     }
 }
 
+fn entropy_score(data: &[u8]) -> f64 {
+    if data.is_empty() {
+        return 0.0;
+    }
+    let mut counts = [0u32; 256];
+    for &byte in data {
+        counts[byte as usize] += 1;
+    }
+    let len = data.len() as f64;
+    let mut entropy = 0.0;
+    for count in counts.iter().filter(|&&c| c > 0) {
+        let p = *count as f64 / len;
+        entropy -= p * p.log2();
+    }
+    entropy
+}
+
+fn filter_name(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    let filter_obj = dict.get_first(b"/Filter").map(|(_, obj)| obj)?;
+    match &filter_obj.atom {
+        PdfAtom::Name(name) => Some(String::from_utf8_lossy(&name.decoded).to_string()),
+        PdfAtom::Array(items) => items.first().and_then(|item| {
+            if let PdfAtom::Name(name) = &item.atom {
+                Some(String::from_utf8_lossy(&name.decoded).to_string())
+            } else {
+                None
+            }
+        }),
+        _ => None,
+    }
+}
+
+fn subtype_name(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    let subtype_obj = dict.get_first(b"/Subtype").map(|(_, obj)| obj)?;
+    if let PdfAtom::Name(name) = &subtype_obj.atom {
+        Some(String::from_utf8_lossy(&name.decoded).to_string())
+    } else {
+        None
+    }
+}
+
+fn atom_type_name(atom: &sis_pdf_pdf::object::PdfAtom<'_>) -> String {
+    use sis_pdf_pdf::object::PdfAtom;
+    match atom {
+        PdfAtom::Null => "Null",
+        PdfAtom::Bool(_) => "Bool",
+        PdfAtom::Int(_) => "Int",
+        PdfAtom::Real(_) => "Real",
+        PdfAtom::Name(_) => "Name",
+        PdfAtom::Str(_) => "String",
+        PdfAtom::Array(_) => "Array",
+        PdfAtom::Dict(_) => "Dict",
+        PdfAtom::Stream(_) => "Stream",
+        PdfAtom::Ref { .. } => "Ref",
+    }
+    .to_string()
+}
+
+fn predicate_context_for_entry(
+    entry: &sis_pdf_pdf::graph::ObjEntry<'_>,
+    bytes: &[u8],
+    decode_mode: DecodeMode,
+    max_extract_bytes: usize,
+) -> PredicateContext {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    match &entry.atom {
+        PdfAtom::Str(s) => {
+            let data = match decode_mode {
+                DecodeMode::Raw => string_raw_bytes(s),
+                DecodeMode::Decode | DecodeMode::Hexdump => string_bytes(s),
+            };
+            PredicateContext {
+                length: data.len(),
+                filter: None,
+                type_name: "String".to_string(),
+                subtype: None,
+                entropy: entropy_score(&data),
+            }
+        }
+        PdfAtom::Stream(stream) => {
+            let (data_len, entropy) =
+                match stream_bytes_for_mode(bytes, stream, max_extract_bytes, decode_mode) {
+                    Ok(data) => (data.len(), entropy_score(&data)),
+                    Err(_) => {
+                        let length = stream
+                            .dict
+                            .get_first(b"/Length")
+                            .and_then(|(_, obj)| {
+                                if let PdfAtom::Int(n) = &obj.atom {
+                                    Some(*n as usize)
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or(0);
+                        (length, 0.0)
+                    }
+                };
+            PredicateContext {
+                length: data_len,
+                filter: filter_name(&stream.dict),
+                type_name: "Stream".to_string(),
+                subtype: subtype_name(&stream.dict),
+                entropy,
+            }
+        }
+        PdfAtom::Dict(dict) => PredicateContext {
+            length: 0,
+            filter: None,
+            type_name: "Dict".to_string(),
+            subtype: subtype_name(dict),
+            entropy: 0.0,
+        },
+        PdfAtom::Array(_) => PredicateContext {
+            length: 0,
+            filter: None,
+            type_name: "Array".to_string(),
+            subtype: None,
+            entropy: 0.0,
+        },
+        atom => PredicateContext {
+            length: 0,
+            filter: None,
+            type_name: atom_type_name(atom),
+            subtype: None,
+            entropy: 0.0,
+        },
+    }
+}
+
 fn embedded_filename(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> {
     use sis_pdf_pdf::object::PdfAtom;
 
@@ -1231,6 +1857,77 @@ fn extract_obj_bytes(
                 },
                 PdfAtom::Stream(st) => {
                     stream_bytes_for_mode(bytes, st, max_bytes, decode_mode).ok()
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn extract_obj_with_metadata(
+    graph: &sis_pdf_pdf::ObjectGraph<'_>,
+    bytes: &[u8],
+    obj: &sis_pdf_pdf::object::PdfObj<'_>,
+    max_bytes: usize,
+    decode_mode: DecodeMode,
+) -> Option<(Vec<u8>, PredicateContext)> {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    match &obj.atom {
+        PdfAtom::Str(s) => {
+            let data = match decode_mode {
+                DecodeMode::Raw => string_raw_bytes(s),
+                DecodeMode::Decode | DecodeMode::Hexdump => string_bytes(s),
+            };
+            let ctx = PredicateContext {
+                length: data.len(),
+                filter: None,
+                type_name: "String".to_string(),
+                subtype: None,
+                entropy: entropy_score(&data),
+            };
+            Some((data, ctx))
+        }
+        PdfAtom::Stream(stream) => {
+            let data = stream_bytes_for_mode(bytes, stream, max_bytes, decode_mode).ok()?;
+            let ctx = PredicateContext {
+                length: data.len(),
+                filter: filter_name(&stream.dict),
+                type_name: "Stream".to_string(),
+                subtype: subtype_name(&stream.dict),
+                entropy: entropy_score(&data),
+            };
+            Some((data, ctx))
+        }
+        PdfAtom::Ref { .. } => {
+            let entry = graph.resolve_ref(obj)?;
+            match &entry.atom {
+                PdfAtom::Str(s) => {
+                    let data = match decode_mode {
+                        DecodeMode::Raw => string_raw_bytes(s),
+                        DecodeMode::Decode | DecodeMode::Hexdump => string_bytes(s),
+                    };
+                    let ctx = PredicateContext {
+                        length: data.len(),
+                        filter: None,
+                        type_name: "String".to_string(),
+                        subtype: None,
+                        entropy: entropy_score(&data),
+                    };
+                    Some((data, ctx))
+                }
+                PdfAtom::Stream(stream) => {
+                    let data =
+                        stream_bytes_for_mode(bytes, stream, max_bytes, decode_mode).ok()?;
+                    let ctx = PredicateContext {
+                        length: data.len(),
+                        filter: filter_name(&stream.dict),
+                        type_name: "Stream".to_string(),
+                        subtype: subtype_name(&stream.dict),
+                        entropy: entropy_score(&data),
+                    };
+                    Some((data, ctx))
                 }
                 _ => None,
             }
@@ -1337,6 +2034,7 @@ fn write_js_files(
     extract_to: &Path,
     max_bytes: usize,
     decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
 ) -> Result<Vec<String>> {
     use std::fs;
 
@@ -1349,42 +2047,48 @@ fn write_js_files(
     for entry in &ctx.graph.objects {
         if let Some(dict) = entry_dict(entry) {
             if let Some((_, obj)) = dict.get_first(b"/JS") {
-                if let Some(data) =
-                    extract_obj_bytes(&ctx.graph, ctx.bytes, obj, max_bytes, decode_mode)
-                {
-                    let base_name = format!("js_{}_{}", entry.obj, entry.gen);
-                    let (filename, output_bytes, mode_label) = match decode_mode {
-                        DecodeMode::Decode => (
-                            format!("{base_name}.js"),
-                            data.clone(),
-                            "decode",
-                        ),
-                        DecodeMode::Raw => (format!("{base_name}.raw"), data.clone(), "raw"),
-                        DecodeMode::Hexdump => (
-                            format!("{base_name}.hex"),
-                            format_hexdump(&data).into_bytes(),
-                            "hexdump",
-                        ),
-                    };
-                    let filepath = extract_to.join(&filename);
-                    let hash = sha256_hex(&data);
+                if let Some((data, meta)) = extract_obj_with_metadata(
+                    &ctx.graph,
+                    ctx.bytes,
+                    obj,
+                    max_bytes,
+                    decode_mode,
+                ) {
+                    if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
+                        let base_name = format!("js_{}_{}", entry.obj, entry.gen);
+                        let (filename, output_bytes, mode_label) = match decode_mode {
+                            DecodeMode::Decode => (
+                                format!("{base_name}.js"),
+                                data.clone(),
+                                "decode",
+                            ),
+                            DecodeMode::Raw => (format!("{base_name}.raw"), data.clone(), "raw"),
+                            DecodeMode::Hexdump => (
+                                format!("{base_name}.hex"),
+                                format_hexdump(&data).into_bytes(),
+                                "hexdump",
+                            ),
+                        };
+                        let filepath = extract_to.join(&filename);
+                        let hash = sha256_hex(&data);
 
-                    fs::write(&filepath, &output_bytes)?;
+                        fs::write(&filepath, &output_bytes)?;
 
-                    let mut info = format!(
-                        "{}: {} bytes, sha256={}, object={}_{}",
-                        filename,
-                        data.len(),
-                        hash,
-                        entry.obj,
-                        entry.gen
-                    );
-                    info.push_str(&format!(", mode={}", mode_label));
-                    if decode_mode == DecodeMode::Hexdump {
-                        info.push_str(&format!(", hexdump_bytes={}", output_bytes.len()));
+                        let mut info = format!(
+                            "{}: {} bytes, sha256={}, object={}_{}",
+                            filename,
+                            data.len(),
+                            hash,
+                            entry.obj,
+                            entry.gen
+                        );
+                        info.push_str(&format!(", mode={}", mode_label));
+                        if decode_mode == DecodeMode::Hexdump {
+                            info.push_str(&format!(", hexdump_bytes={}", output_bytes.len()));
+                        }
+                        written_files.push(info);
+                        count += 1;
                     }
-                    written_files.push(info);
-                    count += 1;
                 }
             }
         }
@@ -1400,6 +2104,7 @@ fn write_embedded_files(
     extract_to: &Path,
     max_bytes: usize,
     decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
 ) -> Result<Vec<String>> {
     use sis_pdf_pdf::object::PdfAtom;
     use std::fs;
@@ -1425,6 +2130,14 @@ fn write_embedded_files(
                         break;
                     }
 
+                    let meta = PredicateContext {
+                        length: data.len(),
+                        filter: filter_name(&st.dict),
+                        type_name: "Stream".to_string(),
+                        subtype: subtype_name(&st.dict),
+                        entropy: entropy_score(&data),
+                    };
+                    if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
                     // Get filename
                     let name = embedded_filename(&st.dict).unwrap_or_else(|| {
                         format!("embedded_{}_{}.bin", entry.obj, entry.gen)
@@ -1466,6 +2179,7 @@ fn write_embedded_files(
 
                     total_bytes = total_bytes.saturating_add(data_len);
                     count += 1;
+                    }
                 }
             }
         }
@@ -1587,18 +2301,38 @@ fn format_pdf_atom(atom: &sis_pdf_pdf::object::PdfAtom, indent: usize) -> String
 }
 
 /// List all object IDs
-fn list_objects(ctx: &ScanContext) -> Result<Vec<String>> {
+fn list_objects(
+    ctx: &ScanContext,
+    decode_mode: DecodeMode,
+    max_extract_bytes: usize,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
     let objects: Vec<String> = ctx
         .graph
         .objects
         .iter()
+        .filter(|entry| {
+            if let Some(pred) = predicate {
+                let context =
+                    predicate_context_for_entry(entry, ctx.bytes, decode_mode, max_extract_bytes);
+                pred.evaluate(&context)
+            } else {
+                true
+            }
+        })
         .map(|entry| format!("{} {}", entry.obj, entry.gen))
         .collect();
     Ok(objects)
 }
 
 /// List objects with a specific type
-fn list_objects_with_type(ctx: &ScanContext, obj_type: &str) -> Result<Vec<String>> {
+fn list_objects_with_type(
+    ctx: &ScanContext,
+    obj_type: &str,
+    decode_mode: DecodeMode,
+    max_extract_bytes: usize,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
     use sis_pdf_pdf::object::PdfAtom;
 
     let mut objects = Vec::new();
@@ -1609,6 +2343,13 @@ fn list_objects_with_type(ctx: &ScanContext, obj_type: &str) -> Result<Vec<Strin
     };
 
     for entry in &ctx.graph.objects {
+        if let Some(pred) = predicate {
+            let context =
+                predicate_context_for_entry(entry, ctx.bytes, decode_mode, max_extract_bytes);
+            if !pred.evaluate(&context) {
+                continue;
+            }
+        }
         if let Some(dict) = entry_dict(entry) {
             // Look for /Type entry
             if let Some((_, type_obj)) = dict.get_first(b"/Type") {
@@ -1623,6 +2364,26 @@ fn list_objects_with_type(ctx: &ScanContext, obj_type: &str) -> Result<Vec<Strin
     }
 
     Ok(objects)
+}
+
+fn count_objects(
+    ctx: &ScanContext,
+    decode_mode: DecodeMode,
+    max_extract_bytes: usize,
+    predicate: Option<&PredicateExpr>,
+) -> Result<usize> {
+    let mut count = 0usize;
+    for entry in &ctx.graph.objects {
+        if let Some(pred) = predicate {
+            let context =
+                predicate_context_for_entry(entry, ctx.bytes, decode_mode, max_extract_bytes);
+            if !pred.evaluate(&context) {
+                continue;
+            }
+        }
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// Show the PDF trailer
@@ -2064,6 +2825,7 @@ fn cycle_to_json(idx: usize, cycle: &[(u32, u16)]) -> serde_json::Value {
 /// * `extract_to` - Optional extraction directory
 /// * `max_extract_bytes` - Maximum bytes to extract per file
 /// * `decode_mode` - Stream decode behaviour for extraction
+/// * `predicate` - Optional predicate filter for supported queries
 /// * `output_format` - Output format override
 /// * `max_batch_files` - Maximum number of files to process
 /// * `max_batch_bytes` - Maximum total bytes to process
@@ -2076,6 +2838,7 @@ pub fn run_query_batch(
     extract_to: Option<&Path>,
     max_extract_bytes: usize,
     decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
     output_format: OutputFormat,
     max_batch_files: usize,
     max_batch_bytes: u64,
@@ -2197,8 +2960,14 @@ pub fn run_query_batch(
         let ctx = build_scan_context(&mmap, scan_options)?;
 
         // Execute query
-        let result =
-            execute_query_with_context(query, &ctx, extract_to, max_extract_bytes, decode_mode)?;
+        let result = execute_query_with_context(
+            query,
+            &ctx,
+            extract_to,
+            max_extract_bytes,
+            decode_mode,
+            predicate,
+        )?;
 
         // Filter out empty results
         let is_empty = match &result {
@@ -2436,6 +3205,49 @@ mod tests {
             let count = refs["count"].as_u64().expect("count");
             let list = refs["references"].as_array().expect("references list");
             assert_eq!(count as usize, list.len());
+        });
+    }
+
+    #[test]
+    fn parse_predicate_supports_boolean_logic() {
+        let expr = parse_predicate("length > 10 AND entropy >= 5.0").expect("predicate");
+        let ctx = PredicateContext {
+            length: 20,
+            filter: None,
+            type_name: "Stream".to_string(),
+            subtype: None,
+            entropy: 6.5,
+        };
+        assert!(expr.evaluate(&ctx));
+    }
+
+    #[test]
+    fn predicate_not_operator_inverts_result() {
+        let expr = parse_predicate("NOT type == 'Stream'").expect("predicate");
+        let ctx = PredicateContext {
+            length: 10,
+            filter: None,
+            type_name: "Stream".to_string(),
+            subtype: None,
+            entropy: 0.0,
+        };
+        assert!(!expr.evaluate(&ctx));
+    }
+
+    #[test]
+    fn list_objects_respects_predicate_filter() {
+        with_fixture_context("content_first_phase1.pdf", |ctx| {
+            let all = list_objects(ctx, DecodeMode::Decode, 1024, None).expect("all objects");
+            let predicate = parse_predicate("length < 0").expect("predicate");
+            let filtered = list_objects(
+                ctx,
+                DecodeMode::Decode,
+                1024,
+                Some(&predicate),
+            )
+            .expect("filtered objects");
+            assert!(filtered.is_empty());
+            assert!(all.len() >= filtered.len());
         });
     }
 }

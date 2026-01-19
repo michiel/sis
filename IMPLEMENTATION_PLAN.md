@@ -1,6 +1,6 @@
 # Query Interface Extension: Reinstate Removed Features
 
-**Status:** In Progress (Phase 7 complete, Phases 8-9 planned)
+**Status:** In Progress (Phase 7 complete, Phase 8 in progress, Phase 9 planned)
 **Started:** 2026-01-18
 **Current Phase:** Phase 8 (Boolean Logic and Predicates)
 **Roadmap Source:** plans/20260119-query-uplift.md
@@ -14,7 +14,7 @@ This implementation elevates the query interface from a structural viewer to a f
 2. **Batch Mode** (`--path DIR --glob PATTERN`) - Parallel directory scanning with filtering
 3. **Export Queries** (graph.org, graph.ir, features) - Structured exports for analysis pipelines
 
-### Forensic Enhancements (Phases 5-7 Complete, Phases 8-9 Planned)
+### Forensic Enhancements (Phases 5-7 Complete, Phase 8 in Progress, Phase 9 Planned)
 4. **Format Control** (`--format jsonl`) - Streaming JSON for infinite pipelines (Phase 5 complete)
 5. **Stream Decode Control** (`--raw`, `--decode`, `--hexdump`) - Explicit extraction modes (Phase 6 complete)
 6. **Inverse XRef** (`ref <obj>`) - Reverse reference lookup for threat hunting (Phase 7 complete)
@@ -414,7 +414,7 @@ sis query malware.pdf ref 52 0 --json
 
 ---
 
-### Phase 8: Boolean Logic & Predicates (0% Complete - Future)
+### Phase 8: Boolean Logic & Predicates (In Progress)
 
 **Objective:** Add filtering and boolean logic for complex queries
 
@@ -424,6 +424,7 @@ sis query malware.pdf ref 52 0 --json
 - `crates/sis-pdf/src/commands/query.rs` - Add `--where` clause parser
 - `crates/sis-pdf/src/commands/query.rs` - Implement predicate evaluator
 - `crates/sis-pdf/src/commands/query.rs` - Support `OR` logic for multi-object queries
+ - `crates/sis-pdf/src/main.rs` - Add `--where` CLI flag
 
 **Query Syntax:**
 ```bash
@@ -441,6 +442,12 @@ sis query file.pdf "obj 52 0 OR obj 53 0"
 - `type` - Object type (Stream, Dict, Array, etc.)
 - `subtype` - Object subtype (/JavaScript, /Image, etc.)
 - `entropy` - Shannon entropy (for obfuscation detection)
+
+**Progress:**
+- Implemented predicate parser and evaluator with boolean operators
+- Wired `--where` into query execution for js, embedded, and objects queries (current scope)
+- Added tests for predicate parsing and evaluation
+- Added REPL `:where` command for interactive predicate filtering
 
 **Success Criteria:**
 - [ ] `--where` clause supports comparison operators: `>`, `<`, `==`, `!=`, `>=`, `<=`
@@ -521,6 +528,7 @@ sis query --path corpus --glob "*.pdf" js.count --format jsonl | jq 'select(.sta
 - JSONL output formatting for query results
 - Hexdump formatting for extraction output
 - Reference query output structure
+- Predicate parsing and evaluation
 
 ### Unit Tests (Pending)
 - [ ] `sanitize_embedded_filename()` for path traversal protection
@@ -663,7 +671,7 @@ Planned (Phases 6-9):
 3. Added structured output for incoming reference details
 
 ### Next Phase (8)
-- **Phase 8:** Boolean logic and predicates (`--where` clauses)
+- **Phase 8:** Boolean logic and predicates (`--where` clauses) (in progress)
 
 ### Future Phases (9)
 - **Phase 9:** Structured error reporting (JSON error responses)

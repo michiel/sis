@@ -16,6 +16,9 @@ sis query embedded file.pdf --extract-to /tmp/out --hexdump
 
 # Find what references a specific object
 sis query file.pdf ref 52 0
+
+# Filter extracted objects by predicate
+sis query js file.pdf --where "length > 1024"
 ```
 
 ---
