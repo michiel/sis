@@ -2632,8 +2632,26 @@ fn run_query_oneshot(
     use commands::query;
 
     // Parse the query
-    let query =
-        query::parse_query(query_str).map_err(|e| anyhow!("Failed to parse query: {}", e))?;
+    let query = match query::parse_query(query_str) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            let error = query::query_syntax_error(format!("Failed to parse query: {}", e));
+            let file_label = pdf_path.unwrap_or("<batch>");
+            match output_format {
+                query::OutputFormat::Json => {
+                    let output = query::format_json(query_str, file_label, &error)?;
+                    println!("{}", output);
+                    return Ok(());
+                }
+                query::OutputFormat::Jsonl => {
+                    let output = query::format_jsonl(query_str, file_label, &error)?;
+                    println!("{}", output);
+                    return Ok(());
+                }
+                _ => return Err(anyhow!("Failed to parse query: {}", e)),
+            }
+        }
+    };
     let query = query::apply_output_format(query, output_format)?;
 
     // Build scan options
@@ -2873,7 +2891,22 @@ fn run_query_repl(
                             Err(e) => eprintln!("Query failed: {}", e),
                         }
                     }
-                    Err(e) => eprintln!("Invalid query: {}", e),
+                    Err(e) => {
+                        let error = query::query_syntax_error(format!("Invalid query: {}", e));
+                        if jsonl_mode {
+                            match query::format_jsonl(line, pdf_path, &error) {
+                                Ok(output) => println!("{}", output),
+                                Err(err) => eprintln!("Error formatting result: {}", err),
+                            }
+                        } else if json_mode {
+                            match query::format_json(line, pdf_path, &error) {
+                                Ok(output) => println!("{}", output),
+                                Err(err) => eprintln!("Error formatting result: {}", err),
+                            }
+                        } else {
+                            eprintln!("Invalid query: {}", e);
+                        }
+                    }
                 }
             }
             Err(ReadlineError::Interrupted) => {

@@ -513,6 +513,7 @@ sis query file.pdf "obj 52 0 OR obj 53 0 OR obj 54 0"
 **Progress:**
 - Added `QueryResult::Error` variant with structured fields
 - Query execution wraps errors into structured results
+- Added error code classification and query syntax error handling
 
 **Usage Examples (Planned):**
 ```bash

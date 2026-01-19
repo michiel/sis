@@ -178,6 +178,15 @@ pub struct QueryError {
     pub context: Option<serde_json::Value>,
 }
 
+pub fn query_syntax_error(message: impl Into<String>) -> QueryResult {
+    QueryResult::Error(QueryError {
+        status: "error",
+        error_code: "QUERY_SYNTAX_ERROR",
+        message: message.into(),
+        context: None,
+    })
+}
+
 /// Parse a query string into a Query enum
 pub fn parse_query(input: &str) -> Result<Query> {
     let input = input.trim();
@@ -1925,11 +1934,54 @@ fn severity_to_string(severity: &sis_pdf_core::model::Severity) -> String {
 }
 
 fn build_query_error(err: anyhow::Error) -> QueryError {
+    let message = err.to_string();
+    let (error_code, context) = classify_query_error(&message);
     QueryError {
         status: "error",
-        error_code: "QUERY_ERROR",
-        message: err.to_string(),
-        context: None,
+        error_code,
+        message,
+        context,
+    }
+}
+
+fn classify_query_error(message: &str) -> (&'static str, Option<serde_json::Value>) {
+    let lower = message.to_ascii_lowercase();
+    if let Some((obj, gen)) = parse_object_not_found(message) {
+        return (
+            "OBJ_NOT_FOUND",
+            Some(json!({ "requested": format!("{obj} {gen}") })),
+        );
+    }
+    if lower.contains("invalid query")
+        || lower.contains("failed to parse query")
+        || lower.contains("query syntax")
+    {
+        return ("QUERY_SYNTAX_ERROR", None);
+    }
+    if lower.contains("decode") || lower.contains("decompress") || lower.contains("stream") {
+        return ("DECODE_ERROR", None);
+    }
+    if lower.contains("parse") && lower.contains("pdf") {
+        return ("PARSE_ERROR", None);
+    }
+    if lower.contains("encrypted") || lower.contains("password") || lower.contains("permission") {
+        return ("PERMISSION_ERROR", None);
+    }
+    ("QUERY_ERROR", None)
+}
+
+fn parse_object_not_found(message: &str) -> Option<(u32, u16)> {
+    let prefix = "Object ";
+    let suffix = " not found";
+    let start = message.find(prefix)? + prefix.len();
+    let end = message.find(suffix)?;
+    if end <= start {
+        return None;
+    }
+    let parts: Vec<&str> = message[start..end].split_whitespace().collect();
+    match parts.as_slice() {
+        [obj, gen] => Some((obj.parse().ok()?, gen.parse().ok()?)),
+        _ => None,
     }
 }
 
@@ -3410,5 +3462,14 @@ mod tests {
             .expect("predicate");
         let ctx = predicate_context_for_event(&event).expect("context");
         assert!(predicate.evaluate(&ctx));
+    }
+
+    #[test]
+    fn classify_query_error_detects_object_not_found() {
+        let err = anyhow!("Object 5 0 not found");
+        let query_error = build_query_error(err);
+        assert_eq!(query_error.error_code, "OBJ_NOT_FOUND");
+        let context = query_error.context.expect("context");
+        assert_eq!(context["requested"], json!("5 0"));
     }
 }
