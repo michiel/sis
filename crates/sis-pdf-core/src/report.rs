@@ -760,6 +760,7 @@ fn ml_assessment(label: bool) -> &'static str {
 struct LinkEdge {
     from: String,
     to: String,
+    #[allow(dead_code)]
     reason: String,
 }
 
@@ -919,6 +920,7 @@ fn render_aligned_preview_lines(entries: &[(String, String)], preview_len: usize
         .collect()
 }
 
+#[allow(dead_code)]
 fn render_position_tree(entries: &[(String, String)], preview_len: usize) -> Vec<String> {
     let mut parsed = Vec::new();
     for (position, preview) in entries {
@@ -989,6 +991,7 @@ fn sanitise_preview(preview: &str, max_len: usize) -> String {
     out
 }
 
+#[allow(dead_code)]
 struct ParsedPositionEntry {
     revision: String,
     path_segments: Vec<String>,
@@ -996,6 +999,7 @@ struct ParsedPositionEntry {
     preview: String,
 }
 
+#[allow(dead_code)]
 fn parse_canonical_position(position: &str, preview: &str) -> Option<ParsedPositionEntry> {
     let trimmed = position.trim();
     let after_doc = trimmed.strip_prefix("doc:")?;
@@ -1017,6 +1021,7 @@ fn parse_canonical_position(position: &str, preview: &str) -> Option<ParsedPosit
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct PositionTreeNode {
     label: String,
     obj_ref: Option<String>,
@@ -1024,6 +1029,7 @@ struct PositionTreeNode {
     children: BTreeMap<String, PositionTreeNode>,
 }
 
+#[allow(dead_code)]
 impl PositionTreeNode {
     fn insert(&mut self, segments: &[String], obj_ref: String, preview: String) {
         if segments.is_empty() {
@@ -1066,6 +1072,7 @@ impl PositionTreeNode {
     }
 }
 
+#[allow(dead_code)]
 fn segment_preview(segment: &str) -> String {
     let trimmed = segment.trim();
     if trimmed.is_empty() {
@@ -1107,6 +1114,7 @@ fn segment_preview(segment: &str) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn render_chain_notes(chain: &ExploitChain) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = chain
         .notes
@@ -1125,6 +1133,7 @@ fn render_chain_notes(chain: &ExploitChain) -> Vec<(String, String)> {
     out
 }
 
+#[allow(dead_code)]
 fn render_finding_context(f: &Finding) -> String {
     let mut parts = Vec::new();
     parts.push(format!("kind `{}`", f.kind));
@@ -1355,6 +1364,7 @@ fn chain_effect_summary(chain: &ExploitChain) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn chain_sandbox_observations(
     chain: &ExploitChain,
     findings: &[Finding],
@@ -1583,6 +1593,7 @@ fn sandbox_summary_line(report: &Report) -> Option<String> {
     }
 }
 
+#[allow(dead_code)]
 fn runtime_behavior_summary(findings: &[Finding]) -> Vec<String> {
     let mut auto_exec = false;
     let mut js = false;

@@ -137,3 +137,9 @@ Findings in this project include metadata fields for `severity`, `impact`, and `
   desktop viewers unless necessary, and prefer the `sis` CLI.
 - For new analysis features, document behavior updates in `docs/` or
   `plans/` as appropriate.
+
+## Code and supply chain
+
+ - No unsafe code
+ - Rust native crates only
+

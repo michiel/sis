@@ -92,7 +92,6 @@ struct PredicateContext {
 pub enum Query {
     // Metadata queries
     Pages,
-    Objects,
     ObjectsCount,
     Creator,
     Producer,
@@ -1013,7 +1012,6 @@ pub fn execute_query_with_context(
 
                 Ok(QueryResult::Structure(serde_json::Value::Object(values)))
             }
-            _ => Err(anyhow!("Query not yet implemented: {:?}", query)),
         }
     })();
 
@@ -1286,16 +1284,6 @@ fn run_detectors(ctx: &ScanContext) -> Result<Vec<sis_pdf_core::model::Finding>>
     }
 
     Ok(findings)
-}
-
-fn impact_from_severity(severity: &Severity) -> &'static str {
-    match severity {
-        Severity::Info => "None",
-        Severity::Low => "Low",
-        Severity::Medium => "Medium",
-        Severity::High => "High",
-        Severity::Critical => "Critical",
-    }
 }
 
 /// Format query result as human-readable text
@@ -2064,39 +2052,6 @@ fn embedded_filename(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> 
     }
 
     None
-}
-
-/// Extract raw bytes from a PDF object (for file extraction)
-fn extract_obj_bytes(
-    graph: &sis_pdf_pdf::ObjectGraph<'_>,
-    bytes: &[u8],
-    obj: &sis_pdf_pdf::object::PdfObj<'_>,
-    max_bytes: usize,
-    decode_mode: DecodeMode,
-) -> Option<Vec<u8>> {
-    use sis_pdf_pdf::object::PdfAtom;
-
-    match &obj.atom {
-        PdfAtom::Str(s) => match decode_mode {
-            DecodeMode::Raw => Some(string_raw_bytes(s)),
-            DecodeMode::Decode | DecodeMode::Hexdump => Some(string_bytes(s)),
-        },
-        PdfAtom::Stream(st) => stream_bytes_for_mode(bytes, st, max_bytes, decode_mode).ok(),
-        PdfAtom::Ref { .. } => {
-            let entry = graph.resolve_ref(obj)?;
-            match &entry.atom {
-                PdfAtom::Str(s) => match decode_mode {
-                    DecodeMode::Raw => Some(string_raw_bytes(s)),
-                    DecodeMode::Decode | DecodeMode::Hexdump => Some(string_bytes(s)),
-                },
-                PdfAtom::Stream(st) => {
-                    stream_bytes_for_mode(bytes, st, max_bytes, decode_mode).ok()
-                }
-                _ => None,
-            }
-        }
-        _ => None,
-    }
 }
 
 fn extract_obj_with_metadata(

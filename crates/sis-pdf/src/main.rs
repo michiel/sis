@@ -1760,13 +1760,18 @@ fn run_ml_autoconfig(
         None,
     );
     let provider_order = resolve_provider_order(&runtime_overrides, &hints, target.os);
-    let mut provider_available = Vec::new();
-    #[cfg(feature = "ml-graph")]
-    {
-        if let Ok(info) = detect_provider_info(&runtime_overrides, &provider_order) {
-            provider_available = info.available;
+    let provider_available = {
+        #[cfg(feature = "ml-graph")]
+        {
+            detect_provider_info(&runtime_overrides, &provider_order)
+                .map(|info| info.available)
+                .unwrap_or_default()
         }
-    }
+        #[cfg(not(feature = "ml-graph"))]
+        {
+            Vec::new()
+        }
+    };
     let provider_suggestions = suggest_providers(&provider_order, &provider_available);
     let selected = provider_suggestions
         .first()
