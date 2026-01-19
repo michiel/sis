@@ -187,6 +187,19 @@ pub fn query_syntax_error(message: impl Into<String>) -> QueryResult {
     })
 }
 
+pub fn query_error_with_context(
+    error_code: &'static str,
+    message: impl Into<String>,
+    context: Option<serde_json::Value>,
+) -> QueryResult {
+    QueryResult::Error(QueryError {
+        status: "error",
+        error_code,
+        message: message.into(),
+        context,
+    })
+}
+
 /// Parse a query string into a Query enum
 pub fn parse_query(input: &str) -> Result<Query> {
     let input = input.trim();
@@ -1018,10 +1031,28 @@ pub fn execute_query(
     predicate: Option<&PredicateExpr>,
 ) -> Result<QueryResult> {
     // Read PDF file
-    let bytes = fs::read(pdf_path)?;
+    let bytes = match fs::read(pdf_path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Ok(query_error_with_context(
+                "FILE_READ_ERROR",
+                format!("Failed to read PDF file: {}", err),
+                Some(json!({ "path": pdf_path.display().to_string() })),
+            ));
+        }
+    };
 
     // Parse PDF and build context
-    let ctx = build_scan_context(&bytes, scan_options)?;
+    let ctx = match build_scan_context(&bytes, scan_options) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            return Ok(query_error_with_context(
+                "PARSE_ERROR",
+                format!("Failed to parse PDF: {}", err),
+                Some(json!({ "path": pdf_path.display().to_string() })),
+            ));
+        }
+    };
 
     // Delegate to execute_query_with_context
     execute_query_with_context(
@@ -3264,6 +3295,7 @@ mod tests {
     use serde_json::json;
     use sis_pdf_pdf::path_finder::TriggerType;
     use sis_pdf_pdf::typed_graph::{EdgeType, TypedEdge};
+    use tempfile::tempdir;
 
     fn with_fixture_context<F>(fixture: &str, test: F)
     where
@@ -3462,6 +3494,30 @@ mod tests {
             .expect("predicate");
         let ctx = predicate_context_for_event(&event).expect("context");
         assert!(predicate.evaluate(&ctx));
+    }
+
+    #[test]
+    fn execute_query_reports_file_read_error() {
+        let temp_dir = tempdir().expect("temp dir");
+        let missing_path = temp_dir.path().join("does_not_exist.pdf");
+        let options = ScanOptions::default();
+        let result = execute_query(
+            &Query::Pages,
+            &missing_path,
+            &options,
+            None,
+            1024,
+            DecodeMode::Decode,
+            None,
+        )
+        .expect("query result");
+        let err = match result {
+            QueryResult::Error(err) => err,
+            other => panic!("expected error result, got {:?}", other),
+        };
+        assert_eq!(err.error_code, "FILE_READ_ERROR");
+        let context = err.context.expect("context");
+        assert_eq!(context["path"], json!(missing_path.display().to_string()));
     }
 
     #[test]

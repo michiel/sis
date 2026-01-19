@@ -1,8 +1,8 @@
 # Query Interface Extension: Reinstate Removed Features
 
-**Status:** In Progress (Phase 8 complete, Phase 9 in progress)
+**Status:** Complete (Phases 1-9 complete)
 **Started:** 2026-01-18
-**Current Phase:** Phase 9 (Structured Error Reporting)
+**Current Phase:** Complete
 **Roadmap Source:** plans/20260119-query-uplift.md
 
 ## Overview
@@ -14,16 +14,16 @@ This implementation elevates the query interface from a structural viewer to a f
 2. **Batch Mode** (`--path DIR --glob PATTERN`) - Parallel directory scanning with filtering
 3. **Export Queries** (graph.org, graph.ir, features) - Structured exports for analysis pipelines
 
-### Forensic Enhancements (Phases 5-8 Complete, Phase 9 In Progress)
+### Forensic Enhancements (Phases 5-9 Complete)
 4. **Format Control** (`--format jsonl`) - Streaming JSON for infinite pipelines (Phase 5 complete)
 5. **Stream Decode Control** (`--raw`, `--decode`, `--hexdump`) - Explicit extraction modes (Phase 6 complete)
 6. **Inverse XRef** (`ref <obj>`) - Reverse reference lookup for threat hunting (Phase 7 complete)
 7. **Boolean Queries** (`--where "length > 1024"`) - Property filtering and logic (Phase 8 complete)
-8. **Structured Errors** - JSON error responses for automation robustness (Phase 9)
+8. **Structured Errors** - JSON error responses for automation robustness (Phase 9 complete)
 
 ## Executive Summary
 
-### What's Complete (Phases 1-7)
+### What's Complete (Phases 1-9)
 The query interface now supports:
 - **Safe file extraction** with path traversal protection and size limits
 - **Parallel batch processing** for analysing entire PDF corpora
@@ -32,11 +32,10 @@ The query interface now supports:
 - **Format flags** (`--format` with JSONL support and `--json` shorthand)
 - **Explicit stream decode control** for extraction (`--raw`, `--decode`, `--hexdump`)
 - **Inverse reference lookup** for object triggers (`ref <obj> <gen>`)
+- **Structured error output** for JSON/JSONL query responses
 
-### What's Next (Phases 8-9)
-Building on this foundation, we'll add forensic-grade capabilities:
-- **Phase 8:** Boolean predicates to filter without external scripting
-- **Phase 9:** Structured error reporting for robust automation
+### What's Next
+This plan is complete. Follow-up work belongs in a new plan if needed.
 
 ### Design Goals
 1. **Composability** - Integrates seamlessly with Unix tools (`jq`, `grep`, pipes)
@@ -471,21 +470,22 @@ sis query file.pdf "obj 52 0 OR obj 53 0 OR obj 54 0"
 
 ---
 
-### Phase 9: Structured Error Reporting (In Progress)
+### Phase 9: Structured Error Reporting (Complete)
 
 **Objective:** Return errors as structured data for automated processing
 
 **Priority:** Medium (Robustness for automation)
 
-**Files to Modify:**
+**Files Modified:**
 - `crates/sis-pdf/src/commands/query.rs` - Wrap errors in QueryResult::Error variant
 - `crates/sis-pdf/src/commands/query.rs` - Add error codes and structured messages
-- `crates/sis-pdf/src/main.rs` - Format errors as JSON when `--json` is used
+- `crates/sis-pdf/src/main.rs` - Format errors as JSON when `--format json` or `--format jsonl` is used
+- `docs/query-errors.md` - Document error schema and codes
+- `docs/index.md` - Link to structured error documentation
 
 **Error Format:**
 ```json
 {
-  "id": "9999 0",
   "status": "error",
   "error_code": "OBJ_NOT_FOUND",
   "message": "Object 9999 0 does not exist in the xref table.",
@@ -502,20 +502,23 @@ sis query file.pdf "obj 52 0 OR obj 53 0 OR obj 54 0"
 - `DECODE_ERROR` - Stream decompression failed
 - `QUERY_SYNTAX_ERROR` - Invalid query string
 - `PERMISSION_ERROR` - Encrypted/protected content
+- `FILE_READ_ERROR` - Failed to read input file
+- `QUERY_ERROR` - Fallback for uncategorised errors
 
 **Success Criteria:**
-- [ ] Errors return valid JSON when `--json` is used
-- [ ] Error codes are consistent and documented
-- [ ] Context includes actionable information
-- [ ] Non-JSON mode still shows human-readable errors
-- [ ] Batch mode continues processing after errors (doesn't crash)
+- [x] Errors return valid JSON when `--format json` or `--format jsonl` is used
+- [x] Error codes are consistent and documented
+- [x] Context includes actionable information
+- [x] Non-JSON mode still shows human-readable errors
+- [x] Batch mode continues processing after errors (doesn't crash)
 
 **Progress:**
 - Added `QueryResult::Error` variant with structured fields
 - Query execution wraps errors into structured results
 - Added error code classification and query syntax error handling
+- Documented error schema and error codes
 
-**Usage Examples (Planned):**
+**Usage Examples:**
 ```bash
 # Error as JSON
 sis query file.pdf obj 9999 0 --json
@@ -592,9 +595,9 @@ Implemented (Phases 1-4):
 - `MAX_BATCH_BYTES` (50GB) limit enforcement (Phase 3)
 - Security events emitted for limit violations (Phase 3)
 
-Planned (Phases 6-9):
-- [ ] Explicit decode control for stream extraction (Phase 6)
-- [ ] Structured error handling for malformed PDFs (Phase 9)
+Implemented (Phases 6-9):
+- Explicit decode control for stream extraction (Phase 6)
+- Structured error handling for malformed PDFs (Phase 9)
 
 ---
 
@@ -681,8 +684,9 @@ Planned (Phases 6-9):
 2. Integrated predicates across supported query types and REPL
 3. Documented predicate field mappings
 
-### Next Phase (9)
-- **Phase 9:** Structured error reporting (JSON error responses)
+### Completed (Phase 9)
+1. Added structured error responses for JSON/JSONL output
+2. Documented error schema and codes for automation workflows
 
 ---
 
@@ -696,7 +700,7 @@ Planned (Phases 6-9):
 - Phase 6: Explicit decode control for stream extraction
 - Phase 7: Inverse XRef lookup for forensic analysis
 - Phase 8: Boolean predicates for complex filtering
-- [ ] Phase 9: Structured error reporting for automation
+- [x] Phase 9: Structured error reporting for automation
 - Overall: 100% backward compatibility maintained (verified with existing tests)
 - Overall: No performance regression on existing queries (new features are opt-in)
 
@@ -715,7 +719,7 @@ This implementation plan incorporates recommendations from the forensic audit (p
 | #3: Smart Stream Export | Critical | Phase 6 | Complete |
 | #4: JSONL for Streaming | High | Phase 5 | Complete |
 | #5: Defensive Sanitisation | Medium | Phase 2 | Complete |
-| #6: Structured Errors | Medium | Phase 9 | Planned |
+| #6: Structured Errors | Medium | Phase 9 | Complete |
 
 ### Design Principles (from Uplift)
 
