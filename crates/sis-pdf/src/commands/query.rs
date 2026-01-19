@@ -1,3 +1,5 @@
+//! Query command implementation and output formatting helpers.
+
 use anyhow::{anyhow, Result};
 use globset::Glob;
 use rayon::prelude::*;
@@ -9,6 +11,28 @@ use walkdir::WalkDir;
 
 use sis_pdf_core::model::Severity;
 use sis_pdf_core::scan::ScanContext;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    Text,
+    Json,
+    Jsonl,
+    Csv,
+    Dot,
+}
+
+impl OutputFormat {
+    pub fn parse(input: &str) -> Result<Self> {
+        match input {
+            "text" => Ok(OutputFormat::Text),
+            "json" => Ok(OutputFormat::Json),
+            "jsonl" => Ok(OutputFormat::Jsonl),
+            "csv" => Ok(OutputFormat::Csv),
+            "dot" => Ok(OutputFormat::Dot),
+            _ => Err(anyhow!("invalid format: {input}")),
+        }
+    }
+}
 
 /// Query types supported by the interface
 #[derive(Debug, Clone)]
@@ -68,6 +92,7 @@ pub enum Query {
     ExportIrText,
     ExportIrJson,
     ExportFeatures,
+    ExportFeaturesJson,
 }
 
 /// Query result that can be serialized to JSON or formatted as text
@@ -148,6 +173,8 @@ pub fn parse_query(input: &str) -> Result<Query> {
         "graph.ir.text" => Ok(Query::ExportIrText),
         "graph.ir.json" => Ok(Query::ExportIrJson),
         "features" => Ok(Query::ExportFeatures),
+        "features.csv" => Ok(Query::ExportFeatures),
+        "features.json" => Ok(Query::ExportFeaturesJson),
 
         _ => {
             // Try to parse object queries
@@ -182,6 +209,41 @@ pub fn parse_query(input: &str) -> Result<Query> {
             Err(anyhow!("Unknown query: {}", input))
         }
     }
+}
+
+pub fn apply_output_format(query: Query, format: OutputFormat) -> Result<Query> {
+    let resolved = match format {
+        OutputFormat::Json | OutputFormat::Jsonl => match query {
+            Query::ExportOrgDot => Query::ExportOrgJson,
+            Query::ExportIrText => Query::ExportIrJson,
+            Query::ExportFeatures => Query::ExportFeaturesJson,
+            other => other,
+        },
+        OutputFormat::Dot => match query {
+            Query::ExportOrgJson | Query::ExportOrgDot => Query::ExportOrgDot,
+            _ => {
+                return Err(anyhow!(
+                    "--format dot is only supported for graph.org queries"
+                ))
+            }
+        },
+        OutputFormat::Csv => match query {
+            Query::ExportFeatures | Query::ExportFeaturesJson => Query::ExportFeatures,
+            _ => {
+                return Err(anyhow!(
+                    "--format csv is only supported for features queries"
+                ))
+            }
+        },
+        OutputFormat::Text => match query {
+            Query::ExportOrgJson => Query::ExportOrgDot,
+            Query::ExportIrJson => Query::ExportIrText,
+            Query::ExportFeaturesJson => Query::ExportFeatures,
+            other => other,
+        },
+    };
+
+    Ok(resolved)
 }
 
 /// Build a scan context (public version for REPL caching)
@@ -407,6 +469,18 @@ pub fn execute_query_with_context(
             }
 
             Ok(QueryResult::Scalar(ScalarValue::String(csv_output)))
+        }
+        Query::ExportFeaturesJson => {
+            let features = sis_pdf_core::features::FeatureExtractor::extract(ctx);
+            let feature_names = sis_pdf_core::features::feature_names();
+            let feature_values = features.as_f32_vec();
+            let mut values = serde_json::Map::new();
+
+            for (name, value) in feature_names.iter().zip(feature_values.iter()) {
+                values.insert(name.to_string(), json!(value));
+            }
+
+            Ok(QueryResult::Structure(serde_json::Value::Object(values)))
         }
         _ => Err(anyhow!("Query not yet implemented: {:?}", query)),
     }
@@ -683,6 +757,17 @@ pub fn format_json(query: &str, file: &str, result: &QueryResult) -> Result<Stri
     });
 
     Ok(serde_json::to_string_pretty(&output)?)
+}
+
+/// Format query result as JSON Lines (single line per result)
+pub fn format_jsonl(query: &str, file: &str, result: &QueryResult) -> Result<String> {
+    let output = serde_json::json!({
+        "query": query,
+        "file": file,
+        "result": result,
+    });
+
+    Ok(serde_json::to_string(&output)?)
 }
 
 /// Extract JavaScript code from PDF
@@ -1784,7 +1869,7 @@ fn cycle_to_json(idx: usize, cycle: &[(u32, u16)]) -> serde_json::Value {
 /// * `scan_options` - Scan configuration
 /// * `extract_to` - Optional extraction directory
 /// * `max_extract_bytes` - Maximum bytes to extract per file
-/// * `json` - Output in JSON format
+/// * `output_format` - Output format override
 /// * `max_batch_files` - Maximum number of files to process
 /// * `max_batch_bytes` - Maximum total bytes to process
 /// * `max_walk_depth` - Maximum directory depth
@@ -1795,7 +1880,7 @@ pub fn run_query_batch(
     scan_options: &ScanOptions,
     extract_to: Option<&Path>,
     max_extract_bytes: usize,
-    json: bool,
+    output_format: OutputFormat,
     max_batch_files: usize,
     max_batch_bytes: u64,
     max_walk_depth: usize,
@@ -1976,28 +2061,36 @@ pub fn run_query_batch(
     sorted_results.sort_by_key(|(idx, _)| *idx);
 
     // Output results
-    if json {
-        let results_only: Vec<_> = sorted_results.into_iter().map(|(_, r)| r).collect();
-        println!("{}", serde_json::to_string_pretty(&results_only)?);
-    } else {
-        for (_, batch_result) in sorted_results {
-            match batch_result.result {
-                QueryResult::Scalar(ScalarValue::Number(n)) => {
-                    println!("{}: {}", batch_result.path, n)
-                }
-                QueryResult::Scalar(ScalarValue::String(s)) => {
-                    println!("{}: {}", batch_result.path, s)
-                }
-                QueryResult::Scalar(ScalarValue::Boolean(b)) => {
-                    println!("{}: {}", batch_result.path, b)
-                }
-                QueryResult::List(l) => {
-                    for item in l {
-                        println!("{}: {}", batch_result.path, item);
+    match output_format {
+        OutputFormat::Json => {
+            let results_only: Vec<_> = sorted_results.into_iter().map(|(_, r)| r).collect();
+            println!("{}", serde_json::to_string_pretty(&results_only)?);
+        }
+        OutputFormat::Jsonl => {
+            for (_, batch_result) in sorted_results {
+                println!("{}", serde_json::to_string(&batch_result)?);
+            }
+        }
+        OutputFormat::Text | OutputFormat::Csv | OutputFormat::Dot => {
+            for (_, batch_result) in sorted_results {
+                match batch_result.result {
+                    QueryResult::Scalar(ScalarValue::Number(n)) => {
+                        println!("{}: {}", batch_result.path, n)
                     }
-                }
-                QueryResult::Structure(j) => {
-                    println!("{}: {}", batch_result.path, serde_json::to_string_pretty(&j)?);
+                    QueryResult::Scalar(ScalarValue::String(s)) => {
+                        println!("{}: {}", batch_result.path, s)
+                    }
+                    QueryResult::Scalar(ScalarValue::Boolean(b)) => {
+                        println!("{}: {}", batch_result.path, b)
+                    }
+                    QueryResult::List(l) => {
+                        for item in l {
+                            println!("{}: {}", batch_result.path, item);
+                        }
+                    }
+                    QueryResult::Structure(j) => {
+                        println!("{}: {}", batch_result.path, serde_json::to_string_pretty(&j)?);
+                    }
                 }
             }
         }
@@ -2087,5 +2180,42 @@ mod tests {
         let path = json_value["path"].as_array().unwrap();
         assert_eq!(path.len(), 4);
         assert_eq!(path[0]["obj"], json!(1));
+    }
+
+    #[test]
+    fn output_format_parsing_accepts_expected_values() {
+        assert_eq!(OutputFormat::parse("text").unwrap(), OutputFormat::Text);
+        assert_eq!(OutputFormat::parse("json").unwrap(), OutputFormat::Json);
+        assert_eq!(OutputFormat::parse("jsonl").unwrap(), OutputFormat::Jsonl);
+        assert_eq!(OutputFormat::parse("csv").unwrap(), OutputFormat::Csv);
+        assert_eq!(OutputFormat::parse("dot").unwrap(), OutputFormat::Dot);
+    }
+
+    #[test]
+    fn apply_output_format_overrides_export_variants() {
+        let query = apply_output_format(Query::ExportOrgDot, OutputFormat::Json).unwrap();
+        assert!(matches!(query, Query::ExportOrgJson));
+
+        let query = apply_output_format(Query::ExportIrText, OutputFormat::Json).unwrap();
+        assert!(matches!(query, Query::ExportIrJson));
+
+        let query = apply_output_format(Query::ExportFeatures, OutputFormat::Json).unwrap();
+        assert!(matches!(query, Query::ExportFeaturesJson));
+
+        let query = apply_output_format(Query::ExportOrgJson, OutputFormat::Dot).unwrap();
+        assert!(matches!(query, Query::ExportOrgDot));
+
+        let error = apply_output_format(Query::Urls, OutputFormat::Csv);
+        assert!(error.is_err());
+    }
+
+    #[test]
+    fn format_jsonl_emits_single_line_json() {
+        let result = QueryResult::Scalar(ScalarValue::Number(12));
+        let output = format_jsonl("js.count", "sample.pdf", &result).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["query"], json!("js.count"));
+        assert_eq!(value["file"], json!("sample.pdf"));
+        assert_eq!(value["result"], json!(12));
     }
 }

@@ -111,6 +111,13 @@ enum Command {
         query: Option<String>,
         #[arg(long, help = "Output as JSON")]
         json: bool,
+        #[arg(
+            long,
+            default_value = "text",
+            value_parser = ["text", "json", "jsonl", "csv", "dot"],
+            help = "Output format (text, json, jsonl, csv, dot). Example: --format jsonl"
+        )]
+        format: String,
         #[arg(long, short = 'c', help = "Compact output (numbers only)")]
         compact: bool,
         #[arg(long, help = "Deep scan mode")]
@@ -622,6 +629,7 @@ fn main() -> Result<()> {
             query,
             pdf,
             json,
+            format,
             compact,
             deep,
             max_decode_bytes,
@@ -633,6 +641,20 @@ fn main() -> Result<()> {
             glob,
             max_extract_bytes,
         } => {
+            let mut output_format = commands::query::OutputFormat::parse(&format)?;
+            if json {
+                if output_format != commands::query::OutputFormat::Text
+                    && output_format != commands::query::OutputFormat::Json
+                {
+                    return Err(anyhow!(
+                        "--json is shorthand for --format json; remove --json or set --format json"
+                    ));
+                }
+                if output_format == commands::query::OutputFormat::Text {
+                    output_format = commands::query::OutputFormat::Json;
+                }
+            }
+
             // Validate that either path or pdf is provided, but not both
             // Note: When using --path, the query string might be parsed as the PDF argument
             // due to positional argument ordering. We need to handle this case.
@@ -661,7 +683,7 @@ fn main() -> Result<()> {
                 run_query_oneshot(
                     &query_str,
                     actual_pdf.as_deref(),
-                    json,
+                    output_format,
                     compact,
                     deep,
                     max_decode_bytes,
@@ -678,6 +700,14 @@ fn main() -> Result<()> {
                 if path.is_some() {
                     return Err(anyhow!("REPL mode requires a single PDF file, not --path"));
                 }
+                if matches!(
+                    output_format,
+                    commands::query::OutputFormat::Csv | commands::query::OutputFormat::Dot
+                ) {
+                    return Err(anyhow!(
+                        "REPL mode supports text, json, or jsonl output formats only"
+                    ));
+                }
                 run_query_repl(
                     actual_pdf.as_deref().unwrap(),  // Safe because we validated above
                     deep,
@@ -687,6 +717,7 @@ fn main() -> Result<()> {
                     max_objects,
                     extract_to.as_deref(),
                     max_extract_bytes,
+                    output_format,
                 )
             }
         }
@@ -2550,7 +2581,7 @@ fn mmap_file(path: &str) -> Result<Mmap> {
 fn run_query_oneshot(
     query_str: &str,
     pdf_path: Option<&str>,
-    json: bool,
+    output_format: commands::query::OutputFormat,
     compact: bool,
     deep: bool,
     max_decode_bytes: usize,
@@ -2567,6 +2598,7 @@ fn run_query_oneshot(
     // Parse the query
     let query =
         query::parse_query(query_str).map_err(|e| anyhow!("Failed to parse query: {}", e))?;
+    let query = query::apply_output_format(query, output_format)?;
 
     // Build scan options
     let scan_options = query::ScanOptions {
@@ -2586,7 +2618,7 @@ fn run_query_oneshot(
             &scan_options,
             extract_to,
             max_extract_bytes,
-            json,
+            output_format,
             MAX_BATCH_FILES,
             MAX_BATCH_BYTES,
             MAX_WALK_DEPTH,
@@ -2605,12 +2637,19 @@ fn run_query_oneshot(
     .map_err(|e| anyhow!("Query execution failed: {}", e))?;
 
     // Format and print the result
-    if json {
-        let output = query::format_json(query_str, pdf_path, &result)?;
-        println!("{}", output);
-    } else {
-        let output = query::format_result(&result, compact);
-        println!("{}", output);
+    match output_format {
+        query::OutputFormat::Json => {
+            let output = query::format_json(query_str, pdf_path, &result)?;
+            println!("{}", output);
+        }
+        query::OutputFormat::Jsonl => {
+            let output = query::format_jsonl(query_str, pdf_path, &result)?;
+            println!("{}", output);
+        }
+        query::OutputFormat::Text | query::OutputFormat::Csv | query::OutputFormat::Dot => {
+            let output = query::format_result(&result, compact);
+            println!("{}", output);
+        }
     }
 
     Ok(())
@@ -2625,6 +2664,7 @@ fn run_query_repl(
     max_objects: usize,
     extract_to: Option<&std::path::Path>,
     max_extract_bytes: usize,
+    output_format: commands::query::OutputFormat,
 ) -> Result<()> {
     use commands::query;
     use rustyline::error::ReadlineError;
@@ -2662,7 +2702,11 @@ fn run_query_repl(
     let _ = rl.load_history(&history_file);
 
     // REPL state
-    let mut json_mode = false;
+    let mut json_mode = matches!(
+        output_format,
+        query::OutputFormat::Json | query::OutputFormat::Jsonl
+    );
+    let mut jsonl_mode = output_format == query::OutputFormat::Jsonl;
     let mut compact_mode = false;
 
     loop {
@@ -2693,9 +2737,23 @@ fn run_query_repl(
                     }
                     ":json" => {
                         json_mode = !json_mode;
+                        if json_mode {
+                            jsonl_mode = false;
+                        }
                         eprintln!(
                             "JSON mode: {}",
                             if json_mode { "enabled" } else { "disabled" }
+                        );
+                        continue;
+                    }
+                    ":jsonl" => {
+                        jsonl_mode = !jsonl_mode;
+                        if jsonl_mode {
+                            json_mode = true;
+                        }
+                        eprintln!(
+                            "JSONL mode: {}",
+                            if jsonl_mode { "enabled" } else { "disabled" }
                         );
                         continue;
                     }
@@ -2713,10 +2771,29 @@ fn run_query_repl(
                 // Parse and execute query
                 match query::parse_query(line) {
                     Ok(q) => {
+                        let output_format = if jsonl_mode {
+                            query::OutputFormat::Jsonl
+                        } else if json_mode {
+                            query::OutputFormat::Json
+                        } else {
+                            query::OutputFormat::Text
+                        };
+                        let q = match query::apply_output_format(q, output_format) {
+                            Ok(resolved) => resolved,
+                            Err(e) => {
+                                eprintln!("Format error: {}", e);
+                                continue;
+                            }
+                        };
                         match query::execute_query_with_context(&q, &ctx, extract_to, max_extract_bytes) {
                             Ok(result) => {
                                 // Format and print result
-                                if json_mode {
+                                if jsonl_mode {
+                                    match query::format_jsonl(line, pdf_path, &result) {
+                                        Ok(output) => println!("{}", output),
+                                        Err(e) => eprintln!("Error formatting result: {}", e),
+                                    }
+                                } else if json_mode {
                                     match query::format_json(line, pdf_path, &result) {
                                         Ok(output) => println!("{}", output),
                                         Err(e) => eprintln!("Error formatting result: {}", e),
@@ -2811,6 +2888,7 @@ fn print_repl_help() {
     println!();
     println!("REPL commands:");
     println!("  :json              - Toggle JSON output mode");
+    println!("  :jsonl             - Toggle JSONL output mode");
     println!("  :compact           - Toggle compact output mode");
     println!("  help / ?           - Show this help");
     println!("  exit / quit / :q   - Exit REPL");

@@ -1,8 +1,8 @@
 # Query Interface Extension: Reinstate Removed Features
 
-**Status:** In Progress (Phase 4 complete, Phases 5-9 planned)
+**Status:** In Progress (Phase 5 complete, Phases 6-9 planned)
 **Started:** 2026-01-18
-**Current Phase:** Phase 5 (Format Flags & NDJSON)
+**Current Phase:** Phase 6 (Stream Export Enhancement)
 **Roadmap Source:** plans/20260119-query-uplift.md
 
 ## Overview
@@ -14,8 +14,8 @@ This implementation elevates the query interface from a structural viewer to a f
 2. **Batch Mode** (`--path DIR --glob PATTERN`) - Parallel directory scanning with filtering
 3. **Export Queries** (graph.org, graph.ir, features) - Structured exports for analysis pipelines
 
-### Forensic Enhancements (Phases 5-9 Planned)
-4. **Format Control** (`--format jsonl`) - Streaming JSON for infinite pipelines (Phase 5)
+### Forensic Enhancements (Phase 5 Complete, Phases 6-9 Planned)
+4. **Format Control** (`--format jsonl`) - Streaming JSON for infinite pipelines (Phase 5 complete)
 5. **Stream Decode Control** (`--raw`, `--decode`, `--hexdump`) - Explicit extraction modes (Phase 6)
 6. **Inverse XRef** (`ref <obj>`) - Reverse reference lookup for threat hunting (Phase 7)
 7. **Boolean Queries** (`--where "length > 1024"`) - Property filtering and logic (Phase 8)
@@ -23,16 +23,16 @@ This implementation elevates the query interface from a structural viewer to a f
 
 ## Executive Summary
 
-### What's Complete (Phases 1-4)
+### What's Complete (Phases 1-5)
 The query interface now supports:
 - **Safe file extraction** with path traversal protection and size limits
 - **Parallel batch processing** for analysing entire PDF corpora
 - **5 export formats** (DOT, JSON, text, CSV) for graphs, IR, and features
 - **100% backward compatibility** with existing queries
+- **Format flags** (`--format` with JSONL support and `--json` shorthand)
 
-### What's Next (Phases 5-9)
+### What's Next (Phases 6-9)
 Building on this foundation, we'll add forensic-grade capabilities:
-- **Phase 5 (Next):** JSONL format flags for streaming pipelines and crash resistance
 - **Phase 6:** Explicit decode control (`--raw` vs `--decode` vs `--hexdump`)
 - **Phase 7:** Reverse reference lookup to find what triggers malicious objects
 - **Phase 8:** Boolean predicates to filter without external scripting
@@ -277,22 +277,22 @@ sis query --path corpus --glob "*.pdf" features > all_features.csv
 
 ---
 
-### Phase 5: Format Flags & JSONL Support (0% Complete - Pending)
+### Phase 5: Format Flags & JSONL Support (100% Complete)
 
 **Objective:** Add format control and streaming JSON output for forensic pipelines
 
 **Priority:** High (Quick wins for usability and interoperability)
 
-**Files to Modify:**
-- `crates/sis-pdf/src/main.rs` - Add `--format` CLI flag
-- `crates/sis-pdf/src/main.rs` - Treat `--json` as shorthand for `--format json`
-- `crates/sis-pdf/src/commands/query.rs` - Implement format enum and JSONL output
-- `crates/sis-pdf/src/commands/query.rs` - Add module documentation
-- `crates/sis-pdf/src/main.rs` - Update help text
+**Files Modified:**
+- `crates/sis-pdf/src/main.rs` - Added `--format` CLI flag with examples and conflict checks
+- `crates/sis-pdf/src/main.rs` - Treated `--json` as shorthand for `--format json` with conflict errors
+- `crates/sis-pdf/src/commands/query.rs` - Added output format enum and JSONL output
+- `crates/sis-pdf/src/commands/query.rs` - Added module documentation
+- `crates/sis-pdf/src/commands/query.rs` - Added format override logic for export queries
 
 **Format Support:**
 - `text` - Human-readable output (default for most queries)
-- `json` - Standard JSON array format (`--json` shorthand)
+- `json` - Standard JSON output (`--json` shorthand)
 - `jsonl` - JSON Lines (one object per line) for streaming (NEW)
 - `csv` - Comma-separated values (for features, counts)
 - `dot` - GraphViz DOT format (for graphs)
@@ -303,16 +303,20 @@ sis query --path corpus --glob "*.pdf" features > all_features.csv
 - CLI behaviour: `--json` is shorthand for `--format json`; if both are present and conflict, exit with a clear error message
 - Batch mode: JSONL ideal for large corpus processing
 - Consistency: Uses same JSONL format as `--jsonl-findings` flag in scan command
+- Export overrides: `graph.org` and `graph.ir` switch to JSON variants when `--format json/jsonl` is used
 
-**Success Criteria:**
-- [ ] `--format jsonl` outputs one JSON object per line
-- [ ] JSONL works with batch mode (`--path`)
-- [ ] Format flag overrides query suffix when specified
-- [ ] All existing formats (text, json) continue working
-- [ ] `--json` conflicts with `--format` when not `json` and exits with a clear error message
-- [ ] Help text updated with format examples
+**Success Criteria:** All met
+- `--format jsonl` outputs one JSON object per line
+- JSONL works with batch mode (`--path`)
+- Format flag overrides query suffix when specified
+- All existing formats (text, json) continue working
+- `--json` conflicts with `--format` when not `json` and exits with a clear error message
+- Help text updated with format examples
 
-**Usage Examples (Planned):**
+**Testing (Completed):**
+- Added unit tests for output format parsing and JSONL formatting
+
+**Usage Examples:**
 ```bash
 # JSONL for streaming pipelines
 sis query --path corpus --glob "*.pdf" js.count --format jsonl | jq -c 'select(.result > 0)'
@@ -512,6 +516,10 @@ sis query --path corpus --glob "*.pdf" js.count --format jsonl | jq 'select(.sta
 
 ## Testing Strategy
 
+### Unit Tests (Completed)
+- Output format parsing and override behaviour
+- JSONL output formatting for query results
+
 ### Unit Tests (Pending)
 - [ ] `sanitize_embedded_filename()` for path traversal protection
 - [ ] `magic_type()` for various file signatures
@@ -635,15 +643,17 @@ Planned (Phases 6-9):
 4. Tested all export formats (DOT, JSON, text, CSV)
 5. Verified batch mode compatibility
 
-### Phase 5 (Format Flags & JSONL - Next)
-1. Add `--format` CLI flag (text, json, jsonl, csv, dot)
-2. Implement JSONL output for streaming (reuse existing scan JSONL logic)
-3. Add format override logic (CLI flag > query suffix)
-4. Update help text with format examples
-5. Test JSONL with batch mode and large corpora
+### Completed (Phase 5)
+1. Added `--format` CLI flag (text, json, jsonl, csv, dot)
+2. Implemented JSONL output for streaming
+3. Added format override logic (CLI flag > query suffix)
+4. Updated help text with format examples
+5. Added conflict handling for `--json` vs `--format`
 
-### Future Phases (6-9)
+### Next Phase (6)
 - **Phase 6:** Stream export enhancement (`--raw`, `--decode`, `--hexdump`)
+
+### Future Phases (7-9)
 - **Phase 7:** Inverse XRef querying (`ref <obj> <gen>`)
 - **Phase 8:** Boolean logic and predicates (`--where` clauses)
 - **Phase 9:** Structured error reporting (JSON error responses)
@@ -656,7 +666,7 @@ Planned (Phases 6-9):
 - Phase 2: File extraction works, security validated
 - Phase 3: Batch mode processes multiple PDFs with parallel processing
 - Phase 4: All export formats produce valid output
-- [ ] Phase 5: JSONL format for streaming pipelines
+- Phase 5: JSONL format for streaming pipelines
 - [ ] Phase 6: Explicit decode control for stream extraction
 - [ ] Phase 7: Inverse XRef lookup for forensic analysis
 - [ ] Phase 8: Boolean predicates for complex filtering
@@ -677,7 +687,7 @@ This implementation plan incorporates recommendations from the forensic audit (p
 | #1: Boolean Logic & Predicates | Critical | Phase 8 | Planned |
 | #2: Inverse XRef Querying | High | Phase 7 | Planned |
 | #3: Smart Stream Export | Critical | Phase 6 | Planned |
-| #4: JSONL for Streaming | High | Phase 5 | Next |
+| #4: JSONL for Streaming | High | Phase 5 | Complete |
 | #5: Defensive Sanitisation | Medium | Phase 2 | Complete |
 | #6: Structured Errors | Medium | Phase 9 | Planned |
 
