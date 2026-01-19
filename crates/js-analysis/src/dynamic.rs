@@ -1778,6 +1778,7 @@ mod sandbox_impl {
         // Standard JavaScript globals with enhanced tracking
         add(context, "setTimeout", 1, log.clone());
         add(context, "setInterval", 1, log.clone());
+        add(context, "confirm", 1, log.clone());
         add_callable(context, "Function", 1, log.clone());
 
         // Enhanced string functions

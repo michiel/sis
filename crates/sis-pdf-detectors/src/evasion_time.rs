@@ -4,7 +4,7 @@ use sis_pdf_core::detect::{Cost, Detector, Needs};
 use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
 use sis_pdf_core::scan::span_to_evidence;
 
-use crate::{entry_dict, resolve_payload};
+use crate::js_payload_candidates_from_entry;
 
 pub struct TimingEvasionDetector;
 
@@ -28,20 +28,22 @@ impl Detector for TimingEvasionDetector {
     fn run(&self, ctx: &sis_pdf_core::scan::ScanContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         for entry in &ctx.graph.objects {
-            let Some(dict) = entry_dict(entry) else {
-                continue;
-            };
-            if !dict.has_name(b"/S", b"/JavaScript") && dict.get_first(b"/JS").is_none() {
+            let candidates = js_payload_candidates_from_entry(ctx, entry);
+            if candidates.is_empty() {
                 continue;
             }
-            let Some((_, obj)) = dict.get_first(b"/JS") else {
-                continue;
-            };
-            let payload = resolve_payload(ctx, obj);
-            let Some(info) = payload.payload else {
-                continue;
-            };
-            if has_time_evasion(&info.bytes) {
+            for candidate in candidates {
+                if !has_time_evasion(&candidate.payload.bytes) {
+                    continue;
+                }
+                let mut evidence = candidate.evidence;
+                if evidence.is_empty() {
+                    evidence.push(span_to_evidence(entry.full_span, "JavaScript object"));
+                }
+                let mut meta = std::collections::HashMap::new();
+                if let Some(label) = candidate.source.meta_value() {
+                    meta.insert("js.source".into(), label.into());
+                }
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),
@@ -52,9 +54,9 @@ impl Detector for TimingEvasionDetector {
                     description: "JavaScript references timing APIs that can delay execution."
                         .into(),
                     objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
-                    evidence: vec![span_to_evidence(dict.span, "JavaScript dict")],
+                    evidence,
                     remediation: Some("Inspect for delayed or staged execution logic.".into()),
-                    meta: Default::default(),
+                    meta,
                     yara: None,
                     position: None,
                     positions: Vec::new(),

@@ -5,6 +5,8 @@ use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
 use sis_pdf_pdf::classification::ObjectRole;
 use sis_pdf_pdf::typed_graph::EdgeType;
 
+use crate::{js_payload_candidates_from_entry, JsPayloadSource};
+
 pub struct MultiStageDetector;
 
 impl Detector for MultiStageDetector {
@@ -30,12 +32,22 @@ impl Detector for MultiStageDetector {
         let classifications = ctx.classifications();
 
         // Check for JavaScript edges
-        let has_js = typed_graph.edges.iter().any(|e| {
+        let mut has_js = typed_graph.edges.iter().any(|e| {
             matches!(
                 e.edge_type,
                 EdgeType::JavaScriptPayload | EdgeType::JavaScriptNames
             )
         });
+        let mut js_uri_count = 0usize;
+        for entry in &ctx.graph.objects {
+            js_uri_count += js_payload_candidates_from_entry(ctx, entry)
+                .iter()
+                .filter(|candidate| candidate.source != JsPayloadSource::Action)
+                .count();
+        }
+        if js_uri_count > 0 {
+            has_js = true;
+        }
 
         // Check for embedded files via classifications
         let has_embedded = classifications
@@ -73,7 +85,8 @@ impl Detector for MultiStageDetector {
                         EdgeType::JavaScriptPayload | EdgeType::JavaScriptNames
                     )
                 })
-                .count();
+                .count()
+                + js_uri_count;
             let embedded_count = classifications
                 .iter()
                 .filter(|(_, c)| c.has_role(ObjectRole::EmbeddedFile))
@@ -93,6 +106,12 @@ impl Detector for MultiStageDetector {
                 .count();
 
             meta.insert("multi_stage.js_count".into(), js_count.to_string());
+            if js_uri_count > 0 {
+                meta.insert(
+                    "multi_stage.js_uri_count".into(),
+                    js_uri_count.to_string(),
+                );
+            }
             meta.insert(
                 "multi_stage.embedded_count".into(),
                 embedded_count.to_string(),

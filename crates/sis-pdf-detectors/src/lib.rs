@@ -1,4 +1,6 @@
 use anyhow::Result;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use std::collections::HashSet;
 
 use sha2::{Digest, Sha256};
@@ -750,6 +752,540 @@ fn find_javascript_entries<'a>(
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JsPayloadSource {
+    Action,
+    Uri,
+    DataUri,
+    Xfa,
+    EmbeddedFile,
+}
+
+impl JsPayloadSource {
+    fn priority(self) -> u8 {
+        match self {
+            JsPayloadSource::Action => 0,
+            JsPayloadSource::Uri => 1,
+            JsPayloadSource::DataUri => 2,
+            JsPayloadSource::Xfa => 3,
+            JsPayloadSource::EmbeddedFile => 4,
+        }
+    }
+
+    fn meta_value(self) -> Option<&'static str> {
+        match self {
+            JsPayloadSource::Action => None,
+            JsPayloadSource::Uri => Some("uri"),
+            JsPayloadSource::DataUri => Some("data_uri"),
+            JsPayloadSource::Xfa => Some("xfa"),
+            JsPayloadSource::EmbeddedFile => Some("embedded_file"),
+        }
+    }
+}
+
+pub(crate) struct JsPayloadCandidate {
+    payload: PayloadInfo,
+    evidence: Vec<sis_pdf_core::model::EvidenceSpan>,
+    key_name: String,
+    source: JsPayloadSource,
+}
+
+fn javascript_uri_payload_from_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut start = 0usize;
+    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    let bytes = &bytes[start..];
+    let prefix = b"javascript:";
+    if bytes.len() < prefix.len() {
+        return None;
+    }
+    let matches_prefix = bytes
+        .iter()
+        .take(prefix.len())
+        .zip(prefix.iter())
+        .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase());
+    if !matches_prefix {
+        return None;
+    }
+    let mut rest = &bytes[prefix.len()..];
+    while !rest.is_empty() && rest[0].is_ascii_whitespace() {
+        rest = &rest[1..];
+    }
+    Some(rest.to_vec())
+}
+
+fn data_uri_payload_from_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut start = 0usize;
+    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    let bytes = &bytes[start..];
+    let prefix = b"data:";
+    if bytes.len() < prefix.len() {
+        return None;
+    }
+    let matches_prefix = bytes
+        .iter()
+        .take(prefix.len())
+        .zip(prefix.iter())
+        .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase());
+    if !matches_prefix {
+        return None;
+    }
+    let payload = String::from_utf8_lossy(&bytes[prefix.len()..]);
+    let mut parts = payload.splitn(2, ',');
+    let meta = parts.next().unwrap_or("");
+    let data = parts.next().unwrap_or("");
+    if data.is_empty() {
+        return None;
+    }
+    let meta_lower = meta.to_ascii_lowercase();
+    let is_javascript = meta_lower.contains("javascript") || meta_lower.contains("ecmascript");
+    if !is_javascript {
+        return None;
+    }
+    let is_base64 = meta_lower.contains(";base64");
+    if is_base64 {
+        STANDARD.decode(data.as_bytes()).ok()
+    } else {
+        Some(percent_decode_bytes(data.as_bytes()))
+    }
+}
+
+fn percent_decode_bytes(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0usize;
+    while i < data.len() {
+        if data[i] == b'%' && i + 2 < data.len() {
+            let hi = data[i + 1];
+            let lo = data[i + 2];
+            if let (Some(hi), Some(lo)) = (from_hex(hi), from_hex(lo)) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(data[i]);
+        i += 1;
+    }
+    out
+}
+
+fn from_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(10 + (b - b'a')),
+        b'A'..=b'F' => Some(10 + (b - b'A')),
+        _ => None,
+    }
+}
+
+fn js_payload_candidates_from_action_dict(
+    ctx: &sis_pdf_core::scan::ScanContext,
+    dict: &sis_pdf_pdf::object::PdfDict<'_>,
+) -> Vec<JsPayloadCandidate> {
+    let mut out = Vec::new();
+    for (k, v) in find_javascript_entries(dict) {
+        let res = resolve_payload(ctx, v);
+        let Some(payload) = res.payload else {
+            continue;
+        };
+        let evidence = vec![
+            span_to_evidence(k.span, "JavaScript key"),
+            span_to_evidence(v.span, "JavaScript payload"),
+        ];
+        let key_name = String::from_utf8_lossy(&k.decoded).to_string();
+        out.push(JsPayloadCandidate {
+            payload,
+            evidence,
+            key_name,
+            source: JsPayloadSource::Action,
+        });
+    }
+
+    if let Some((k, v)) = dict.get_first(b"/URI") {
+        let res = resolve_payload(ctx, v);
+        let Some(mut payload) = res.payload else {
+            return out;
+        };
+        let evidence = vec![
+            span_to_evidence(k.span, "Key /URI"),
+            span_to_evidence(v.span, "URI value"),
+        ];
+        if let Some(stripped) = javascript_uri_payload_from_bytes(&payload.bytes) {
+            payload.bytes = stripped;
+            out.push(JsPayloadCandidate {
+                payload,
+                evidence,
+                key_name: "/URI javascript".into(),
+                source: JsPayloadSource::Uri,
+            });
+        } else if let Some(stripped) = data_uri_payload_from_bytes(&payload.bytes) {
+            payload.bytes = stripped;
+            out.push(JsPayloadCandidate {
+                payload,
+                evidence,
+                key_name: "/URI data javascript".into(),
+                source: JsPayloadSource::DataUri,
+            });
+        }
+    }
+
+    out
+}
+
+pub(crate) fn js_payload_candidates_from_entry(
+    ctx: &sis_pdf_core::scan::ScanContext,
+    entry: &ObjEntry<'_>,
+) -> Vec<JsPayloadCandidate> {
+    let mut out = Vec::new();
+    if let Some(dict) = entry_dict(entry) {
+        out.extend(js_payload_candidates_from_action_dict(ctx, dict));
+        out.extend(js_payload_candidates_from_xfa(ctx, dict));
+    }
+    if let PdfAtom::Stream(st) = &entry.atom {
+        if st.dict.has_name(b"/Type", b"/EmbeddedFile") {
+            out.extend(js_payload_candidates_from_embedded_stream(ctx, entry, st));
+        }
+    }
+    out
+}
+
+fn js_payload_candidates_from_xfa(
+    ctx: &sis_pdf_core::scan::ScanContext,
+    dict: &sis_pdf_pdf::object::PdfDict<'_>,
+) -> Vec<JsPayloadCandidate> {
+    let mut out = Vec::new();
+    let Some((k, xfa_obj)) = dict.get_first(b"/XFA") else {
+        return out;
+    };
+    let payloads = xfa_payloads_from_obj(ctx, xfa_obj);
+    for payload in payloads {
+        let scripts = extract_xfa_script_payloads(&payload.bytes);
+        for script in scripts {
+            let evidence = vec![
+                span_to_evidence(k.span, "Key /XFA"),
+                span_to_evidence(xfa_obj.span, "XFA payload"),
+            ];
+            out.push(JsPayloadCandidate {
+                payload: PayloadInfo {
+                    bytes: script,
+                    kind: "xfa_script".into(),
+                    ref_chain: payload.ref_chain.clone(),
+                    origin: payload.origin,
+                    filters: payload.filters.clone(),
+                    decode_ratio: payload.decode_ratio,
+                },
+                evidence,
+                key_name: "/XFA script".into(),
+                source: JsPayloadSource::Xfa,
+            });
+        }
+    }
+    out
+}
+
+fn xfa_payloads_from_obj(
+    ctx: &sis_pdf_core::scan::ScanContext,
+    obj: &sis_pdf_pdf::object::PdfObj<'_>,
+) -> Vec<PayloadInfo> {
+    let mut out = Vec::new();
+    match &obj.atom {
+        PdfAtom::Array(items) => {
+            let mut iter = items.iter().peekable();
+            while let Some(item) = iter.next() {
+                match &item.atom {
+                    PdfAtom::Name(_) | PdfAtom::Str(_) => {
+                        if let Some(next) = iter.next() {
+                            if let Some(payload) = resolve_payload(ctx, next).payload {
+                                out.push(payload);
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(payload) = resolve_payload(ctx, item).payload {
+                            out.push(payload);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {
+            if let Some(payload) = resolve_payload(ctx, obj).payload {
+                out.push(payload);
+            }
+        }
+    }
+    out
+}
+
+fn extract_xfa_script_payloads(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let max_scan_bytes = 512 * 1024;
+    let slice = if bytes.len() > max_scan_bytes {
+        &bytes[..max_scan_bytes]
+    } else {
+        bytes
+    };
+    let lower: Vec<u8> = slice.iter().map(|b| b.to_ascii_lowercase()).collect();
+    let mut out = Vec::new();
+    for (start_tag, end_tag) in [
+        (b"<script".as_slice(), b"</script>".as_slice()),
+        (b"<xfa:script".as_slice(), b"</xfa:script>".as_slice()),
+    ] {
+        let mut idx = 0usize;
+        while let Some(pos) = find_subslice(&lower[idx..], start_tag) {
+            let tag_start = idx + pos;
+            let tag_end = match lower[tag_start..].iter().position(|b| *b == b'>') {
+                Some(end) => tag_start + end + 1,
+                None => break,
+            };
+            if !xfa_script_tag_is_javascript(&lower[tag_start..tag_end]) {
+                idx = tag_end;
+                continue;
+            }
+            let Some(end_pos) = find_subslice(&lower[tag_end..], end_tag) else {
+                break;
+            };
+            let content_end = tag_end + end_pos;
+            let content = &slice[tag_end..content_end];
+            let stripped = strip_cdata(content);
+            let trimmed = trim_ascii_whitespace(stripped);
+            if !trimmed.is_empty() {
+                out.push(trimmed.to_vec());
+            }
+            idx = content_end + end_tag.len();
+        }
+    }
+    out
+}
+
+fn xfa_script_tag_is_javascript(tag: &[u8]) -> bool {
+    let lower = String::from_utf8_lossy(tag).to_ascii_lowercase();
+    let attrs = ["contenttype", "type", "language"];
+    let mut found_attr = false;
+    for attr in attrs {
+        if let Some(value) = extract_attr_value(&lower, attr) {
+            found_attr = true;
+            if value.contains("javascript") || value.contains("ecmascript") {
+                return true;
+            }
+        }
+    }
+    if found_attr {
+        return false;
+    }
+    true
+}
+
+fn extract_attr_value(tag: &str, attr: &str) -> Option<String> {
+    let needle = format!("{}=", attr);
+    let pos = tag.find(&needle)?;
+    let rest = &tag[pos + needle.len()..];
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    let (value, _) = if rest.starts_with('"') {
+        let end = rest[1..].find('"')?;
+        (&rest[1..1 + end], &rest[1 + end + 1..])
+    } else if rest.starts_with('\'') {
+        let end = rest[1..].find('\'')?;
+        (&rest[1..1 + end], &rest[1 + end + 1..])
+    } else {
+        let end = rest.find(|c: char| c.is_whitespace() || c == '>').unwrap_or(rest.len());
+        (&rest[..end], &rest[end..])
+    };
+    Some(value.trim().to_string())
+}
+
+fn strip_cdata(bytes: &[u8]) -> &[u8] {
+    let lower: Vec<u8> = bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
+    let start = b"<![cdata[";
+    let end = b"]]>";
+    let Some(start_pos) = find_subslice(&lower, start) else {
+        return bytes;
+    };
+    let after_start = start_pos + start.len();
+    let Some(end_pos) = find_subslice(&lower[after_start..], end) else {
+        return bytes;
+    };
+    let content_start = after_start;
+    let content_end = after_start + end_pos;
+    &bytes[content_start..content_end]
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let mut start = 0usize;
+    let mut end = bytes.len();
+    while start < end && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    &bytes[start..end]
+}
+
+fn js_payload_candidates_from_embedded_stream(
+    ctx: &sis_pdf_core::scan::ScanContext,
+    entry: &ObjEntry<'_>,
+    stream: &sis_pdf_pdf::object::PdfStream<'_>,
+) -> Vec<JsPayloadCandidate> {
+    let mut out = Vec::new();
+    let payload = resolve_payload(
+        ctx,
+        &sis_pdf_pdf::object::PdfObj {
+            span: entry.body_span,
+            atom: entry.atom.clone(),
+        },
+    );
+    let Some(payload) = payload.payload else {
+        return out;
+    };
+    if !embedded_file_looks_like_js(stream, &payload.bytes) {
+        return out;
+    }
+    let mut evidence = vec![
+        span_to_evidence(stream.dict.span, "EmbeddedFile dict"),
+        span_to_evidence(stream.data_span, "EmbeddedFile stream"),
+    ];
+    if let Some(origin) = payload.origin {
+        evidence.push(decoded_evidence_span(origin, &payload.bytes, "Embedded JS payload"));
+    }
+    let key_name = embedded_filename(&stream.dict)
+        .map(|name| format!("EmbeddedFile {}", name))
+        .unwrap_or_else(|| "EmbeddedFile".into());
+    out.push(JsPayloadCandidate {
+        payload: PayloadInfo {
+            bytes: payload.bytes,
+            kind: "embedded_file".into(),
+            ref_chain: payload.ref_chain,
+            origin: Some(stream.data_span),
+            filters: payload.filters,
+            decode_ratio: payload.decode_ratio,
+        },
+        evidence,
+        key_name,
+        source: JsPayloadSource::EmbeddedFile,
+    });
+    out
+}
+
+fn embedded_file_looks_like_js(stream: &sis_pdf_pdf::object::PdfStream<'_>, data: &[u8]) -> bool {
+    if let Some(name) = embedded_filename(&stream.dict) {
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".js")
+            || lower.ends_with(".mjs")
+            || lower.ends_with(".jse")
+            || lower.ends_with(".jscript")
+            || lower.ends_with(".jsx")
+        {
+            return true;
+        }
+    }
+    if let Some(subtype) = embedded_subtype(&stream.dict) {
+        let lower = subtype.to_ascii_lowercase();
+        if lower.contains("javascript") || lower.contains("ecmascript") {
+            return true;
+        }
+    }
+    if looks_like_js_text(data) {
+        return true;
+    }
+    if let Some(normalised) = normalise_text_bytes_for_script(data) {
+        return looks_like_js_text(&normalised);
+    }
+    false
+}
+
+fn embedded_subtype(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> {
+    let (_, obj) = dict.get_first(b"/Subtype")?;
+    match &obj.atom {
+        PdfAtom::Name(n) => Some(String::from_utf8_lossy(&n.decoded).to_string()),
+        PdfAtom::Str(s) => Some(String::from_utf8_lossy(&string_bytes(s)).to_string()),
+        _ => None,
+    }
+}
+
+fn looks_like_js_text(data: &[u8]) -> bool {
+    let max_scan_bytes = 64 * 1024;
+    let slice = if data.len() > max_scan_bytes {
+        &data[..max_scan_bytes]
+    } else {
+        data
+    };
+    let mut printable = 0usize;
+    for b in slice {
+        if b.is_ascii_graphic() || b.is_ascii_whitespace() {
+            printable += 1;
+        }
+    }
+    if slice.is_empty() || printable * 100 / slice.len() < 80 {
+        return false;
+    }
+    let lower: Vec<u8> = slice.iter().map(|b| b.to_ascii_lowercase()).collect();
+    contains_any(
+        &lower,
+        &[
+            b"function",
+            b"eval(",
+            b"document.",
+            b"window.",
+            b"var ",
+            b"let ",
+            b"const ",
+            b"=>",
+        ],
+    )
+}
+
+fn contains_any(data: &[u8], needles: &[&[u8]]) -> bool {
+    needles
+        .iter()
+        .any(|needle| find_subslice(data, needle).is_some())
+}
+
+fn normalise_text_bytes_for_script(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 4 {
+        return None;
+    }
+    if data.starts_with(b"\xff\xfe") {
+        return Some(data[2..].iter().step_by(2).cloned().collect());
+    }
+    if data.starts_with(b"\xfe\xff") {
+        return Some(data[3..].iter().step_by(2).cloned().collect());
+    }
+    let sample_len = data.len().min(256);
+    let mut even_zeros = 0usize;
+    let mut odd_zeros = 0usize;
+    for i in 0..sample_len {
+        if data[i] == 0 {
+            if i % 2 == 0 {
+                even_zeros += 1;
+            } else {
+                odd_zeros += 1;
+            }
+        }
+    }
+    if even_zeros * 2 > sample_len {
+        return Some(data.iter().skip(1).step_by(2).cloned().collect());
+    }
+    if odd_zeros * 2 > sample_len {
+        return Some(data.iter().step_by(2).cloned().collect());
+    }
+    None
+}
+
 struct JavaScriptDetector {
     enable_ast: bool,
 }
@@ -774,7 +1310,11 @@ impl Detector for JavaScriptDetector {
                 // Find all JavaScript entries (handles /JS, /JavaScript, /JScript, hex-encoded variants)
                 let js_entries = find_javascript_entries(dict);
 
-                if dict.has_name(b"/S", b"/JavaScript") || !js_entries.is_empty() {
+                let mut js_payloads = js_payload_candidates_from_entry(ctx, entry);
+                if dict.has_name(b"/S", b"/JavaScript")
+                    || !js_entries.is_empty()
+                    || !js_payloads.is_empty()
+                {
                     let mut evidence = Vec::new();
                     let mut meta = std::collections::HashMap::new();
 
@@ -788,7 +1328,6 @@ impl Detector for JavaScriptDetector {
                     }
 
                     // Process all JavaScript entries
-                    let mut all_payloads = Vec::new();
                     for (idx, (k, v)) in js_entries.iter().enumerate() {
                         evidence.push(span_to_evidence(
                             k.span,
@@ -805,12 +1344,15 @@ impl Detector for JavaScriptDetector {
                         } else {
                             meta.insert(format!("payload_key_{}", idx + 1), key_name);
                         }
+                    }
 
-                        all_payloads.push((idx, k, v));
+                    js_payloads.sort_by_key(|candidate| candidate.source.priority());
+                    for candidate in js_payloads.iter() {
+                        evidence.extend(candidate.evidence.clone());
                     }
 
                     // If no explicit JavaScript keys, but /S is /JavaScript
-                    if all_payloads.is_empty() {
+                    if js_entries.is_empty() && js_payloads.is_empty() {
                         evidence.push(span_to_evidence(dict.span, "Action dict"));
                         meta.insert("payload_key".into(), "/S /JavaScript".into());
                     }
@@ -819,63 +1361,56 @@ impl Detector for JavaScriptDetector {
                     meta.insert("js.stream.decode_error".into(), "-".into());
 
                     // Process the first (or only) JavaScript payload
-                    let primary_payload = if !all_payloads.is_empty() {
-                        Some(all_payloads[0].2)
-                    } else {
-                        None
-                    };
-
-                    if let Some(v) = primary_payload {
-                        let res = resolve_payload(ctx, v);
-                        if let Some(err) = res.error {
-                            meta.insert("js.stream.decode_error".into(), err);
+                    if let Some(candidate) = js_payloads.first() {
+                        let payload = &candidate.payload;
+                        meta.insert("payload_key".into(), candidate.key_name.clone());
+                        if let Some(label) = candidate.source.meta_value() {
+                            meta.insert("js.source".into(), label.into());
                         }
-                        if let Some(payload) = res.payload {
-                            meta.insert("payload.type".into(), payload.kind);
-                            meta.insert(
-                                "payload.decoded_len".into(),
-                                payload.bytes.len().to_string(),
-                            );
-                            meta.insert("payload.ref_chain".into(), payload.ref_chain);
-                            if let Some(filters) = payload.filters {
-                                meta.insert("js.stream.filters".into(), filters);
-                            }
-                            if let Some(ratio) = payload.decode_ratio {
-                                meta.insert("js.decode_ratio".into(), format!("{:.2}", ratio));
-                            }
-                            if let Some(origin) = payload.origin {
-                                evidence.push(decoded_evidence_span(
-                                    origin,
-                                    &payload.bytes,
-                                    "Decoded JS payload",
-                                ));
-                            }
-                            let sig = js_analysis::static_analysis::extract_js_signals_with_ast(
+                        meta.insert("payload.type".into(), payload.kind.clone());
+                        meta.insert(
+                            "payload.decoded_len".into(),
+                            payload.bytes.len().to_string(),
+                        );
+                        meta.insert("payload.ref_chain".into(), payload.ref_chain.clone());
+                        if let Some(filters) = payload.filters.clone() {
+                            meta.insert("js.stream.filters".into(), filters);
+                        }
+                        if let Some(ratio) = payload.decode_ratio {
+                            meta.insert("js.decode_ratio".into(), format!("{:.2}", ratio));
+                        }
+                        if let Some(origin) = payload.origin {
+                            evidence.push(decoded_evidence_span(
+                                origin,
                                 &payload.bytes,
-                                self.enable_ast,
-                            );
-                            for (k, v) in sig {
-                                meta.insert(k, v);
-                            }
-                            let decoded =
-                                js_analysis::static_analysis::decode_layers(&payload.bytes, 3);
-                            meta.insert("payload.decode_layers".into(), decoded.layers.to_string());
-                            if decoded.layers > 0 && decoded.bytes != payload.bytes {
-                                meta.insert(
-                                    "payload.deobfuscated_len".into(),
-                                    decoded.bytes.len().to_string(),
-                                );
-                                meta.insert(
-                                    "payload.deobfuscated_preview".into(),
-                                    preview_ascii(&decoded.bytes, 120),
-                                );
-                            }
-                            meta.insert("js.stream.decoded".into(), "true".into());
+                                "Decoded JS payload",
+                            ));
+                        }
+                        let sig = js_analysis::static_analysis::extract_js_signals_with_ast(
+                            &payload.bytes,
+                            self.enable_ast,
+                        );
+                        for (k, v) in sig {
+                            meta.insert(k, v);
+                        }
+                        let decoded =
+                            js_analysis::static_analysis::decode_layers(&payload.bytes, 3);
+                        meta.insert("payload.decode_layers".into(), decoded.layers.to_string());
+                        if decoded.layers > 0 && decoded.bytes != payload.bytes {
                             meta.insert(
-                                "payload.decoded_preview".into(),
-                                preview_ascii(&payload.bytes, 120),
+                                "payload.deobfuscated_len".into(),
+                                decoded.bytes.len().to_string(),
+                            );
+                            meta.insert(
+                                "payload.deobfuscated_preview".into(),
+                                preview_ascii(&decoded.bytes, 120),
                             );
                         }
+                        meta.insert("js.stream.decoded".into(), "true".into());
+                        meta.insert(
+                            "payload.decoded_preview".into(),
+                            preview_ascii(&payload.bytes, 120),
+                        );
                     }
                     findings.push(Finding {
                         id: String::new(),
@@ -2482,5 +3017,65 @@ fn string_bytes(s: &sis_pdf_pdf::object::PdfStr<'_>) -> Vec<u8> {
     match s {
         sis_pdf_pdf::object::PdfStr::Literal { decoded, .. } => decoded.clone(),
         sis_pdf_pdf::object::PdfStr::Hex { decoded, .. } => decoded.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        data_uri_payload_from_bytes, extract_xfa_script_payloads, javascript_uri_payload_from_bytes,
+        normalise_text_bytes_for_script,
+    };
+
+    #[test]
+    fn javascript_uri_payload_strips_scheme() {
+        let payload = javascript_uri_payload_from_bytes(b" javascript:confirm(2);");
+        assert_eq!(payload, Some(b"confirm(2);".to_vec()));
+    }
+
+    #[test]
+    fn javascript_uri_payload_is_case_insensitive() {
+        let payload = javascript_uri_payload_from_bytes(b"JaVaScRiPt:alert(1)");
+        assert_eq!(payload, Some(b"alert(1)".to_vec()));
+    }
+
+    #[test]
+    fn javascript_uri_payload_returns_none_for_non_js() {
+        let payload = javascript_uri_payload_from_bytes(b"http://example.com");
+        assert!(payload.is_none());
+    }
+
+    #[test]
+    fn data_uri_payload_strips_javascript() {
+        let payload = data_uri_payload_from_bytes(b"data:text/javascript,alert(1)");
+        assert_eq!(payload, Some(b"alert(1)".to_vec()));
+    }
+
+    #[test]
+    fn data_uri_payload_decodes_base64() {
+        let payload =
+            data_uri_payload_from_bytes(b"data:application/javascript;base64,YWxlcnQoMSk=");
+        assert_eq!(payload, Some(b"alert(1)".to_vec()));
+    }
+
+    #[test]
+    fn xfa_script_payloads_extract_script_blocks() {
+        let xml = b"<xfa:form><xfa:script>confirm(2)</xfa:script></xfa:form>";
+        let payloads = extract_xfa_script_payloads(xml);
+        assert_eq!(payloads, vec![b"confirm(2)".to_vec()]);
+    }
+
+    #[test]
+    fn xfa_script_payloads_respect_content_type() {
+        let xml = b"<script contentType=\"application/x-javascript\"><![CDATA[alert(1)]]></script>";
+        let payloads = extract_xfa_script_payloads(xml);
+        assert_eq!(payloads, vec![b"alert(1)".to_vec()]);
+    }
+
+    #[test]
+    fn normalise_text_bytes_handles_utf16le() {
+        let utf16 = b"\xff\xfe\x66\x00\x75\x00\x6e\x00\x63\x00\x74\x00\x69\x00\x6f\x00\x6e\x00";
+        let normalised = normalise_text_bytes_for_script(utf16).unwrap();
+        assert!(normalised.starts_with(b"function"));
     }
 }

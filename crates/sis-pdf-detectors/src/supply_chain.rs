@@ -7,7 +7,7 @@ use sis_pdf_core::scan::span_to_evidence;
 use sis_pdf_pdf::classification::ObjectRole;
 use sis_pdf_pdf::typed_graph::EdgeType;
 
-use crate::{entry_dict, resolve_payload};
+use crate::{entry_dict, js_payload_candidates_from_entry};
 
 pub struct SupplyChainDetector;
 
@@ -60,158 +60,157 @@ impl Detector for SupplyChainDetector {
 
         let analyzer = sis_pdf_core::supply_chain::SupplyChainDetector;
 
-        // Find all JavaScript objects via typed graph edges
-        let mut js_objects = HashSet::new();
-        for edge in &typed_graph.edges {
-            if matches!(edge.edge_type, EdgeType::JavaScriptPayload) {
-                js_objects.insert(edge.dst);
+        // Analyze each JavaScript payload (including javascript: URIs)
+        for entry in &ctx.graph.objects {
+            let candidates = js_payload_candidates_from_entry(ctx, entry);
+            if candidates.is_empty() {
+                continue;
             }
-        }
 
-        // Analyze each JavaScript object
-        for (obj, gen) in js_objects {
-            let Some(entry) = ctx.graph.get_object(obj, gen) else {
-                continue;
-            };
-            let Some(dict) = entry_dict(entry) else {
-                continue;
-            };
-            let Some((_, js_obj)) = dict.get_first(b"/JS") else {
-                continue;
-            };
-
-            let payload = resolve_payload(ctx, js_obj);
-            let Some(info) = payload.payload else {
-                continue;
-            };
-
-            // Collect action targets reachable from this JS object
+            // Collect action targets reachable from this object
             let mut local_action_targets = Vec::new();
-            for edge in typed_graph.outgoing_edges(obj, gen) {
+            for edge in typed_graph.outgoing_edges(entry.obj, entry.gen) {
                 if let Some(target) = extract_action_target(edge) {
                     local_action_targets.push(target);
                 }
             }
 
-            let staged = analyzer.detect_staged_payload(&info.bytes);
-            if !staged.is_empty() {
-                let indicators = staged
-                    .iter()
-                    .map(|s| s.indicator.clone())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let mut meta = std::collections::HashMap::new();
-                meta.insert("supply_chain.indicators".into(), indicators);
-                if has_embedded {
-                    meta.insert("supply_chain.embedded_present".into(), "true".into());
+            for candidate in candidates {
+                let info = candidate.payload;
+                let mut evidence = candidate.evidence;
+                if evidence.is_empty() {
+                    evidence.push(span_to_evidence(entry.full_span, "JavaScript dict"));
                 }
-                if !embedded_names.is_empty() {
-                    meta.insert(
-                        "supply_chain.embedded_names".into(),
-                        embedded_names.join(","),
-                    );
-                }
-                if !local_action_targets.is_empty() {
-                    meta.insert(
-                        "supply_chain.action_targets".into(),
-                        local_action_targets.join(","),
-                    );
-                }
-                findings.push(Finding {
-                    id: String::new(),
-                    surface: self.surface(),
-                    kind: "supply_chain_staged_payload".into(),
-                    severity: Severity::High,
-                    confidence: Confidence::Probable,
-                    title: "Staged payload delivery".into(),
-                    description: "JavaScript indicates download or staged payload execution."
-                        .into(),
-                    objects: vec![format!("{} {} obj", obj, gen)],
-                    evidence: vec![span_to_evidence(entry.full_span, "JavaScript dict")],
-                    remediation: Some("Inspect outbound URLs and staged payloads.".into()),
-                    meta,
-                    yara: None,
-                    position: None,
-                    positions: Vec::new(),
-                });
-            }
 
-            let updates = analyzer.analyze_update_mechanisms(&info.bytes);
-            if !updates.is_empty() {
-                let indicators = updates
-                    .iter()
-                    .map(|s| s.indicator.clone())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let mut meta = std::collections::HashMap::new();
-                meta.insert("supply_chain.update_indicators".into(), indicators);
-                if !embedded_names.is_empty() {
-                    meta.insert(
-                        "supply_chain.embedded_names".into(),
-                        embedded_names.join(","),
-                    );
+                let staged = analyzer.detect_staged_payload(&info.bytes);
+                if !staged.is_empty() {
+                    let indicators = staged
+                        .iter()
+                        .map(|s| s.indicator.clone())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert("supply_chain.indicators".into(), indicators);
+                    if has_embedded {
+                        meta.insert("supply_chain.embedded_present".into(), "true".into());
+                    }
+                    if !embedded_names.is_empty() {
+                        meta.insert(
+                            "supply_chain.embedded_names".into(),
+                            embedded_names.join(","),
+                        );
+                    }
+                    if !local_action_targets.is_empty() {
+                        meta.insert(
+                            "supply_chain.action_targets".into(),
+                            local_action_targets.join(","),
+                        );
+                    }
+                    if let Some(label) = candidate.source.meta_value() {
+                        meta.insert("js.source".into(), label.into());
+                    }
+                    findings.push(Finding {
+                        id: String::new(),
+                        surface: self.surface(),
+                        kind: "supply_chain_staged_payload".into(),
+                        severity: Severity::High,
+                        confidence: Confidence::Probable,
+                        title: "Staged payload delivery".into(),
+                        description: "JavaScript indicates download or staged payload execution."
+                            .into(),
+                        objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
+                        evidence: evidence.clone(),
+                        remediation: Some("Inspect outbound URLs and staged payloads.".into()),
+                        meta,
+                        yara: None,
+                        position: None,
+                        positions: Vec::new(),
+                    });
                 }
-                if !local_action_targets.is_empty() {
-                    meta.insert(
-                        "supply_chain.action_targets".into(),
-                        local_action_targets.join(","),
-                    );
-                }
-                findings.push(Finding {
-                    id: String::new(),
-                    surface: self.surface(),
-                    kind: "supply_chain_update_vector".into(),
-                    severity: Severity::Medium,
-                    confidence: Confidence::Heuristic,
-                    title: "Update mechanism references".into(),
-                    description: "JavaScript references update or installer logic.".into(),
-                    objects: vec![format!("{} {} obj", obj, gen)],
-                    evidence: vec![span_to_evidence(entry.full_span, "JavaScript dict")],
-                    remediation: Some("Verify update channels and signing policies.".into()),
-                    meta,
-                    yara: None,
-                    position: None,
-                    positions: Vec::new(),
-                });
-            }
 
-            let persistence = analyzer.check_persistence_methods(&info.bytes);
-            if !persistence.is_empty() {
-                let indicators = persistence
-                    .iter()
-                    .map(|s| s.indicator.clone())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let mut meta = std::collections::HashMap::new();
-                meta.insert("supply_chain.persistence_indicators".into(), indicators);
-                if !embedded_names.is_empty() {
-                    meta.insert(
-                        "supply_chain.embedded_names".into(),
-                        embedded_names.join(","),
-                    );
+                let updates = analyzer.analyze_update_mechanisms(&info.bytes);
+                if !updates.is_empty() {
+                    let indicators = updates
+                        .iter()
+                        .map(|s| s.indicator.clone())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert("supply_chain.update_indicators".into(), indicators);
+                    if !embedded_names.is_empty() {
+                        meta.insert(
+                            "supply_chain.embedded_names".into(),
+                            embedded_names.join(","),
+                        );
+                    }
+                    if !local_action_targets.is_empty() {
+                        meta.insert(
+                            "supply_chain.action_targets".into(),
+                            local_action_targets.join(","),
+                        );
+                    }
+                    if let Some(label) = candidate.source.meta_value() {
+                        meta.insert("js.source".into(), label.into());
+                    }
+                    findings.push(Finding {
+                        id: String::new(),
+                        surface: self.surface(),
+                        kind: "supply_chain_update_vector".into(),
+                        severity: Severity::Medium,
+                        confidence: Confidence::Heuristic,
+                        title: "Update mechanism references".into(),
+                        description: "JavaScript references update or installer logic.".into(),
+                        objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
+                        evidence: evidence.clone(),
+                        remediation: Some("Verify update channels and signing policies.".into()),
+                        meta,
+                        yara: None,
+                        position: None,
+                        positions: Vec::new(),
+                    });
                 }
-                if !local_action_targets.is_empty() {
-                    meta.insert(
-                        "supply_chain.action_targets".into(),
-                        local_action_targets.join(","),
-                    );
+
+                let persistence = analyzer.check_persistence_methods(&info.bytes);
+                if !persistence.is_empty() {
+                    let indicators = persistence
+                        .iter()
+                        .map(|s| s.indicator.clone())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert("supply_chain.persistence_indicators".into(), indicators);
+                    if !embedded_names.is_empty() {
+                        meta.insert(
+                            "supply_chain.embedded_names".into(),
+                            embedded_names.join(","),
+                        );
+                    }
+                    if !local_action_targets.is_empty() {
+                        meta.insert(
+                            "supply_chain.action_targets".into(),
+                            local_action_targets.join(","),
+                        );
+                    }
+                    if let Some(label) = candidate.source.meta_value() {
+                        meta.insert("js.source".into(), label.into());
+                    }
+                    findings.push(Finding {
+                        id: String::new(),
+                        surface: self.surface(),
+                        kind: "supply_chain_persistence".into(),
+                        severity: Severity::Medium,
+                        confidence: Confidence::Probable,
+                        title: "Persistence-related JavaScript".into(),
+                        description: "JavaScript references persistence-like viewer hooks.".into(),
+                        objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
+                        evidence: evidence.clone(),
+                        remediation: Some("Review persistence-related APIs and triggers.".into()),
+                        meta,
+                        yara: None,
+                        position: None,
+                        positions: Vec::new(),
+                    });
                 }
-                findings.push(Finding {
-                    id: String::new(),
-                    surface: self.surface(),
-                    kind: "supply_chain_persistence".into(),
-                    severity: Severity::Medium,
-                    confidence: Confidence::Probable,
-                    title: "Persistence-related JavaScript".into(),
-                    description: "JavaScript references persistence-like viewer hooks.".into(),
-                    objects: vec![format!("{} {} obj", obj, gen)],
-                    evidence: vec![span_to_evidence(entry.full_span, "JavaScript dict")],
-                    remediation: Some("Review persistence-related APIs and triggers.".into()),
-                    meta,
-                    yara: None,
-                    position: None,
-                    positions: Vec::new(),
-                });
             }
         }
 

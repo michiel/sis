@@ -7,6 +7,8 @@ use sis_pdf_pdf::object::PdfAtom;
 use std::collections::BTreeMap;
 use tracing::warn;
 
+use crate::{js_payload_candidates_from_entry, JsPayloadSource};
+
 pub struct StrictParseDeviationDetector;
 
 const DEVIATION_CLUSTER_THRESHOLD: usize = 50;
@@ -235,7 +237,11 @@ impl Detector for StrictParseDeviationDetector {
             let mut action_object = None;
             for entry in &ctx.graph.objects {
                 if let Some(dict) = crate::entry_dict(entry) {
-                    if dict.has_name(b"/S", b"/JavaScript")
+                    let has_hidden_js = js_payload_candidates_from_entry(ctx, entry)
+                        .iter()
+                        .any(|candidate| candidate.source != JsPayloadSource::Action);
+                    if has_hidden_js
+                        || dict.has_name(b"/S", b"/JavaScript")
                         || dict.get_first(b"/JS").is_some()
                         || dict.get_first(b"/Action").is_some()
                         || dict.get_first(b"/OpenAction").is_some()

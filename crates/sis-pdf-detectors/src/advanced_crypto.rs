@@ -7,7 +7,7 @@ use sis_pdf_core::scan::span_to_evidence;
 use sis_pdf_pdf::object::{PdfAtom, PdfDict, PdfObj};
 use tracing::warn;
 
-use crate::{entry_dict, resolve_payload};
+use crate::{entry_dict, js_payload_candidates_from_entry};
 
 pub struct AdvancedCryptoDetector;
 
@@ -77,38 +77,38 @@ impl Detector for AdvancedCryptoDetector {
         }
 
         for entry in &ctx.graph.objects {
-            let Some(dict) = entry_dict(entry) else {
-                continue;
-            };
-            if dict.get_first(b"/JS").is_none() && !dict.has_name(b"/S", b"/JavaScript") {
+            let candidates = js_payload_candidates_from_entry(ctx, entry);
+            if candidates.is_empty() {
                 continue;
             }
-            let Some((_, obj)) = dict.get_first(b"/JS") else {
-                continue;
-            };
-            let payload = resolve_payload(ctx, obj);
-            let Some(info) = payload.payload else {
-                continue;
-            };
-            if let Some(miner) = analyzer.detect_crypto_mining(&info.bytes) {
-                let mut meta = std::collections::HashMap::new();
-                meta.insert("crypto.miner_indicator".into(), miner.indicator);
-                findings.push(Finding {
-                    id: String::new(),
-                    surface: AttackSurface::CryptoSignatures,
-                    kind: "crypto_mining_js".into(),
-                    severity: Severity::High,
-                    confidence: Confidence::Probable,
-                    title: "Cryptomining JavaScript".into(),
-                    description: "JavaScript includes cryptomining indicators.".into(),
-                    objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
-                    evidence: vec![span_to_evidence(dict.span, "JavaScript dict")],
-                    remediation: Some("Inspect for cryptomining payloads.".into()),
-                    meta,
-                    yara: None,
-                    position: None,
-                    positions: Vec::new(),
-                });
+            for candidate in candidates {
+                if let Some(miner) = analyzer.detect_crypto_mining(&candidate.payload.bytes) {
+                    let mut evidence = candidate.evidence;
+                    if evidence.is_empty() {
+                        evidence.push(span_to_evidence(entry.full_span, "JavaScript object"));
+                    }
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert("crypto.miner_indicator".into(), miner.indicator);
+                    if let Some(label) = candidate.source.meta_value() {
+                        meta.insert("js.source".into(), label.into());
+                    }
+                    findings.push(Finding {
+                        id: String::new(),
+                        surface: AttackSurface::CryptoSignatures,
+                        kind: "crypto_mining_js".into(),
+                        severity: Severity::High,
+                        confidence: Confidence::Probable,
+                        title: "Cryptomining JavaScript".into(),
+                        description: "JavaScript includes cryptomining indicators.".into(),
+                        objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
+                        evidence,
+                        remediation: Some("Inspect for cryptomining payloads.".into()),
+                        meta,
+                        yara: None,
+                        position: None,
+                        positions: Vec::new(),
+                    });
+                }
             }
         }
         Ok(findings)
