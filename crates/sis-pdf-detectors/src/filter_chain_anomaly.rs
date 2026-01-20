@@ -50,9 +50,13 @@ impl Detector for FilterChainAnomalyDetector {
                 continue;
             }
             let normalised: Vec<String> = filters.iter().map(|f| normalise_filter(f)).collect();
+            let allowlist_match = is_allowlisted_chain(&normalised, &allowlist);
             let mut meta = std::collections::HashMap::new();
             meta.insert("stream.filter_chain".into(), normalised.join(" -> "));
             meta.insert("stream.filter_depth".into(), normalised.len().to_string());
+            meta.insert("filters".into(), format_filter_list(&normalised));
+            meta.insert("filter_count".into(), normalised.len().to_string());
+            meta.insert("allowlist_match".into(), allowlist_match.to_string());
             let evidence = EvidenceBuilder::new()
                 .file_offset(
                     stream.dict.span.start,
@@ -61,7 +65,16 @@ impl Detector for FilterChainAnomalyDetector {
                 )
                 .build();
 
-            if is_unusual_chain(&normalised, &allowlist, strict) {
+            if is_unusual_chain(allowlist_match, &normalised, strict) {
+                let mut meta = meta.clone();
+                let violation = if strict {
+                    "strict_mode"
+                } else if has_unknown_filter(&normalised) {
+                    "unknown_filter"
+                } else {
+                    "allowlist_miss"
+                };
+                meta.insert("violation_type".into(), violation.to_string());
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),
@@ -73,14 +86,16 @@ impl Detector for FilterChainAnomalyDetector {
                     objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
                     evidence: evidence.clone(),
                     remediation: Some("Inspect stream decoding for obfuscation.".into()),
-                    meta: meta.clone(),
+                    meta,
                     yara: None,
                     position: None,
                     positions: Vec::new(),
                 });
             }
 
-            if has_invalid_order(&normalised) {
+            if let Some(violation) = invalid_order_reason(&normalised) {
+                let mut meta = meta.clone();
+                meta.insert("violation_type".into(), violation.to_string());
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),
@@ -88,11 +103,11 @@ impl Detector for FilterChainAnomalyDetector {
                     severity: Severity::Medium,
                     confidence: Confidence::Probable,
                     title: "Invalid filter order".into(),
-                    description: "ASCII filters appear after binary filters.".into(),
+                    description: "Filter order violates PDF decoding rules.".into(),
                     objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
                     evidence: evidence.clone(),
                     remediation: Some("Review filter order for obfuscation.".into()),
-                    meta: meta.clone(),
+                    meta,
                     yara: None,
                     position: None,
                     positions: Vec::new(),
@@ -100,6 +115,8 @@ impl Detector for FilterChainAnomalyDetector {
             }
 
             if has_duplicate_filters(&normalised) {
+                let mut meta = meta.clone();
+                meta.insert("violation_type".into(), "duplicate_filters".to_string());
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),
@@ -122,24 +139,25 @@ impl Detector for FilterChainAnomalyDetector {
     }
 }
 
-fn is_unusual_chain(
-    filters: &[String],
-    allowlist: &[Vec<String>],
-    strict: bool,
-) -> bool {
+fn is_unusual_chain(allowlist_match: bool, filters: &[String], strict: bool) -> bool {
     if strict {
         return !filters.is_empty();
     }
-    !is_allowlisted_chain(filters, allowlist)
+    !allowlist_match
 }
 
-fn has_invalid_order(filters: &[String]) -> bool {
+fn invalid_order_reason(filters: &[String]) -> Option<&'static str> {
     for (idx, f) in filters.iter().enumerate() {
         if is_ascii_filter(f) && idx != 0 {
-            return true;
+            return Some("ascii_after_binary");
         }
     }
-    false
+    for (idx, f) in filters.iter().enumerate() {
+        if f == "Crypt" && idx != 0 {
+            return Some("crypt_not_outermost");
+        }
+    }
+    None
 }
 
 fn has_duplicate_filters(filters: &[String]) -> bool {
@@ -156,6 +174,20 @@ fn is_ascii_filter(filter: &str) -> bool {
 
 fn normalise_filter(filter: &str) -> String {
     filter.trim_start_matches('/').to_string()
+}
+
+fn format_filter_list(filters: &[String]) -> String {
+    let mut out = String::from("[");
+    for (idx, filter) in filters.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push('"');
+        out.push_str(filter);
+        out.push('"');
+    }
+    out.push(']');
+    out
 }
 
 const KNOWN_FILTERS: &[&str] = &[
@@ -187,4 +219,10 @@ fn is_allowlisted_chain(filters: &[String], allowlist: &[Vec<String>]) -> bool {
             .zip(filters.iter())
             .all(|(a, f)| *a == f.as_str())
     })
+}
+
+fn has_unknown_filter(filters: &[String]) -> bool {
+    filters
+        .iter()
+        .any(|f| !KNOWN_FILTERS.contains(&f.as_str()))
 }

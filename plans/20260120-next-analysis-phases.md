@@ -1332,7 +1332,7 @@ Detect unusual or invalid filter sequences beyond depth-only heuristics, using a
 - [x] Implement `FilterChainAnomalyDetector` in `crates/sis-pdf-detectors/src/filter_chain_anomaly.rs`:
   - [x] Extract `/Filter` from all stream objects.
   - [x] Parse filter arrays (handle both single filter and array of filters).
-  - [ ] Validate filter order against PDF specification rules.
+  - [x] Validate filter order against PDF specification rules (ASCII decode order + Crypt outermost).
   - [x] Check filter combinations against allowlist (see "Filter Allowlist" section below).
   - [x] Flag unusual combinations (depth >= 3 or unknown filter names).
   - [x] Flag invalid orders (ASCII filters after binary filters).
@@ -1340,10 +1340,10 @@ Detect unusual or invalid filter sequences beyond depth-only heuristics, using a
   - [x] Use `EvidenceBuilder` for evidence formatting.
 
 - [x] Emit findings:
-  - [x] `filter_chain_unusual` when combination not in allowlist.
-  - [x] `filter_order_invalid` when order violates PDF spec.
-  - [x] `filter_combination_unusual` when combination repeats filters.
-  - [ ] Include metadata: `filters` (array), `filter_count`, `allowlist_match` (bool), `violation_type`.
+- [x] `filter_chain_unusual` when combination not in allowlist.
+- [x] `filter_order_invalid` when order violates PDF spec.
+- [x] `filter_combination_unusual` when combination repeats filters.
+- [x] Include metadata: `filters` (array), `filter_count`, `allowlist_match` (bool), `violation_type`.
 
 #### Filter Allowlist
 
@@ -1441,7 +1441,7 @@ Implement PDF spec filter order rules:
 - [x] `test_unusual_filter_chain()` - Non-allowlist chain triggers `filter_chain_unusual`.
 - [x] `test_invalid_filter_order()` - FlateDecode before ASCII85Decode triggers `filter_order_invalid`.
 - [x] `test_allowlist_loading()` - Load custom allowlist from TOML.
-- [ ] `test_strict_mode()` - Strict mode flags all non-standard chains.
+- [x] `test_strict_mode()` - Strict mode flags all non-standard chains.
 
 #### Integration Tests
 
