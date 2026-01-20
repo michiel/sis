@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use sis_pdf_core::detect::{Cost, Detector, Needs};
 use sis_pdf_core::evidence::EvidenceBuilder;
 use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
+use sis_pdf_core::filter_allowlist::default_filter_allowlist;
 use sis_pdf_core::timeout::TimeoutChecker;
 use sis_pdf_pdf::decode::stream_filters;
 use sis_pdf_pdf::object::PdfAtom;
@@ -30,6 +31,13 @@ impl Detector for FilterChainAnomalyDetector {
     fn run(&self, ctx: &sis_pdf_core::scan::ScanContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         let timeout = TimeoutChecker::new(std::time::Duration::from_millis(100));
+        let allowlist = ctx
+            .options
+            .filter_allowlist
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(default_filter_allowlist);
+        let strict = ctx.options.filter_allowlist_strict;
         for entry in &ctx.graph.objects {
             if timeout.check().is_err() {
                 break;
@@ -53,7 +61,7 @@ impl Detector for FilterChainAnomalyDetector {
                 )
                 .build();
 
-            if is_unusual_chain(&normalised) {
+            if is_unusual_chain(&normalised, &allowlist, strict) {
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),
@@ -114,8 +122,15 @@ impl Detector for FilterChainAnomalyDetector {
     }
 }
 
-fn is_unusual_chain(filters: &[String]) -> bool {
-    !is_allowlisted_chain(filters)
+fn is_unusual_chain(
+    filters: &[String],
+    allowlist: &[Vec<String>],
+    strict: bool,
+) -> bool {
+    if strict {
+        return !filters.is_empty();
+    }
+    !is_allowlisted_chain(filters, allowlist)
 }
 
 fn has_invalid_order(filters: &[String]) -> bool {
@@ -156,30 +171,14 @@ const KNOWN_FILTERS: &[&str] = &[
     "Crypt",
 ];
 
-const DEFAULT_ALLOWLIST: &[&[&str]] = &[
-    &["ASCIIHexDecode", "FlateDecode"],
-    &["ASCII85Decode", "FlateDecode"],
-    &["FlateDecode", "DCTDecode"],
-    &["DCTDecode"],
-    &["CCITTFaxDecode"],
-    &["JBIG2Decode"],
-    &["JPXDecode"],
-    &["LZWDecode"],
-    &["RunLengthDecode"],
-    &["ASCIIHexDecode"],
-    &["ASCII85Decode"],
-    &["FlateDecode"],
-    &["Crypt"],
-];
-
-fn is_allowlisted_chain(filters: &[String]) -> bool {
+fn is_allowlisted_chain(filters: &[String], allowlist: &[Vec<String>]) -> bool {
     if filters.is_empty() {
         return true;
     }
     if filters.iter().any(|f| !KNOWN_FILTERS.contains(&f.as_str())) {
         return false;
     }
-    DEFAULT_ALLOWLIST.iter().any(|allowed| {
+    allowlist.iter().any(|allowed| {
         if allowed.len() != filters.len() {
             return false;
         }

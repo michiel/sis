@@ -13,6 +13,7 @@ pub mod detect;
 pub mod diff;
 pub mod evidence;
 pub mod explainability;
+pub mod filter_allowlist;
 pub mod features;
 pub mod features_extended;
 pub mod graph_export;

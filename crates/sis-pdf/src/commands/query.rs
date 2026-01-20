@@ -1550,6 +1550,8 @@ fn build_scan_context<'a>(
         ml_config: None,
         font_analysis: sis_pdf_core::scan::FontAnalysisOptions::default(),
         image_analysis: sis_pdf_core::scan::ImageAnalysisOptions::default(),
+        filter_allowlist: None,
+        filter_allowlist_strict: false,
         profile: false,
         profile_format: sis_pdf_core::scan::ProfileFormat::Text,
         group_chains: options.group_chains,
@@ -5201,6 +5203,67 @@ mod tests {
     }
 
     #[test]
+    fn execute_query_supports_filter_shortcuts() {
+        with_fixture_context("filters/filter_unusual_chain.pdf", |ctx| {
+            let query = parse_query("filters.unusual").expect("query");
+            let result = execute_query_with_context(
+                &query,
+                ctx,
+                None,
+                1024 * 1024,
+                DecodeMode::Decode,
+                None,
+            )
+            .expect("execute query");
+            match result {
+                QueryResult::Structure(value) => {
+                    let list = value.as_array().expect("list");
+                    assert!(!list.is_empty());
+                }
+                _ => panic!("unexpected filters.unusual result"),
+            }
+
+            let query = parse_query("filters.repeated").expect("query");
+            let result = execute_query_with_context(
+                &query,
+                ctx,
+                None,
+                1024 * 1024,
+                DecodeMode::Decode,
+                None,
+            )
+            .expect("execute query");
+            match result {
+                QueryResult::Structure(value) => {
+                    let list = value.as_array().expect("list");
+                    assert!(!list.is_empty());
+                }
+                _ => panic!("unexpected filters.repeated result"),
+            }
+        });
+
+        with_fixture_context("filters/filter_invalid_order.pdf", |ctx| {
+            let query = parse_query("filters.invalid").expect("query");
+            let result = execute_query_with_context(
+                &query,
+                ctx,
+                None,
+                1024 * 1024,
+                DecodeMode::Decode,
+                None,
+            )
+            .expect("execute query");
+            match result {
+                QueryResult::Structure(value) => {
+                    let list = value.as_array().expect("list");
+                    assert!(!list.is_empty());
+                }
+                _ => panic!("unexpected filters.invalid result"),
+            }
+        });
+    }
+
+    #[test]
     fn embedded_predicate_supports_name_and_magic() {
         with_fixture_context("embedded/embedded_exe_cve_2018_4990.pdf", |ctx| {
             let predicate = parse_predicate("magic == 'pe' AND name == 'payload.exe'")
@@ -5320,6 +5383,44 @@ mod tests {
             3,
         )
         .expect("batch query swf");
+    }
+
+    #[test]
+    fn batch_query_supports_filter_shortcut_counts() {
+        let temp = tempdir().expect("tempdir");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .join("crates/sis-pdf-core/tests/fixtures/filters");
+        std::fs::copy(
+            root.join("filter_unusual_chain.pdf"),
+            temp.path().join("sample-unusual.pdf"),
+        )
+        .expect("copy unusual chain");
+        std::fs::copy(
+            root.join("filter_invalid_order.pdf"),
+            temp.path().join("sample-invalid.pdf"),
+        )
+        .expect("copy invalid order");
+
+        let scan_options = ScanOptions::default();
+        let query = parse_query("filters.unusual.count").expect("query");
+        run_query_batch(
+            &query,
+            temp.path(),
+            "*.pdf",
+            &scan_options,
+            None,
+            1024 * 1024,
+            DecodeMode::Decode,
+            None,
+            OutputFormat::Json,
+            10,
+            10 * 1024 * 1024,
+            3,
+        )
+        .expect("batch query filters");
     }
 
     #[test]

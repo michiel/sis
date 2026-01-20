@@ -1333,7 +1333,7 @@ Detect unusual or invalid filter sequences beyond depth-only heuristics, using a
   - [x] Extract `/Filter` from all stream objects.
   - [x] Parse filter arrays (handle both single filter and array of filters).
   - [ ] Validate filter order against PDF specification rules.
-  - [ ] Check filter combinations against allowlist (see "Filter Allowlist" section below).
+  - [x] Check filter combinations against allowlist (see "Filter Allowlist" section below).
   - [x] Flag unusual combinations (depth >= 3 or unknown filter names).
   - [x] Flag invalid orders (ASCII filters after binary filters).
   - [x] Use `TimeoutChecker` with 100ms budget per chain.
@@ -1426,11 +1426,11 @@ Implement PDF spec filter order rules:
 
 - [x] Register detector in `crates/sis-pdf-detectors/lib.rs`.
 - [x] Add to scan pipeline (Phase C).
-- [x] Load allowlist from config file or use default (default allowlist now used).
+- [x] Load allowlist from config file or use default.
 
 #### Implementation Notes
 
-- Detector uses a default allowlist and fixed order rules; configurable allowlist remains pending.
+- Detector uses a default allowlist and fixed order rules; configurable allowlist is supported via CLI/config.
 - Filter order rules are simplified to ASCII encoding placement checks.
 
 ### Tests
@@ -1440,7 +1440,7 @@ Implement PDF spec filter order rules:
 - [x] `test_valid_filter_chains()` - All allowlist chains should NOT trigger findings.
 - [x] `test_unusual_filter_chain()` - Non-allowlist chain triggers `filter_chain_unusual`.
 - [x] `test_invalid_filter_order()` - FlateDecode before ASCII85Decode triggers `filter_order_invalid`.
-- [ ] `test_allowlist_loading()` - Load custom allowlist from TOML.
+- [x] `test_allowlist_loading()` - Load custom allowlist from TOML.
 - [ ] `test_strict_mode()` - Strict mode flags all non-standard chains.
 
 #### Integration Tests
@@ -1509,7 +1509,7 @@ pub struct FeatureVector {
 
 - ✅ All 3 filter chain findings emitted correctly.
 - ✅ Allowlist loaded from TOML config file.
-- ✅ Specification validation rules implemented.
+- ✅ Filter order checks implemented (ASCII order placement).
 - ✅ Valid chains (in allowlist) do NOT trigger false positives.
 - ✅ Unusual chains trigger findings with correct metadata.
 - ✅ CLI flags (--filter-allowlist, --filter-allowlist-strict) work correctly.
@@ -1652,7 +1652,7 @@ filters.repeated
 - Predicate fields for launch targets, XFA, and SWF (findings metadata + embedded name/magic shipped).
 - Extraction helpers for embedded files shipped; batch/REPL coverage remains.
 - Batch/REPL coverage and query reference documentation.
-- [ ] `test_query_filters()` - Query unusual filters.
+- [x] `test_query_filters()` - Query unusual filters.
 - [ ] `test_batch_mode_new_queries()` - All new queries in batch.
 - [ ] `test_repl_mode_new_queries()` - All new queries in REPL.
 
