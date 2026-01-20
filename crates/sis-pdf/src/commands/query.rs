@@ -64,6 +64,12 @@ pub enum PredicateField {
     Height,
     Pixels,
     Risky,
+    Severity,
+    Confidence,
+    Surface,
+    Kind,
+    Objects,
+    Evidence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +99,12 @@ struct PredicateContext {
     height: u32,
     pixels: u64,
     risky: bool,
+    severity: Option<String>,
+    confidence: Option<String>,
+    surface: Option<String>,
+    kind: Option<String>,
+    object_count: usize,
+    evidence_count: usize,
 }
 
 /// Query types supported by the interface
@@ -139,6 +151,7 @@ pub enum Query {
     FindingsCount,
     FindingsBySeverity(Severity),
     FindingsByKind(String),
+    FindingsByKindCount(String),
 
     // Event trigger queries
     Events,
@@ -250,14 +263,29 @@ pub fn parse_query(input: &str) -> Result<Query> {
         "embedded" => Ok(Query::Embedded),
         "embedded.count" => Ok(Query::EmbeddedCount),
         "embedded.executables" => Ok(Query::FindingsByKind("embedded_executable_present".into())),
+        "embedded.executables.count" => {
+            Ok(Query::FindingsByKindCount("embedded_executable_present".into()))
+        }
         "embedded.scripts" => Ok(Query::FindingsByKind("embedded_script_present".into())),
+        "embedded.scripts.count" => {
+            Ok(Query::FindingsByKindCount("embedded_script_present".into()))
+        }
         "embedded.archives.encrypted" => {
             Ok(Query::FindingsByKind("embedded_archive_encrypted".into()))
+        }
+        "embedded.archives.encrypted.count" => {
+            Ok(Query::FindingsByKindCount("embedded_archive_encrypted".into()))
         }
         "embedded.double-extension" => {
             Ok(Query::FindingsByKind("embedded_double_extension".into()))
         }
+        "embedded.double-extension.count" => {
+            Ok(Query::FindingsByKindCount("embedded_double_extension".into()))
+        }
         "embedded.encrypted" => Ok(Query::FindingsByKind("embedded_encrypted".into())),
+        "embedded.encrypted.count" => {
+            Ok(Query::FindingsByKindCount("embedded_encrypted".into()))
+        }
         "images" => Ok(Query::Images),
         "images.count" => Ok(Query::ImagesCount),
         "images.jbig2" => Ok(Query::ImagesJbig2),
@@ -271,22 +299,53 @@ pub fn parse_query(input: &str) -> Result<Query> {
         "images.malformed" => Ok(Query::ImagesMalformed),
         "images.malformed.count" => Ok(Query::ImagesMalformedCount),
         "launch" => Ok(Query::FindingsByKind("launch_action_present".into())),
+        "launch.count" => Ok(Query::FindingsByKindCount("launch_action_present".into())),
         "launch.external" => Ok(Query::FindingsByKind("launch_external_program".into())),
+        "launch.external.count" => {
+            Ok(Query::FindingsByKindCount("launch_external_program".into()))
+        }
         "launch.embedded" => Ok(Query::FindingsByKind("launch_embedded_file".into())),
+        "launch.embedded.count" => {
+            Ok(Query::FindingsByKindCount("launch_embedded_file".into()))
+        }
         "actions.chains.complex" => Ok(Query::FindingsByKind("action_chain_complex".into())),
+        "actions.chains.complex.count" => {
+            Ok(Query::FindingsByKindCount("action_chain_complex".into()))
+        }
         "actions.triggers.automatic" => {
             Ok(Query::FindingsByKind("action_automatic_trigger".into()))
         }
+        "actions.triggers.automatic.count" => {
+            Ok(Query::FindingsByKindCount("action_automatic_trigger".into()))
+        }
         "actions.triggers.hidden" => Ok(Query::FindingsByKind("action_hidden_trigger".into())),
+        "actions.triggers.hidden.count" => {
+            Ok(Query::FindingsByKindCount("action_hidden_trigger".into()))
+        }
         "xfa.submit" => Ok(Query::FindingsByKind("xfa_submit".into())),
+        "xfa.submit.count" => Ok(Query::FindingsByKindCount("xfa_submit".into())),
         "xfa.sensitive" => Ok(Query::FindingsByKind("xfa_sensitive_field".into())),
+        "xfa.sensitive.count" => Ok(Query::FindingsByKindCount("xfa_sensitive_field".into())),
         "xfa.too-large" => Ok(Query::FindingsByKind("xfa_too_large".into())),
+        "xfa.too-large.count" => Ok(Query::FindingsByKindCount("xfa_too_large".into())),
         "xfa.scripts.high" => Ok(Query::FindingsByKind("xfa_script_count_high".into())),
+        "xfa.scripts.high.count" => {
+            Ok(Query::FindingsByKindCount("xfa_script_count_high".into()))
+        }
         "swf" => Ok(Query::FindingsByKind("swf_embedded".into())),
+        "swf.count" => Ok(Query::FindingsByKindCount("swf_embedded".into())),
         "streams.high-entropy" => Ok(Query::FindingsByKind("stream_high_entropy".into())),
+        "streams.high-entropy.count" => {
+            Ok(Query::FindingsByKindCount("stream_high_entropy".into()))
+        }
         "filters.unusual" => Ok(Query::FindingsByKind("filter_chain_unusual".into())),
+        "filters.unusual.count" => Ok(Query::FindingsByKindCount("filter_chain_unusual".into())),
         "filters.invalid" => Ok(Query::FindingsByKind("filter_order_invalid".into())),
+        "filters.invalid.count" => Ok(Query::FindingsByKindCount("filter_order_invalid".into())),
         "filters.repeated" => Ok(Query::FindingsByKind("filter_combination_unusual".into())),
+        "filters.repeated.count" => {
+            Ok(Query::FindingsByKindCount("filter_combination_unusual".into()))
+        }
 
         // Findings
         "findings" => Ok(Query::Findings),
@@ -362,6 +421,10 @@ pub fn parse_query(input: &str) -> Result<Query> {
             }
 
             // Try to parse findings.kind query
+            if let Some(kind) = input.strip_prefix("findings.kind.count ") {
+                return Ok(Query::FindingsByKindCount(kind.to_string()));
+            }
+
             if let Some(kind) = input.strip_prefix("findings.kind ") {
                 return Ok(Query::FindingsByKind(kind.to_string()));
             }
@@ -691,6 +754,26 @@ fn parse_predicate_field(name: &str) -> Result<PredicateField> {
         PredicateField::Pixels
     } else if lower.ends_with(".risky") || lower == "risky" {
         PredicateField::Risky
+    } else if lower.ends_with(".severity") || lower == "severity" {
+        PredicateField::Severity
+    } else if lower.ends_with(".confidence") || lower == "confidence" {
+        PredicateField::Confidence
+    } else if lower.ends_with(".surface") || lower == "surface" {
+        PredicateField::Surface
+    } else if lower.ends_with(".kind") || lower == "kind" {
+        PredicateField::Kind
+    } else if lower.ends_with(".objects")
+        || lower == "objects"
+        || lower.ends_with(".object_count")
+        || lower == "object_count"
+    {
+        PredicateField::Objects
+    } else if lower.ends_with(".evidence")
+        || lower == "evidence"
+        || lower.ends_with(".evidence_count")
+        || lower == "evidence_count"
+    {
+        PredicateField::Evidence
     } else {
         return Err(anyhow!("Unknown predicate field: {}", name));
     };
@@ -713,6 +796,12 @@ impl PredicateExpr {
                 PredicateField::Height => compare_number(ctx.height as f64, *op, value),
                 PredicateField::Pixels => compare_number(ctx.pixels as f64, *op, value),
                 PredicateField::Risky => compare_bool(ctx.risky, *op, value),
+                PredicateField::Severity => compare_string(ctx.severity.as_deref(), *op, value),
+                PredicateField::Confidence => compare_string(ctx.confidence.as_deref(), *op, value),
+                PredicateField::Surface => compare_string(ctx.surface.as_deref(), *op, value),
+                PredicateField::Kind => compare_string(ctx.kind.as_deref(), *op, value),
+                PredicateField::Objects => compare_number(ctx.object_count as f64, *op, value),
+                PredicateField::Evidence => compare_number(ctx.evidence_count as f64, *op, value),
             },
         }
     }
@@ -848,6 +937,7 @@ pub fn execute_query_with_context(
                     | Query::FindingsCount
                     | Query::FindingsBySeverity(_)
                     | Query::FindingsByKind(_)
+                    | Query::FindingsByKindCount(_)
                     | Query::ObjectsCount
                     | Query::ObjectsList
                     | Query::ObjectsWithType(_)
@@ -912,6 +1002,17 @@ pub fn execute_query_with_context(
                     .collect();
                 let filtered = filter_findings(filtered, predicate);
                 Ok(QueryResult::Structure(json!(filtered)))
+            }
+            Query::FindingsByKindCount(kind) => {
+                let findings = run_detectors(ctx)?;
+                let filtered: Vec<sis_pdf_core::model::Finding> = findings
+                    .into_iter()
+                    .filter(|f| f.kind == *kind)
+                    .collect();
+                let filtered = filter_findings(filtered, predicate);
+                Ok(QueryResult::Scalar(ScalarValue::Number(
+                    filtered.len() as i64
+                )))
             }
             Query::Findings => {
                 let findings = run_detectors(ctx)?;
@@ -1686,6 +1787,12 @@ fn extract_embedded_files(
                     height: 0,
                     pixels: 0,
                     risky: false,
+                    severity: None,
+                    confidence: None,
+                    surface: None,
+                    kind: None,
+                    object_count: 0,
+                    evidence_count: 0,
                 };
                 if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
                     let name = embedded_filename(&st.dict)
@@ -1827,6 +1934,12 @@ fn collect_images(
             height,
             pixels,
             risky: format.risky(),
+            severity: None,
+            confidence: None,
+            surface: None,
+            kind: None,
+            object_count: 0,
+            evidence_count: 0,
         };
         if predicate.map(|pred| pred.evaluate(&ctx_meta)).unwrap_or(true) {
             images.push(ImageInfo {
@@ -2152,6 +2265,7 @@ fn ensure_predicate_supported(query: &Query) -> Result<()> {
         | Query::FindingsCount
         | Query::FindingsBySeverity(_)
         | Query::FindingsByKind(_)
+        | Query::FindingsByKindCount(_)
         | Query::ObjectsCount
         | Query::ObjectsList
         | Query::ObjectsWithType(_) => Ok(()),
@@ -2548,6 +2662,12 @@ fn predicate_context_for_entry(
                 height: 0,
                 pixels: 0,
                 risky: false,
+                severity: None,
+                confidence: None,
+                surface: None,
+                kind: None,
+                object_count: 0,
+                evidence_count: 0,
             }
         }
         PdfAtom::Stream(stream) => {
@@ -2579,6 +2699,12 @@ fn predicate_context_for_entry(
                 height: 0,
                 pixels: 0,
                 risky: false,
+                severity: None,
+                confidence: None,
+                surface: None,
+                kind: None,
+                object_count: 0,
+                evidence_count: 0,
             }
         }
         PdfAtom::Dict(dict) => PredicateContext {
@@ -2591,6 +2717,12 @@ fn predicate_context_for_entry(
             height: 0,
             pixels: 0,
             risky: false,
+            severity: None,
+            confidence: None,
+            surface: None,
+            kind: None,
+            object_count: 0,
+            evidence_count: 0,
         },
         PdfAtom::Array(_) => PredicateContext {
             length: 0,
@@ -2602,6 +2734,12 @@ fn predicate_context_for_entry(
             height: 0,
             pixels: 0,
             risky: false,
+            severity: None,
+            confidence: None,
+            surface: None,
+            kind: None,
+            object_count: 0,
+            evidence_count: 0,
         },
         atom => PredicateContext {
             length: 0,
@@ -2613,6 +2751,12 @@ fn predicate_context_for_entry(
             height: 0,
             pixels: 0,
             risky: false,
+            severity: None,
+            confidence: None,
+            surface: None,
+            kind: None,
+            object_count: 0,
+            evidence_count: 0,
         },
     }
 }
@@ -2629,6 +2773,12 @@ fn predicate_context_for_url(url: &str) -> PredicateContext {
         height: 0,
         pixels: 0,
         risky: false,
+        severity: None,
+        confidence: None,
+        surface: None,
+        kind: None,
+        object_count: 0,
+        evidence_count: 0,
     }
 }
 
@@ -2650,6 +2800,12 @@ fn predicate_context_for_event(event: &serde_json::Value) -> Option<PredicateCon
         height: 0,
         pixels: 0,
         risky: false,
+        severity: None,
+        confidence: None,
+        surface: None,
+        kind: None,
+        object_count: 0,
+        evidence_count: 0,
     })
 }
 
@@ -2665,6 +2821,12 @@ fn predicate_context_for_finding(finding: &sis_pdf_core::model::Finding) -> Pred
         height: 0,
         pixels: 0,
         risky: false,
+        severity: Some(severity_to_string(&finding.severity)),
+        confidence: Some(confidence_to_string(&finding.confidence)),
+        surface: Some(surface_to_string(&finding.surface)),
+        kind: Some(finding.kind.clone()),
+        object_count: finding.objects.len(),
+        evidence_count: finding.evidence.len(),
     }
 }
 
@@ -2675,6 +2837,34 @@ fn severity_to_string(severity: &sis_pdf_core::model::Severity) -> String {
         sis_pdf_core::model::Severity::Medium => "medium",
         sis_pdf_core::model::Severity::High => "high",
         sis_pdf_core::model::Severity::Critical => "critical",
+    }
+    .to_string()
+}
+
+fn confidence_to_string(confidence: &sis_pdf_core::model::Confidence) -> String {
+    match confidence {
+        sis_pdf_core::model::Confidence::Heuristic => "heuristic",
+        sis_pdf_core::model::Confidence::Probable => "probable",
+        sis_pdf_core::model::Confidence::Strong => "strong",
+    }
+    .to_string()
+}
+
+fn surface_to_string(surface: &sis_pdf_core::model::AttackSurface) -> String {
+    match surface {
+        sis_pdf_core::model::AttackSurface::FileStructure => "file_structure",
+        sis_pdf_core::model::AttackSurface::XRefTrailer => "xref_trailer",
+        sis_pdf_core::model::AttackSurface::ObjectStreams => "object_streams",
+        sis_pdf_core::model::AttackSurface::StreamsAndFilters => "streams_and_filters",
+        sis_pdf_core::model::AttackSurface::Actions => "actions",
+        sis_pdf_core::model::AttackSurface::JavaScript => "javascript",
+        sis_pdf_core::model::AttackSurface::Forms => "forms",
+        sis_pdf_core::model::AttackSurface::EmbeddedFiles => "embedded_files",
+        sis_pdf_core::model::AttackSurface::RichMedia3D => "rich_media_3d",
+        sis_pdf_core::model::AttackSurface::Images => "images",
+        sis_pdf_core::model::AttackSurface::CryptoSignatures => "crypto_signatures",
+        sis_pdf_core::model::AttackSurface::Metadata => "metadata",
+        sis_pdf_core::model::AttackSurface::ContentPhishing => "content_phishing",
     }
     .to_string()
 }
@@ -2792,6 +2982,12 @@ fn extract_obj_with_metadata(
                 height: 0,
                 pixels: 0,
                 risky: false,
+                severity: None,
+                confidence: None,
+                surface: None,
+                kind: None,
+                object_count: 0,
+                evidence_count: 0,
             };
             Some((data, ctx))
         }
@@ -2807,6 +3003,12 @@ fn extract_obj_with_metadata(
                 height: 0,
                 pixels: 0,
                 risky: false,
+                severity: None,
+                confidence: None,
+                surface: None,
+                kind: None,
+                object_count: 0,
+                evidence_count: 0,
             };
             Some((data, ctx))
         }
@@ -2828,6 +3030,12 @@ fn extract_obj_with_metadata(
                         height: 0,
                         pixels: 0,
                         risky: false,
+                        severity: None,
+                        confidence: None,
+                        surface: None,
+                        kind: None,
+                        object_count: 0,
+                        evidence_count: 0,
                     };
                     Some((data, ctx))
                 }
@@ -2844,6 +3052,12 @@ fn extract_obj_with_metadata(
                         height: 0,
                         pixels: 0,
                         risky: false,
+                        severity: None,
+                        confidence: None,
+                        surface: None,
+                        kind: None,
+                        object_count: 0,
+                        evidence_count: 0,
                     };
                     Some((data, ctx))
                 }
@@ -3058,6 +3272,12 @@ fn write_embedded_files(
                         height: 0,
                         pixels: 0,
                         risky: false,
+                        severity: None,
+                        confidence: None,
+                        surface: None,
+                        kind: None,
+                        object_count: 0,
+                        evidence_count: 0,
                     };
                     if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
                     // Get filename
@@ -4341,6 +4561,12 @@ mod tests {
             height: 0,
             pixels: 0,
             risky: false,
+            severity: None,
+            confidence: None,
+            surface: None,
+            kind: None,
+            object_count: 0,
+            evidence_count: 0,
         };
         assert!(expr.evaluate(&ctx));
     }
@@ -4358,8 +4584,54 @@ mod tests {
             height: 0,
             pixels: 0,
             risky: false,
+            severity: None,
+            confidence: None,
+            surface: None,
+            kind: None,
+            object_count: 0,
+            evidence_count: 0,
         };
         assert!(!expr.evaluate(&ctx));
+    }
+
+    #[test]
+    fn predicate_supports_finding_metadata_fields() {
+        let expr = parse_predicate(
+            "severity == 'high' AND confidence == 'strong' AND surface == 'actions' AND kind == 'launch_external_program' AND objects > 0 AND evidence >= 1",
+        )
+        .expect("predicate");
+        let ctx = PredicateContext {
+            length: 0,
+            filter: None,
+            type_name: "Finding".to_string(),
+            subtype: None,
+            entropy: 0.0,
+            width: 0,
+            height: 0,
+            pixels: 0,
+            risky: false,
+            severity: Some("high".to_string()),
+            confidence: Some("strong".to_string()),
+            surface: Some("actions".to_string()),
+            kind: Some("launch_external_program".to_string()),
+            object_count: 2,
+            evidence_count: 1,
+        };
+        assert!(expr.evaluate(&ctx));
+    }
+
+    #[test]
+    fn parse_query_supports_finding_shortcut_counts() {
+        let query = parse_query("embedded.executables.count").expect("query");
+        assert!(matches!(
+            query,
+            Query::FindingsByKindCount(ref kind) if kind == "embedded_executable_present"
+        ));
+        let query = parse_query("findings.kind.count embedded_executable_present").expect("query");
+        assert!(matches!(
+            query,
+            Query::FindingsByKindCount(ref kind) if kind == "embedded_executable_present"
+        ));
     }
 
     #[test]

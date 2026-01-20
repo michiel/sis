@@ -29,6 +29,8 @@ fn opts() -> ScanOptions {
 
 #[test]
 fn findings_schema_validation() {
+    let schema = load_findings_schema();
+    let compiled = jsonschema::JSONSchema::compile(&schema).expect("compile findings schema");
     let fixtures = [
         "tests/fixtures/embedded/embedded_exe_cve_2018_4990.pdf",
         "tests/fixtures/actions/launch_cve_2010_1240.pdf",
@@ -57,6 +59,14 @@ fn findings_schema_validation() {
             for key in ["kind", "title", "description", "severity", "confidence", "objects"] {
                 assert!(obj.contains_key(key), "missing key {}", key);
             }
+            let validation = compiled.validate(&value);
+            if let Err(errors) = validation {
+                let messages: Vec<String> = errors.map(|err| err.to_string()).collect();
+                panic!(
+                    "finding schema validation failed: {}",
+                    messages.join("; ")
+                );
+            }
         }
     }
 }
@@ -64,4 +74,11 @@ fn findings_schema_validation() {
 fn fixture_path(rel: &str) -> std::path::PathBuf {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     root.join(rel)
+}
+
+fn load_findings_schema() -> serde_json::Value {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("../../docs/findings-schema.json");
+    let bytes = std::fs::read(path).expect("read findings schema");
+    serde_json::from_slice(&bytes).expect("parse findings schema")
 }

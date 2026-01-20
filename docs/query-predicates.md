@@ -12,6 +12,7 @@ Predicate filtering is supported for:
 - `urls`, `urls.count`
 - `events`, `events.document`, `events.page`, `events.field`, `events.count`
 - `findings`, `findings.count`, `findings.kind`, `findings.high`, `findings.medium`, `findings.low`, `findings.info`, `findings.critical`
+- finding shortcut queries (for example `embedded.executables`, `launch.external`, `streams.high-entropy`) and their `.count` variants
 
 ## Fields
 
@@ -21,6 +22,12 @@ Predicates can use these fields:
 - `filter`: query-specific category (see mappings below)
 - `type`: high-level category name for the record
 - `subtype`: query-specific subtype (see mappings below)
+- `severity`: finding severity (findings queries only, alias for `filter`)
+- `confidence`: finding confidence level (findings queries only)
+- `surface`: finding attack surface (findings queries only)
+- `kind`: finding kind (findings queries only, alias for `subtype`)
+- `objects`: finding related object count (findings queries only)
+- `evidence`: finding evidence span count (findings queries only)
 - `width`: image width in pixels (image queries only)
 - `height`: image height in pixels (image queries only)
 - `pixels`: total pixel count (image queries only)
@@ -80,6 +87,12 @@ Predicates can use these fields:
 - `type`: `Finding`
 - `filter`: severity (`info`, `low`, `medium`, `high`, `critical`)
 - `subtype`: finding `kind`
+- `severity`: severity (`info`, `low`, `medium`, `high`, `critical`)
+- `confidence`: confidence (`heuristic`, `probable`, `strong`)
+- `surface`: attack surface (for example `embedded_files`, `actions`, `streams_and_filters`)
+- `kind`: finding kind (same as `subtype`)
+- `objects`: number of related objects
+- `evidence`: number of evidence spans
 
 ## Examples
 

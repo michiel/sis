@@ -26,6 +26,7 @@ sis query sample.pdf images
 sis query sample.pdf images.risky
 sis query sample.pdf launch
 sis query sample.pdf embedded.executables
+sis query sample.pdf embedded.executables.count
 sis query sample.pdf xfa.submit
 sis query sample.pdf filters.unusual
 sis query sample.pdf streams.high-entropy
@@ -74,7 +75,8 @@ sis query sample.pdf images --format jsonl
 
 ## Finding Shortcuts
 
-The following query shortcuts return `findings.kind` for common analysis paths:
+The following query shortcuts return `findings.kind` for common analysis paths.
+Add `.count` to return a numeric count.
 
 ```bash
 sis query sample.pdf embedded.executables

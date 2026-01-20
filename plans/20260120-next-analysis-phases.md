@@ -1551,7 +1551,7 @@ Update all documentation to reflect new findings, ensure JSON schema alignment, 
 #### JSON Schema Validation
 
 - [x] Verify all new findings emit valid JSON structure (schema validation test).
-- [ ] Deferred: validate against JSON schema (if schema exists, otherwise create one).
+- [x] Validate against JSON schema (added `docs/findings-schema.json`).
 - [ ] Deferred: test JSONL output format for all new findings.
 - [ ] Deferred: ensure metadata fields are consistently typed (strings, ints, bools, arrays).
 
@@ -1595,7 +1595,7 @@ Consolidate all query types added in Stages 1-6 into the unified query interface
 ### New Query Types Summary
 
 Query shortcuts are implemented as `findings.kind` aliases. Counts can be obtained via
-`findings.count --where "subtype == '<finding_id>'"`.
+`findings.count --where "subtype == '<finding_id>'"` or `<shortcut>.count`.
 
 #### Embedded Files & Launch (Stage 1)
 
