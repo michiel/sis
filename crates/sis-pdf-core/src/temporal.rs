@@ -205,7 +205,7 @@ mod tests {
     use super::*;
     use crate::model::Confidence;
     use crate::report::Report;
-    use crate::scan::{FontAnalysisOptions, ProfileFormat};
+    use crate::scan::{FontAnalysisOptions, ImageAnalysisOptions, ProfileFormat};
 
     fn test_opts() -> ScanOptions {
         ScanOptions {
@@ -227,7 +227,7 @@ mod tests {
             ir: false,
             ml_config: None,
             font_analysis: FontAnalysisOptions::default(),
-            image_analysis: sis_pdf_core::scan::ImageAnalysisOptions::default(),
+            image_analysis: ImageAnalysisOptions::default(),
             profile: false,
             profile_format: ProfileFormat::Text,
             group_chains: true,

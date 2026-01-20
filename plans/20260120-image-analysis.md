@@ -535,15 +535,15 @@ sis query --path corpus --glob "*.pdf" images.count --format jsonl
 
 ### Integration Checklist
 
-- [ ] Add Query enum variants for image queries
-- [ ] Implement `parse_query()` patterns for image query strings
-- [ ] Implement query handlers in `execute_query_with_context()`
-- [ ] Add `extract_images()` helper function
-- [ ] Add `write_image_files()` extraction function
-- [ ] Add image-specific predicate fields (width, height, pixels, risky)
-- [ ] Update REPL help text with image query examples
-- [ ] Add query tests for image queries
-- [ ] Document in `docs/query-interface.md`
+- [x] Add Query enum variants for image queries
+- [x] Implement `parse_query()` patterns for image query strings
+- [x] Implement query handlers in `execute_query_with_context()`
+- [x] Add `extract_images()` helper function
+- [x] Add `write_image_files()` extraction function
+- [x] Add image-specific predicate fields (width, height, pixels, risky)
+- [x] Update REPL help text with image query examples
+- [x] Add query tests for image queries
+- [x] Document in `docs/query-interface.md`
 
 ---
 
@@ -1162,66 +1162,60 @@ sis scan malware.pdf --deep  # Default behavior with full features
 **Goal:** Static analysis with finding integration and query support.
 
 #### Step 1: Crate Scaffolding
-- [ ] Create `crates/image-analysis/` directory
-- [ ] Add `lib.rs` with public API
-- [ ] Add `static.rs` for static heuristics
-- [ ] Add `dynamic.rs` stub (dynamic analysis deferred to Phase 2)
-- [ ] Define core types:
+- [x] Create `crates/image-analysis/` directory
+- [x] Add `lib.rs` with public API
+- [x] Add `static_analysis.rs` for static heuristics
+- [x] Add `dynamic.rs` for dynamic decoding
+- [x] Define core types:
   - `ImageStaticOptions`
   - `ImageStaticResult`
-  - `ImageInfo`
-  - `ImageFormat` enum
   - `ImageFinding` struct
 
 **Files to create:**
 - `crates/image-analysis/Cargo.toml`
 - `crates/image-analysis/src/lib.rs`
-- `crates/image-analysis/src/static.rs`
-- `crates/image-analysis/src/dynamic.rs` (stub)
-- `crates/image-analysis/src/types.rs`
+- `crates/image-analysis/src/static_analysis.rs`
+- `crates/image-analysis/src/dynamic.rs`
+- `crates/image-analysis/src/util.rs`
 
 #### Step 2: Static Image Enumeration
 
 **XObject discovery:**
-- [ ] Enumerate all objects with `/Type /XObject` and `/Subtype /Image`
-- [ ] Extract stream dictionaries for filter/dimension analysis
-- [ ] Extract `/Filter`, `/Width`, `/Height`, `/BitsPerComponent`, `/ColorSpace`
-- [ ] Track cross-reference to object stream positions for evidence
+- [x] Enumerate all objects with `/Type /XObject` and `/Subtype /Image`
+- [x] Extract stream dictionaries for filter/dimension analysis
+- [x] Extract `/Filter`, `/Width`, `/Height`, `/BitsPerComponent`, `/ColorSpace`
+- [x] Track object positions for evidence
 
 **XFA image discovery (conditional):**
-- [ ] Locate XFA forms via catalog `/AcroForm /XFA`
-- [ ] Parse XFA XML for `<image>` tags with `href` or embedded base64
-- [ ] Extract referenced objects or decode inline image data
-- [ ] **Files to modify:** `crates/sis-pdf-core/src/xfa.rs` (add image extraction if supported)
-- [ ] **Fallback:** If XFA parser doesn't support images yet:
-  - Emit finding `xfa_images_not_analyzed` with severity Info
-  - Defer full XFA image support to Phase 4
-  - Document limitation in findings.md
+- [x] Locate XFA forms via catalog `/AcroForm /XFA`
+- [x] Parse XFA XML for `<image>` tags with `href` or embedded base64
+- [x] Extract referenced objects or decode inline image data
+- [x] **Files to modify:** `crates/sis-pdf-pdf/src/xfa.rs` (add image extraction)
 
 **Files to modify:**
-- `crates/image-analysis/src/static.rs` (implement enumeration)
-- `crates/sis-pdf-core/src/xfa.rs` (optional XFA integration)
+- `crates/image-analysis/src/static_analysis.rs` (implement enumeration)
+- `crates/sis-pdf-pdf/src/xfa.rs` (XFA integration)
 
 #### Step 3: Static Heuristics
-- [ ] Flag presence of risky filters (`JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`)
-- [ ] Detect multi-filter chains and suspicious combinations
-- [ ] Flag anomalous dimensions:
+- [x] Flag presence of risky filters (`JBIG2Decode`, `JPXDecode`, `CCITTFaxDecode`)
+- [x] Detect multi-filter chains and suspicious combinations
+- [x] Flag anomalous dimensions:
   - Extreme size (>100 megapixels)
   - 1xN or Nx1 patterns (aspect ratio exploits)
   - Invalid ratios (0 width/height)
-- [ ] Sniff headers for JPEG/JP2/PNG when feasible (bounded reads, first 16 bytes)
-- [ ] Emit initial findings (Info/Low/Medium severity) with metadata
+- [x] Sniff headers for JPEG/JP2/PNG when feasible (bounded reads, first 16 bytes)
+- [x] Emit initial findings (Info/Low/Medium severity) with metadata
 
 **Finding kinds to add:**
-- `jbig2_image_present` (Medium)
-- `jpx_image_present` (Medium)
-- `ccitt_image_present` (Low)
-- `image_extreme_dimensions` (High)
-- `image_multi_filter` (Low)
-- `image_invalid_dimensions` (Medium)
+- `image.jbig2_present` (Low)
+- `image.jpx_present` (Low)
+- `image.ccitt_present` (Low)
+- `image.extreme_dimensions` (Medium)
+- `image.multiple_filters` (Low)
+- `image.pixel_count_excessive` (Medium)
 
 **Files to modify:**
-- `crates/image-analysis/src/static.rs` (implement heuristics)
+- `crates/image-analysis/src/static_analysis.rs` (implement heuristics)
 
 #### Step 5: Findings and Metadata
 
@@ -1233,24 +1227,23 @@ sis scan malware.pdf --deep  # Default behavior with full features
 - `ccitt_image_present` - CCITT Fax image detected
 - `image_extreme_dimensions` - Image with suspicious dimensions
 - `image_multi_filter` - Image with multiple compression filters
-- `image_invalid_dimensions` - Image with zero or negative dimensions
-- `xfa_image_present` - XFA form contains embedded image
-- `xfa_images_not_analyzed` - XFA images present but not analyzed (fallback)
+- `image.decode_failed` - Generic image decode failure
+- `image.decode_skipped` - Decode skipped due to policy limits
+- `image.decode_too_large` - Image exceeds configured decode limits
+- `image.xfa_image_present` - XFA form contains embedded image
 
 **Dynamic-only finding IDs (Phase 2):**
-- `jbig2_image_malformed` - JBIG2 decode failed
-- `jpx_image_malformed` - JPEG2000 decode failed
-- `image_decode_timeout` - Image decode exceeded timeout
-- `image_decode_too_large` - Image decode exceeded size limit
-- `jbig2_globals_present` - JBIG2 uses global segments
-- `jbig2_suspect_pattern` - JBIG2 structure matches exploit pattern
-- `jpx_header_anomaly` - JPEG2000 header has invalid box order
+- `image.jbig2_malformed` - JBIG2 decode failed
+- `image.jpx_malformed` - JPEG2000 decode failed
+- `image.jpeg_malformed` - JPEG decode failed
+- `image.ccitt_malformed` - CCITT decode failed
+- `image.xfa_decode_failed` - XFA image decode failed
 
 **Documentation:**
-- [ ] Add finding definitions to `docs/findings.md`
-- [ ] Define severity/impact/confidence for each
-- [ ] Add evidence expectations
-- [ ] Add remediation notes
+- [x] Add finding definitions to `docs/findings.md`
+- [x] Define severity/impact/confidence for each
+- [x] Add evidence expectations
+- [x] Add remediation notes
 
 **Files to modify:**
 - `docs/findings.md`
@@ -1258,31 +1251,31 @@ sis scan malware.pdf --deep  # Default behavior with full features
 #### Step 6: Integration
 
 **Scan pipeline integration:**
-- [ ] Wire static analysis into `crates/sis-pdf-core/src/runner.rs`
-- [ ] Add `AttackSurface::Images` to `crates/sis-pdf-core/src/model.rs`
-- [ ] Ensure findings are added to report/JSON/SARIF output
-- [ ] Add configuration flags to `ScanOptions`
-- [ ] Add CLI flags: `--no-image-static` (opt-out)
-- [ ] Update CLI help text
-- [ ] Update `docs/configuration.md`
-- [ ] Update `docs/analysis.md`
+- [x] Wire static analysis into detectors (image analysis detector)
+- [x] Add `AttackSurface::Images` to `crates/sis-pdf-core/src/model.rs`
+- [x] Ensure findings are added to report/JSON/SARIF output
+- [x] Add configuration flags to `ScanOptions`
+- [x] Add CLI flags: `--no-image-analysis`, `--no-image-dynamic`
+- [x] Update CLI help text
+- [x] Update `docs/configuration.md`
+- [x] Update `docs/analysis.md`
 
 **Query interface integration:**
-- [ ] Add Query enum variants to `crates/sis-pdf/src/commands/query.rs`
-- [ ] Implement query string parsing patterns
-- [ ] Implement query handlers in `execute_query_with_context()`
-- [ ] Add `extract_images()` helper
-- [ ] Add `write_image_files()` extraction function
-- [ ] Add image-specific predicate fields
-- [ ] Update REPL help text
-- [ ] Add query examples to `docs/query-interface.md`
+- [x] Add Query enum variants to `crates/sis-pdf/src/commands/query.rs`
+- [x] Implement query string parsing patterns
+- [x] Implement query handlers in `execute_query_with_context()`
+- [x] Add `extract_images()` helper
+- [x] Add `write_image_files()` extraction function
+- [x] Add image-specific predicate fields
+- [x] Update REPL help text
+- [x] Add query examples to `docs/query-interface.md`
 
 **Feature vector integration:**
-- [ ] Add `ImageFeatures` struct to `crates/sis-pdf-core/src/features.rs`
-- [ ] Update `FeatureVector` to include `images` field
-- [ ] Update `as_f32_vec()` to include 16 image features
-- [ ] Update `feature_names()` with image feature names
-- [ ] Implement `extract_image_features()` in FeatureExtractor
+- [x] Add `ImageFeatures` struct to `crates/sis-pdf-core/src/features.rs`
+- [x] Update `FeatureVector` to include `images` field
+- [x] Update `as_f32_vec()` to include 16 image features
+- [x] Update `feature_names()` with image feature names
+- [x] Implement `extract_image_features()` in FeatureExtractor
 
 **Files to modify:**
 - `crates/sis-pdf-core/src/runner.rs`
@@ -1296,11 +1289,11 @@ sis scan malware.pdf --deep  # Default behavior with full features
 - `docs/query-interface.md`
 
 #### Step 7: Basic Testing
-- [ ] Add unit tests for static heuristics (synthetic image objects)
-- [ ] Add tests for image enumeration
-- [ ] Add tests for finding generation
-- [ ] Add query integration tests
-- [ ] Add feature extraction tests
+- [x] Add unit tests for static heuristics (synthetic image objects)
+- [x] Add tests for image enumeration
+- [x] Add tests for finding generation
+- [x] Add query integration tests
+- [x] Add feature extraction tests
 
 **Files to create:**
 - `crates/image-analysis/tests/static_tests.rs`
@@ -1316,10 +1309,10 @@ sis scan malware.pdf --deep  # Default behavior with full features
 #### Step 4: Dynamic Analysis Implementation
 
 **Decoder integration:**
-- [ ] Add JPEG decoder (`jpeg-decoder` crate)
-- [ ] Add PNG decoder (`png` crate)
-- [ ] Add JBIG2 decoder (TBD - research available crates)
-- [ ] Add JPEG2000 decoder (TBD - research available crates)
+- [x] Add JPEG decoder (`jpeg-decoder` crate)
+- [x] Add PNG decoder (`png` crate)
+- [x] Add JBIG2 decoder (`hayro-jbig2` crate)
+- [x] Add JPEG2000 decoder (`hayro-jpeg2000` crate)
 
 **Hard limits implementation:**
 - [ ] Implement cooperative timeout checking (TimeoutChecker)
@@ -1329,10 +1322,10 @@ sis scan malware.pdf --deep  # Default behavior with full features
 - [ ] Implement auto-skip threshold (50 images default)
 
 **Findings emission:**
-- [ ] Emit findings for decode failures
-- [ ] Emit findings for malformed streams
-- [ ] Emit findings for resource limit violations
-- [ ] Record decode timing metadata
+- [x] Emit findings for decode failures
+- [x] Emit findings for malformed streams
+- [x] Emit findings for resource limit violations
+- [x] Record decode timing metadata
 
 **Files to modify:**
 - `crates/image-analysis/src/dynamic.rs` (full implementation)
@@ -1381,27 +1374,27 @@ sis scan malware.pdf --deep  # Default behavior with full features
 
 **Goal:** XFA support, performance optimization, CVE regression tests.
 
-- [ ] Implement full XFA image extraction (if not done in Phase 1)
+- [x] Implement full XFA image extraction (if not done in Phase 1)
 - [ ] Run performance profiling with `--profile`
 - [ ] Verify SLO compliance (static <1ms/image, dynamic within budget)
-- [ ] Generate CVE regression fixtures (synthetic)
-- [ ] Add CVE regression tests
+- [x] Generate CVE regression fixtures (synthetic)
+- [x] Add CVE regression tests
 - [ ] Add fuzzing infrastructure
 - [ ] Add YARA integration (optional)
 - [ ] Add differential analysis hooks (optional)
 
 **CVE Fixture Generation:**
 - [ ] Create `scripts/generate_image_fixtures.py`
-- [ ] Generate synthetic fixtures for CVE-2009-0658 (JBIG2)
-- [ ] Generate synthetic fixtures for CVE-2018-4990 (JPX)
-- [ ] Generate synthetic fixtures for CVE-2010-0188 (XFA/TIFF)
-- [ ] Generate synthetic fixtures for CVE-2021-30860 (JBIG2/FORCEDENTRY)
+- [x] Generate synthetic fixtures for CVE-2009-0658 (JBIG2)
+- [x] Generate synthetic fixtures for CVE-2018-4990 (JPX)
+- [x] Generate synthetic fixtures for CVE-2010-0188 (XFA/TIFF)
+- [x] Generate synthetic fixtures for CVE-2021-30860 (JBIG2/FORCEDENTRY)
 
 **Files to create:**
 - `scripts/generate_image_fixtures.py`
 - `crates/sis-pdf-core/tests/fixtures/images/cve-2009-0658-jbig2.pdf`
 - `crates/sis-pdf-core/tests/fixtures/images/cve-2018-4990-jpx.pdf`
-- `crates/sis-pdf-core/tests/fixtures/images/cve-2010-0188-xfa.pdf`
+- `crates/sis-pdf-core/tests/fixtures/images/cve-2010-0188-xfa-tiff.pdf`
 - `crates/sis-pdf-core/tests/fixtures/images/cve-2021-30860-jbig2.pdf`
 - `crates/image-analysis/fuzz/fuzz_targets/*.rs`
 
@@ -2066,15 +2059,15 @@ fn decode_in_subprocess(data: &[u8], format: ImageFormat) -> Result<DecodedImage
 ## Status
 
 ### Phase 1: MVP (Target: Week 1)
-- [ ] Step 1: Crate scaffolding
-- [ ] Step 2: Static image enumeration (XObject + XFA fallback)
-- [ ] Step 3: Static heuristics
-- [ ] Step 5: Findings and metadata
-- [ ] Step 6: Integration (scan + query + features)
-- [ ] Step 7: Basic testing
+- [x] Step 1: Crate scaffolding
+- [x] Step 2: Static image enumeration (XObject + XFA fallback)
+- [x] Step 3: Static heuristics
+- [x] Step 5: Findings and metadata
+- [x] Step 6: Integration (scan + query + features)
+- [x] Step 7: Basic testing
 
 ### Phase 2: Dynamic Analysis (Target: Week 2)
-- [ ] Step 4: Dynamic analysis (JPEG/PNG/JBIG2/JPX)
+- [x] Step 4: Dynamic analysis (JPEG/PNG/JBIG2/JPX)
 - [ ] Step 7: Extended testing
 
 ### Phase 3: Query Polish (Target: Week 3)
@@ -2082,9 +2075,9 @@ fn decode_in_subprocess(data: &[u8], format: ImageFormat) -> Result<DecodedImage
 - [ ] Documentation and examples
 
 ### Phase 4: Advanced Features (Target: Week 4)
-- [ ] Full XFA support (if applicable)
+- [x] Full XFA support (if applicable)
 - [ ] Performance profiling
-- [ ] CVE regression fixtures
+- [x] CVE regression fixtures
 - [ ] Fuzzing infrastructure
 - [ ] YARA integration (nice-to-have)
 
@@ -2094,15 +2087,15 @@ fn decode_in_subprocess(data: &[u8], format: ImageFormat) -> Result<DecodedImage
 
 - [ ] Static analysis runs by default with <1ms overhead per image
 - [ ] Dynamic analysis runs in deep mode with resource limits enforced
-- [ ] Query interface supports all image query types
-- [ ] Image extraction works in all decode modes
-- [ ] Feature vector includes 16 image features
-- [ ] Findings flow through report/JSON/SARIF/JSONL output
-- [ ] Chain scoring includes image context
+- [x] Query interface supports all image query types
+- [x] Image extraction works in all decode modes
+- [x] Feature vector includes 16 image features
+- [x] Findings flow through report/JSON/SARIF/JSONL output
+- [x] Chain scoring includes image context
 - [ ] All decoders fuzzed without panics
 - [ ] Performance SLOs met (<5% overhead for static, <5s budget for dynamic)
-- [ ] Documentation complete (findings.md, query-interface.md, configuration.md)
-- [ ] CVE regression tests pass
+- [x] Documentation complete (findings.md, query-interface.md, configuration.md)
+- [x] CVE regression tests pass
 
 ---
 

@@ -1,8 +1,8 @@
-// Extended Feature Vector with 341 features
+// Extended Feature Vector with 358 features
 //
-// Expands from 35 to 341 features by incorporating all detector findings:
-// - Legacy features (35): General, Structural, Behavioral, Content, Graph
-// - Attack surface distribution (12)
+// Expands from 51 to 358 features by incorporating all detector findings:
+// - Legacy features (51): General, Structural, Behavioral, Content, Graph, Images
+// - Attack surface distribution (13)
 // - Severity distribution (15)
 // - Confidence distribution (9)
 // - Finding presence/counts (142: 71 binary + 71 counts)
@@ -14,20 +14,20 @@
 // - Crypto signals (10)
 // - Embedded content signals (15)
 //
-// Total: 35 + 306 = 341 features
+// Total: 51 + 307 = 358 features
 
 use crate::features::FeatureVector;
 use crate::model::{AttackSurface, Confidence, Finding, Severity};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Extended feature vector with 341 features
+/// Extended feature vector with 358 features
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtendedFeatureVector {
-    /// Legacy features (35)
+    /// Legacy features (51)
     pub legacy: FeatureVector,
 
-    /// Attack surface distribution (12 features)
+    /// Attack surface distribution (13 features)
     pub attack_surfaces: AttackSurfaceFeatures,
 
     /// Severity distribution (15 features)
@@ -65,7 +65,7 @@ pub struct ExtendedFeatureVector {
 }
 
 impl ExtendedFeatureVector {
-    /// Convert to flat f32 vector (341 features)
+    /// Convert to flat f32 vector (358 features)
     pub fn as_f32_vec(&self) -> Vec<f32> {
         let mut vec = self.legacy.as_f32_vec();
         vec.extend(self.attack_surfaces.as_f32_vec());
@@ -103,7 +103,7 @@ impl ExtendedFeatureVector {
         }
     }
 
-    /// Get feature names (341 names)
+    /// Get feature names (358 names)
     pub fn feature_names() -> Vec<String> {
         let mut names = crate::features::feature_names()
             .into_iter()
@@ -142,6 +142,7 @@ impl Default for ExtendedFeatureVector {
                 behavioral: Default::default(),
                 content: Default::default(),
                 graph: Default::default(),
+                images: Default::default(),
             },
             attack_surfaces: Default::default(),
             severity_dist: Default::default(),
@@ -174,6 +175,7 @@ pub struct AttackSurfaceFeatures {
     pub forms_count: f32,
     pub embedded_files_count: f32,
     pub richmedia_3d_count: f32,
+    pub images_count: f32,
     pub crypto_signatures_count: f32,
     pub metadata_count: f32,
     pub content_phishing_count: f32,
@@ -191,6 +193,7 @@ impl AttackSurfaceFeatures {
             self.forms_count,
             self.embedded_files_count,
             self.richmedia_3d_count,
+            self.images_count,
             self.crypto_signatures_count,
             self.metadata_count,
             self.content_phishing_count,
@@ -208,6 +211,7 @@ impl AttackSurfaceFeatures {
             "attack_surfaces.forms_count",
             "attack_surfaces.embedded_files_count",
             "attack_surfaces.richmedia_3d_count",
+            "attack_surfaces.images_count",
             "attack_surfaces.crypto_signatures_count",
             "attack_surfaces.metadata_count",
             "attack_surfaces.content_phishing_count",
@@ -1386,7 +1390,7 @@ impl EmbeddedContentFeatures {
 
 use crate::scan::ScanContext;
 
-/// Get extended feature names (341 names)
+/// Get extended feature names (358 names)
 pub fn extended_feature_names() -> Vec<String> {
     let mut names = crate::features::feature_names()
         .into_iter()
@@ -1409,7 +1413,7 @@ pub fn extended_feature_names() -> Vec<String> {
 
 /// Extract extended features from scan context and findings
 pub fn extract_extended_features(ctx: &ScanContext, findings: &[Finding]) -> ExtendedFeatureVector {
-    // Extract legacy features (35)
+    // Extract legacy features (51)
     let legacy = crate::features::FeatureExtractor::extract(ctx);
 
     // Extract new feature groups from findings
@@ -1457,6 +1461,7 @@ fn extract_attack_surface_features(findings: &[Finding]) -> AttackSurfaceFeature
             AttackSurface::Forms => &mut features.forms_count,
             AttackSurface::EmbeddedFiles => &mut features.embedded_files_count,
             AttackSurface::RichMedia3D => &mut features.richmedia_3d_count,
+            AttackSurface::Images => &mut features.images_count,
             AttackSurface::CryptoSignatures => &mut features.crypto_signatures_count,
             AttackSurface::Metadata => &mut features.metadata_count,
             AttackSurface::ContentPhishing => &mut features.content_phishing_count,
@@ -2895,11 +2900,11 @@ mod tests {
         let features = ExtendedFeatureVector::default();
         let vec = features.as_f32_vec();
 
-        // 35 (legacy) + 12 (attack surfaces) + 15 (severity) + 9 (confidence) +
+        // 51 (legacy) + 13 (attack surfaces) + 15 (severity) + 9 (confidence) +
         // 71 (presence) + 71 (counts) + 30 (JS) + 20 (URI) + 15 (content) +
         // 10 (supply chain) + 20 (structural) + 10 (crypto) + 15 (embedded)
-        // = 35 + 306 = 341
-        assert_eq!(vec.len(), 341, "Expected 341 features, got {}", vec.len());
+        // = 51 + 307 = 358
+        assert_eq!(vec.len(), 358, "Expected 358 features, got {}", vec.len());
     }
 
     #[test]
@@ -2915,7 +2920,7 @@ mod tests {
             names.len(),
             values.len()
         );
-        assert_eq!(names.len(), 341, "Expected 341 feature names");
+        assert_eq!(names.len(), 358, "Expected 358 feature names");
     }
 
     #[test]
@@ -2923,7 +2928,7 @@ mod tests {
         let features = ExtendedFeatureVector::default();
         let map = features.to_named_map();
 
-        assert_eq!(map.len(), 341, "Named map should have 341 entries");
+        assert_eq!(map.len(), 358, "Named map should have 358 entries");
         assert!(map.contains_key("general.file_size"));
         assert!(map.contains_key("js_signals.max_obfuscation_score"));
         assert!(map.contains_key("uri_signals.total_count"));
@@ -3322,18 +3327,18 @@ mod tests {
 
     #[test]
     fn test_extended_feature_vector_update_count() {
-        // This test verifies we have 341 features total
+        // This test verifies we have 358 features total
         let features = ExtendedFeatureVector::default();
         let vec = features.as_f32_vec();
 
-        // 35 (legacy) + 12 (attack surfaces - added ContentPhishing) + 15 (severity) + 9 (confidence) +
+        // 51 (legacy) + 13 (attack surfaces - added Images) + 15 (severity) + 9 (confidence) +
         // 71 (presence) + 71 (counts) + 30 (JS) + 28 (URI) + 15 (content) +
         // 10 (supply chain) + 20 (structural) + 10 (crypto) + 15 (embedded)
-        // = 35 + 306 = 341
+        // = 51 + 307 = 358
         assert_eq!(
             vec.len(),
-            341,
-            "Expected 341 features total, got {}",
+            358,
+            "Expected 358 features total, got {}",
             vec.len()
         );
     }

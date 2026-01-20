@@ -279,6 +279,10 @@ enum Command {
         no_js_ast: bool,
         #[arg(long)]
         no_js_sandbox: bool,
+        #[arg(long, help = "Disable image analysis (static and dynamic)")]
+        no_image_analysis: bool,
+        #[arg(long, help = "Disable dynamic image decoding (deep scan)")]
+        no_image_dynamic: bool,
         #[arg(
             long,
             help = "Disable font CVE signature matching (enabled by default)"
@@ -315,6 +319,10 @@ enum Command {
         strict: bool,
         #[arg(long)]
         ir: bool,
+        #[arg(long, help = "Disable image analysis (static and dynamic)")]
+        no_image_analysis: bool,
+        #[arg(long, help = "Disable dynamic image decoding (deep scan)")]
+        no_image_dynamic: bool,
         #[arg(short, long)]
         out: Option<PathBuf>,
         #[arg(long)]
@@ -818,6 +826,8 @@ fn main() -> Result<()> {
             ml_batch_size,
             no_js_ast,
             no_js_sandbox,
+            no_image_analysis,
+            no_image_dynamic,
             no_font_signatures,
             font_signature_dir,
         } => run_scan(
@@ -874,6 +884,8 @@ fn main() -> Result<()> {
             ml_batch_size,
             !no_js_ast,
             !no_js_sandbox,
+            !no_image_analysis,
+            !no_image_dynamic,
             !no_font_signatures,
             font_signature_dir.as_deref(),
         ),
@@ -916,6 +928,8 @@ fn main() -> Result<()> {
             ml_batch_size,
             no_js_ast,
             no_js_sandbox,
+            no_image_analysis,
+            no_image_dynamic,
         } => run_report(
             &pdf,
             deep,
@@ -948,6 +962,8 @@ fn main() -> Result<()> {
             ml_batch_size,
             !no_js_ast,
             !no_js_sandbox,
+            !no_image_analysis,
+            !no_image_dynamic,
         ),
         Command::Explain { pdf, finding_id } => run_explain(&pdf, &finding_id),
         Command::Stream(cmd) => match cmd {
@@ -2975,6 +2991,13 @@ fn print_repl_help() {
     println!("  urls.count         - URL count");
     println!("  embedded           - List embedded files");
     println!("  embedded.count     - Embedded file count");
+    println!("  images             - List images");
+    println!("  images.count       - Image count");
+    println!("  images.jbig2       - JBIG2 images");
+    println!("  images.jpx         - JPEG2000 images");
+    println!("  images.ccitt       - CCITT images");
+    println!("  images.risky       - Risky image formats");
+    println!("  images.malformed   - Malformed image decodes (requires --deep)");
     println!();
     println!("Finding queries:");
     println!("  findings           - List all findings");
@@ -3072,6 +3095,8 @@ fn run_scan(
     ml_batch_size: Option<usize>,
     js_ast: bool,
     js_sandbox: bool,
+    image_analysis_enabled: bool,
+    image_dynamic_enabled: bool,
     font_signatures_enabled: bool,
     font_signature_dir: Option<&std::path::Path>,
 ) -> Result<()> {
@@ -3129,7 +3154,11 @@ fn run_scan(
             signature_matching_enabled: font_signatures_enabled,
             signature_directory: font_signature_dir.map(|p| p.to_string_lossy().to_string()),
         },
-        image_analysis: sis_pdf_core::scan::ImageAnalysisOptions::default(),
+        image_analysis: sis_pdf_core::scan::ImageAnalysisOptions {
+            enabled: image_analysis_enabled,
+            dynamic_enabled: image_analysis_enabled && image_dynamic_enabled,
+            ..sis_pdf_core::scan::ImageAnalysisOptions::default()
+        },
         profile: runtime_profile,
         profile_format: match runtime_profile_format {
             "json" => sis_pdf_core::scan::ProfileFormat::Json,
@@ -3826,6 +3855,8 @@ fn run_report(
     ml_batch_size: Option<usize>,
     js_ast: bool,
     js_sandbox: bool,
+    image_analysis_enabled: bool,
+    image_dynamic_enabled: bool,
 ) -> Result<()> {
     let mmap = mmap_file(pdf)?;
     let diff_parser = diff_parser || strict;
@@ -3869,7 +3900,11 @@ fn run_report(
         ir,
         ml_config: None,
         font_analysis: sis_pdf_core::scan::FontAnalysisOptions::default(),
-        image_analysis: sis_pdf_core::scan::ImageAnalysisOptions::default(),
+        image_analysis: sis_pdf_core::scan::ImageAnalysisOptions {
+            enabled: image_analysis_enabled,
+            dynamic_enabled: image_analysis_enabled && image_dynamic_enabled,
+            ..sis_pdf_core::scan::ImageAnalysisOptions::default()
+        },
         profile: false,
         profile_format: sis_pdf_core::scan::ProfileFormat::Text,
         group_chains,

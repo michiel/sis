@@ -181,6 +181,20 @@ All `scan` configuration options correspond to command-line flags.
 | `font-analysis.dynamic_timeout_ms` | integer | Timeout for dynamic loading (ms) | N/A |
 | `font-analysis.max_fonts` | integer | Maximum fonts to analyze | N/A |
 
+### Image Analysis Options
+
+| Configuration Key | Type | Description | CLI Flag |
+|------------------|------|-------------|----------|
+| `image-analysis.enabled` | boolean | Enable image analysis | `--no-image-analysis` to disable |
+| `image-analysis.dynamic_enabled` | boolean | Enable dynamic image decoding | `--no-image-dynamic` to disable |
+| `image-analysis.max_pixels` | integer | Maximum pixels per image decode | N/A |
+| `image-analysis.max_decode_bytes` | integer | Maximum decode bytes per image | N/A |
+| `image-analysis.timeout_ms` | integer | Per-image decode timeout in milliseconds | N/A |
+| `image-analysis.max_header_bytes` | integer | Max bytes to inspect from image headers | N/A |
+| `image-analysis.max_dimension` | integer | Maximum width or height for images | N/A |
+| `image-analysis.max_xfa_decode_bytes` | integer | Maximum bytes for XFA image decoding | N/A |
+| `image-analysis.max_filter_chain_depth` | integer | Max filter chain depth for XFA decoding | N/A |
+
 ## Example Configurations
 
 ### Example 1: Security-Focused Profile
@@ -198,6 +212,10 @@ profiles:
       font-analysis:
         enabled: true
         max_fonts: 512
+      image-analysis:
+        enabled: true
+        dynamic_enabled: true
+        max_pixels: 100000000
 ```
 
 ### Example 2: Performance-Optimized Profile

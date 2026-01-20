@@ -614,6 +614,182 @@ For implementation details, see `plans/review-evasive.md` and `plans/evasion-imp
   - Meaning: malformed or oversized ICC profiles can stress parsers.
   - Chain usage: used as a payload signal for renderer exploitation.
 
+## image.ccitt_malformed
+
+- ID: `image.ccitt_malformed`
+- Label: CCITT decode failed
+- Description: CCITT image data failed to decode.
+- Tags: image, decoder
+- Details:
+  - Relevance: decoder attack surface.
+  - Meaning: CCITT payload may be malformed or exploit-like.
+  - Chain usage: used as a payload signal for image decoder risk.
+
+## image.ccitt_present
+
+- ID: `image.ccitt_present`
+- Label: CCITT image present
+- Description: CCITT-compressed image data detected.
+- Tags: image, decoder
+- Details:
+  - Relevance: decoder attack surface.
+  - Meaning: CCITT images increase decoding complexity.
+  - Chain usage: used as supporting context for payload delivery.
+
+## image.decode_failed
+
+- ID: `image.decode_failed`
+- Label: Image decode failed
+- Description: Image stream failed to decode.
+- Tags: image, decoder
+- Details:
+  - Relevance: decoder attack surface.
+  - Meaning: malformed or unsupported image data.
+  - Chain usage: used as a payload indicator for decoder anomalies.
+
+## image.decode_skipped
+
+- ID: `image.decode_skipped`
+- Label: Image decode skipped
+- Description: Image decode was skipped due to policy or format limits.
+- Tags: image, decoder
+- Details:
+  - Relevance: analysis coverage.
+  - Meaning: decoding was intentionally skipped.
+  - Chain usage: used to explain missing decoder evidence.
+
+## image.decode_too_large
+
+- ID: `image.decode_too_large`
+- Label: Image decode skipped due to size
+- Description: Image exceeded configured decode limits.
+- Tags: image, resource
+- Details:
+  - Relevance: resource constraints.
+  - Meaning: decoding was skipped to protect runtime limits.
+  - Chain usage: used to explain skipped payload analysis.
+
+## image.extreme_dimensions
+
+- ID: `image.extreme_dimensions`
+- Label: Image dimensions exceed limits
+- Description: Image dimensions exceed configured thresholds.
+- Tags: image, resource
+- Details:
+  - Relevance: resource abuse or exploit shaping.
+  - Meaning: oversized images can stress decoders.
+  - Chain usage: used as a payload signal for decoder abuse.
+
+## image.jbig2_malformed
+
+- ID: `image.jbig2_malformed`
+- Label: JBIG2 decode failed
+- Description: JBIG2 image data failed to decode.
+- Tags: image, decoder
+- Details:
+  - Relevance: decoder attack surface.
+  - Meaning: JBIG2 payload may be malformed or exploit-like.
+  - Chain usage: used as a payload signal for high-risk decoder issues.
+
+## image.jbig2_present
+
+- ID: `image.jbig2_present`
+- Label: JBIG2 image present
+- Description: JBIG2-compressed image data detected.
+- Tags: image, decoder
+- Details:
+  - Relevance: decoder attack surface.
+  - Meaning: JBIG2 images increase decoding risk.
+  - Chain usage: used as supporting context for payload delivery.
+
+## image.jpeg_malformed
+
+- ID: `image.jpeg_malformed`
+- Label: JPEG decode failed
+- Description: JPEG image data failed to decode.
+- Tags: image, decoder
+- Details:
+  - Relevance: decoder attack surface.
+  - Meaning: JPEG payload may be malformed or exploit-like.
+  - Chain usage: used as a payload signal for decoder anomalies.
+
+## image.jpx_malformed
+
+- ID: `image.jpx_malformed`
+- Label: JPEG2000 decode failed
+- Description: JPEG2000 image data failed to decode.
+- Tags: image, decoder
+- Details:
+  - Relevance: decoder attack surface.
+  - Meaning: JPX payload may be malformed or exploit-like.
+  - Chain usage: used as a payload signal for high-risk decoder issues.
+
+## image.jpx_present
+
+- ID: `image.jpx_present`
+- Label: JPEG2000 image present
+- Description: JPEG2000-compressed image data detected.
+- Tags: image, decoder
+- Details:
+  - Relevance: decoder attack surface.
+  - Meaning: JPX images increase decoding risk.
+  - Chain usage: used as supporting context for payload delivery.
+
+## image.multiple_filters
+
+- ID: `image.multiple_filters`
+- Label: Image uses multiple filters
+- Description: Image stream uses a filter chain.
+- Tags: image, evasion
+- Details:
+  - Relevance: decoder complexity.
+  - Meaning: filter chains can obscure payloads.
+  - Chain usage: used as a payload obfuscation signal.
+
+## image.pixel_count_excessive
+
+- ID: `image.pixel_count_excessive`
+- Label: Image pixel count exceeds limits
+- Description: Image pixel count exceeds configured thresholds.
+- Tags: image, resource
+- Details:
+  - Relevance: resource abuse or exploit shaping.
+  - Meaning: excessive pixels can stress decoders.
+  - Chain usage: used as a payload signal for decoder abuse.
+
+## image.suspect_strip_dimensions
+
+- ID: `image.suspect_strip_dimensions`
+- Label: Image has suspect strip dimensions
+- Description: Image uses thin strip dimensions that may hide payloads.
+- Tags: image, evasion
+- Details:
+  - Relevance: steganography or payload concealment.
+  - Meaning: extreme aspect ratios can hide data.
+  - Chain usage: used as a payload obfuscation signal.
+
+## image.xfa_decode_failed
+
+- ID: `image.xfa_decode_failed`
+- Label: XFA image decode failed
+- Description: Image embedded in XFA content failed to decode.
+- Tags: image, forms
+- Details:
+  - Relevance: form rendering risk.
+  - Meaning: malformed XFA image content.
+  - Chain usage: used as a payload signal for XFA processing.
+
+## image.xfa_image_present
+
+- ID: `image.xfa_image_present`
+- Label: XFA image present
+- Description: Image embedded in XFA form data.
+- Tags: image, forms
+- Details:
+  - Relevance: form rendering risk.
+  - Meaning: XFA images expand rendering attack surface.
+  - Chain usage: used as supporting context for XFA payloads.
+
 ## incremental_update_chain
 
 - ID: `incremental_update_chain`

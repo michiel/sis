@@ -26,6 +26,7 @@ pub mod font_exploits;
 pub mod font_external_ref;
 pub mod icc_profiles;
 pub mod ir_graph_static;
+pub mod image_analysis;
 pub mod js_polymorphic;
 #[cfg(feature = "js-sandbox")]
 pub mod js_sandbox;
@@ -97,6 +98,7 @@ pub fn default_detectors_with_settings(settings: DetectorSettings) -> Vec<Box<dy
         Box::new(FontMatrixDetector),
         Box::new(font_exploits::FontExploitDetector),
         Box::new(font_external_ref::FontExternalReferenceDetector),
+        Box::new(image_analysis::ImageAnalysisDetector),
         Box::new(EmbeddedFileDetector),
         Box::new(RichMediaDetector),
         Box::new(ThreeDDetector),
@@ -1021,22 +1023,6 @@ fn xfa_payloads_from_obj(
     out
 }
 
-fn strip_cdata(bytes: &[u8]) -> &[u8] {
-    let lower: Vec<u8> = bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
-    let start = b"<![cdata[";
-    let end = b"]]>";
-    let Some(start_pos) = find_subslice(&lower, start) else {
-        return bytes;
-    };
-    let after_start = start_pos + start.len();
-    let Some(end_pos) = find_subslice(&lower[after_start..], end) else {
-        return bytes;
-    };
-    let content_start = after_start;
-    let content_end = after_start + end_pos;
-    &bytes[content_start..content_end]
-}
-
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
@@ -1044,18 +1030,6 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
-}
-
-fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
-    let mut start = 0usize;
-    let mut end = bytes.len();
-    while start < end && bytes[start].is_ascii_whitespace() {
-        start += 1;
-    }
-    while end > start && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-    &bytes[start..end]
 }
 
 fn js_payload_candidates_from_embedded_stream(

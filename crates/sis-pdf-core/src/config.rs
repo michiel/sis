@@ -16,6 +16,13 @@ const MAX_RECURSION_DEPTH: usize = 512;
 const MAX_FOCUS_DEPTH: usize = 64;
 const MAX_FONTS: usize = 10_000;
 const MAX_FONT_DYNAMIC_TIMEOUT_MS: u64 = 10_000;
+const MAX_IMAGE_PIXELS: u64 = 1_000_000_000;
+const MAX_IMAGE_DECODE_BYTES: usize = 512 * 1024 * 1024;
+const MAX_IMAGE_TIMEOUT_MS: u64 = 10_000;
+const MAX_IMAGE_HEADER_BYTES: usize = 1024 * 1024;
+const MAX_IMAGE_DIMENSION: u32 = 100_000;
+const MAX_IMAGE_XFA_DECODE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_IMAGE_FILTER_CHAIN_DEPTH: usize = 32;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -63,6 +70,8 @@ pub struct ScanConfig {
     pub ml_provider_info: Option<bool>,
     #[serde(rename = "font-analysis")]
     pub font_analysis: Option<FontAnalysisConfig>,
+    #[serde(rename = "image-analysis")]
+    pub image_analysis: Option<ImageAnalysisConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -71,6 +80,19 @@ pub struct FontAnalysisConfig {
     pub dynamic_enabled: Option<bool>,
     pub dynamic_timeout_ms: Option<u64>,
     pub max_fonts: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ImageAnalysisConfig {
+    pub enabled: Option<bool>,
+    pub dynamic_enabled: Option<bool>,
+    pub max_pixels: Option<u64>,
+    pub max_decode_bytes: Option<usize>,
+    pub timeout_ms: Option<u64>,
+    pub max_header_bytes: Option<usize>,
+    pub max_dimension: Option<u32>,
+    pub max_xfa_decode_bytes: Option<usize>,
+    pub max_filter_chain_depth: Option<usize>,
 }
 
 impl Config {
@@ -408,6 +430,193 @@ fn apply_scan(scan: &ScanConfig, opts: &mut ScanOptions) {
             } else {
                 opts.font_analysis.max_fonts = max_fonts;
             }
+        }
+    }
+
+    if let Some(image_cfg) = &scan.image_analysis {
+        if let Some(enabled) = image_cfg.enabled {
+            opts.image_analysis.enabled = enabled;
+        }
+        if let Some(enabled) = image_cfg.dynamic_enabled {
+            opts.image_analysis.dynamic_enabled = enabled;
+        }
+        if let Some(max_pixels) = image_cfg.max_pixels {
+            if max_pixels == 0 || max_pixels > MAX_IMAGE_PIXELS {
+                SecurityEvent {
+                    level: Level::WARN,
+                    domain: SecurityDomain::Detection,
+                    severity: crate::model::Severity::Low,
+                    kind: "invalid_image_max_pixels",
+                    policy: None,
+                    object_id: None,
+                    object_type: None,
+                    vector: None,
+                    technique: None,
+                    confidence: None,
+                    message: "Invalid image max_pixels in config",
+                }
+                .emit();
+                warn!(
+                    value = max_pixels,
+                    limit = MAX_IMAGE_PIXELS,
+                    "Invalid image max_pixels in config"
+                );
+            } else {
+                opts.image_analysis.max_pixels = max_pixels;
+            }
+        }
+        if let Some(max_bytes) = image_cfg.max_decode_bytes {
+            if max_bytes == 0 || max_bytes > MAX_IMAGE_DECODE_BYTES {
+                SecurityEvent {
+                    level: Level::WARN,
+                    domain: SecurityDomain::Detection,
+                    severity: crate::model::Severity::Low,
+                    kind: "invalid_image_max_decode_bytes",
+                    policy: None,
+                    object_id: None,
+                    object_type: None,
+                    vector: None,
+                    technique: None,
+                    confidence: None,
+                    message: "Invalid image max_decode_bytes in config",
+                }
+                .emit();
+                warn!(
+                    value = max_bytes,
+                    limit = MAX_IMAGE_DECODE_BYTES,
+                    "Invalid image max_decode_bytes in config"
+                );
+            } else {
+                opts.image_analysis.max_decode_bytes = max_bytes;
+            }
+        }
+        if let Some(timeout) = image_cfg.timeout_ms {
+            if timeout == 0 || timeout > MAX_IMAGE_TIMEOUT_MS {
+                SecurityEvent {
+                    level: Level::WARN,
+                    domain: SecurityDomain::Detection,
+                    severity: crate::model::Severity::Low,
+                    kind: "invalid_image_timeout_ms",
+                    policy: None,
+                    object_id: None,
+                    object_type: None,
+                    vector: None,
+                    technique: None,
+                    confidence: None,
+                    message: "Invalid image timeout_ms in config",
+                }
+                .emit();
+                warn!(
+                    value = timeout,
+                    limit = MAX_IMAGE_TIMEOUT_MS,
+                    "Invalid image timeout_ms in config"
+                );
+            } else {
+                opts.image_analysis.timeout_ms = timeout;
+            }
+        }
+        if let Some(max_header_bytes) = image_cfg.max_header_bytes {
+            if max_header_bytes == 0 || max_header_bytes > MAX_IMAGE_HEADER_BYTES {
+                SecurityEvent {
+                    level: Level::WARN,
+                    domain: SecurityDomain::Detection,
+                    severity: crate::model::Severity::Low,
+                    kind: "invalid_image_max_header_bytes",
+                    policy: None,
+                    object_id: None,
+                    object_type: None,
+                    vector: None,
+                    technique: None,
+                    confidence: None,
+                    message: "Invalid image max_header_bytes in config",
+                }
+                .emit();
+                warn!(
+                    value = max_header_bytes,
+                    limit = MAX_IMAGE_HEADER_BYTES,
+                    "Invalid image max_header_bytes in config"
+                );
+            } else {
+                opts.image_analysis.max_header_bytes = max_header_bytes;
+            }
+        }
+        if let Some(max_dimension) = image_cfg.max_dimension {
+            if max_dimension == 0 || max_dimension > MAX_IMAGE_DIMENSION {
+                SecurityEvent {
+                    level: Level::WARN,
+                    domain: SecurityDomain::Detection,
+                    severity: crate::model::Severity::Low,
+                    kind: "invalid_image_max_dimension",
+                    policy: None,
+                    object_id: None,
+                    object_type: None,
+                    vector: None,
+                    technique: None,
+                    confidence: None,
+                    message: "Invalid image max_dimension in config",
+                }
+                .emit();
+                warn!(
+                    value = max_dimension,
+                    limit = MAX_IMAGE_DIMENSION,
+                    "Invalid image max_dimension in config"
+                );
+            } else {
+                opts.image_analysis.max_dimension = max_dimension;
+            }
+        }
+        if let Some(max_bytes) = image_cfg.max_xfa_decode_bytes {
+            if max_bytes == 0 || max_bytes > MAX_IMAGE_XFA_DECODE_BYTES {
+                SecurityEvent {
+                    level: Level::WARN,
+                    domain: SecurityDomain::Detection,
+                    severity: crate::model::Severity::Low,
+                    kind: "invalid_image_max_xfa_decode_bytes",
+                    policy: None,
+                    object_id: None,
+                    object_type: None,
+                    vector: None,
+                    technique: None,
+                    confidence: None,
+                    message: "Invalid image max_xfa_decode_bytes in config",
+                }
+                .emit();
+                warn!(
+                    value = max_bytes,
+                    limit = MAX_IMAGE_XFA_DECODE_BYTES,
+                    "Invalid image max_xfa_decode_bytes in config"
+                );
+            } else {
+                opts.image_analysis.max_xfa_decode_bytes = max_bytes;
+            }
+        }
+        if let Some(depth) = image_cfg.max_filter_chain_depth {
+            if depth == 0 || depth > MAX_IMAGE_FILTER_CHAIN_DEPTH {
+                SecurityEvent {
+                    level: Level::WARN,
+                    domain: SecurityDomain::Detection,
+                    severity: crate::model::Severity::Low,
+                    kind: "invalid_image_max_filter_chain_depth",
+                    policy: None,
+                    object_id: None,
+                    object_type: None,
+                    vector: None,
+                    technique: None,
+                    confidence: None,
+                    message: "Invalid image max_filter_chain_depth in config",
+                }
+                .emit();
+                warn!(
+                    value = depth,
+                    limit = MAX_IMAGE_FILTER_CHAIN_DEPTH,
+                    "Invalid image max_filter_chain_depth in config"
+                );
+            } else {
+                opts.image_analysis.max_filter_chain_depth = depth;
+            }
+        }
+        if !opts.image_analysis.enabled {
+            opts.image_analysis.dynamic_enabled = false;
         }
     }
 }

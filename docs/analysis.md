@@ -28,10 +28,12 @@ Outputs:
 - Enabled with `--deep` or for specific detectors.
 - Decodes selected streams with budget checks.
 - Measures filter chains and decompression ratios.
+- Performs bounded image decoding for high-risk formats (JBIG2, JPX, JPEG, PNG).
 
 Outputs:
 - `decompression_ratio_suspicious`, `decoder_risk_present`.
 - Embedded file decoding details (hashes, magic, size, preview).
+- Image decoding findings (`image.decode_failed`, `image.jbig2_malformed`).
 
 ### Phase D: Intent, Behavior, and Correlation
 - Findings are grouped and correlated into higher-level summaries.
@@ -89,6 +91,8 @@ Focus: streams, filters, embedded objects, media.
 - `filter_chain_depth_high`.
 - `embedded_file_present`, `filespec_present`, `richmedia_present`, `3d_present`, `sound_movie_present`.
 - `icc_profile_anomaly`, `font_table_anomaly`.
+- `image.jbig2_present`, `image.jpx_present`, `image.ccitt_present`.
+- `image.extreme_dimensions`, `image.pixel_count_excessive`, `image.decode_failed`.
 
 ### Crypto / Signature Layer
 Focus: signatures and encryption anomalies.

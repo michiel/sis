@@ -15,6 +15,20 @@ pub fn taint_from_findings(findings: &[Finding]) -> Taint {
             "decoder_risk_present" => reasons.push("High-risk decoder present".into()),
             "stream_length_mismatch" => reasons.push("Stream length mismatch".into()),
             "xref_conflict" => reasons.push("XRef conflict".into()),
+            "image.jbig2_present" | "image.jpx_present" | "image.ccitt_present" => {
+                reasons.push("Risky image decoder present".into())
+            }
+            "image.jbig2_malformed"
+            | "image.jpx_malformed"
+            | "image.jpeg_malformed"
+            | "image.ccitt_malformed"
+            | "image.decode_failed"
+            | "image.xfa_decode_failed" => reasons.push("Image decode failure observed".into()),
+            "image.extreme_dimensions"
+            | "image.pixel_count_excessive"
+            | "image.suspect_strip_dimensions" => {
+                reasons.push("Suspicious image dimensions".into())
+            }
             _ => {}
         }
     }
