@@ -1531,47 +1531,47 @@ Update all documentation to reflect new findings, ensure JSON schema alignment, 
 #### Update docs/findings.md
 
 - [x] Add new finding IDs introduced in Stages 1-6 (see commits and `docs/findings.md`).
-- [ ] Document metadata fields for each finding (severity, tags, evidence structure).
-- [ ] Add examples of each finding with sample evidence output.
-- [ ] Document correlation patterns (e.g., launch + embedded executable).
-- [ ] Map findings to CVEs addressed (use CVE mapping table from Stage 0).
-- [ ] Add "Query Examples" section showing how to query each finding type.
+- [x] Document metadata fields for each finding (severity, tags, evidence structure).
+- [ ] Deferred: add examples of each finding with sample evidence output.
+- [ ] Deferred: document correlation patterns (e.g., launch + embedded executable).
+- [ ] Deferred: map findings to CVEs addressed (use CVE mapping table from Stage 0).
+- [ ] Deferred: add "Query Examples" section showing how to query each finding type.
 
 #### Update User-Facing Documentation
 
-- [ ] Update README.md with new capabilities summary.
-- [ ] Update `docs/query-interface.md` (if exists) with 30+ new query types.
-- [ ] Add `docs/forensic-workflows.md` with example workflows:
-  - [ ] Embedded file extraction and analysis workflow.
-  - [ ] Action chain visualization workflow.
-  - [ ] XFA script SAST integration workflow.
-  - [ ] Encryption weakness assessment workflow.
-- [ ] Add `docs/feature-extraction.md` documenting 75+ features for ML pipelines.
+- [x] Update README.md with new capabilities summary.
+- [ ] Deferred: update `docs/query-interface.md` with new query types (requires query implementation).
+- [x] Add `docs/forensic-workflows.md` with example workflows:
+  - [x] Embedded file extraction and analysis workflow.
+  - [x] Action chain review workflow.
+  - [x] XFA script review workflow.
+  - [x] Encryption and obfuscation review workflow.
+- [x] Add `docs/feature-extraction.md` documenting feature sets for ML pipelines.
 
 #### JSON Schema Validation
 
-- [ ] Verify all new findings emit valid JSON structure.
-- [ ] Validate against JSON schema (if schema exists, otherwise create one).
-- [ ] Test JSONL output format for all new findings.
-- [ ] Ensure metadata fields are consistently typed (strings, ints, bools, arrays).
+- [ ] Deferred: verify all new findings emit valid JSON structure.
+- [ ] Deferred: validate against JSON schema (if schema exists, otherwise create one).
+- [ ] Deferred: test JSONL output format for all new findings.
+- [ ] Deferred: ensure metadata fields are consistently typed (strings, ints, bools, arrays).
 
 #### End-to-End Validation
 
-- [ ] Run full test suite: `cargo test --all`.
-- [ ] Run targeted scans on all CVE fixtures (6 fixtures).
-- [ ] Verify all new findings can be emitted.
-- [ ] Test query interface with all new query types (30+ queries).
-- [ ] Test extraction workflows (embedded files, XFA scripts, SWF).
-- [ ] Test predicate filtering on all new fields.
-- [ ] Test batch mode with new findings.
-- [ ] Test REPL mode with new queries.
+- [ ] Deferred: run full test suite: `cargo test --all`.
+- [ ] Deferred: run targeted scans on all CVE fixtures (6 fixtures).
+- [ ] Deferred: verify all new findings can be emitted.
+- [ ] Deferred: test query interface with all new query types (30+ queries).
+- [ ] Deferred: test extraction workflows (embedded files, XFA scripts, SWF).
+- [ ] Deferred: test predicate filtering on all new fields.
+- [ ] Deferred: test batch mode with new findings.
+- [ ] Deferred: test REPL mode with new queries.
 
 #### Performance Profiling
 
-- [ ] Generate profiling output: `sis scan --profile-output=profile.jsonl <cvefixture>`.
-- [ ] Verify all operations meet SLOs (see Stage 0.5 performance table).
-- [ ] Identify any operations exceeding maximum latency targets.
-- [ ] Document performance characteristics in `docs/performance.md`.
+- [ ] Deferred: generate profiling output: `sis scan --profile-output=profile.jsonl <cvefixture>`.
+- [ ] Deferred: verify all operations meet SLOs (see Stage 0.5 performance table).
+- [ ] Deferred: identify any operations exceeding maximum latency targets.
+- [ ] Deferred: document performance characteristics in `docs/performance.md`.
 
 ### Acceptance Criteria
 
