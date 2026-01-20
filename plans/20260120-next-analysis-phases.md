@@ -133,7 +133,7 @@ Establish shared infrastructure, fixtures, CVE mappings, and baseline tests befo
 
 #### Baseline Verification
 
-- [ ] Run `cargo test --all` and ensure 100% pass rate.
+- [x] Run `cargo test --all` and ensure 100% pass rate.
 - [ ] Run `cargo clippy --all` and ensure no warnings.
 - [ ] Run `cargo build --release` and ensure clean build.
 - [ ] Verify no new findings are emitted yet (baseline scan should match current output).
@@ -1552,18 +1552,18 @@ Update all documentation to reflect new findings, ensure JSON schema alignment, 
 
 - [x] Verify all new findings emit valid JSON structure (schema validation test).
 - [x] Validate against JSON schema (added `docs/findings-schema.json`).
-- [ ] Deferred: test JSONL output format for all new findings.
+- [x] Validate JSONL output format for all new findings.
 - [ ] Deferred: ensure metadata fields are consistently typed (strings, ints, bools, arrays).
 
 #### End-to-End Validation
 
 - [x] Run full test suite: `cargo test --all`.
-- [ ] Deferred: run targeted scans on all CVE fixtures (6 fixtures).
+- [x] Run targeted scans on all CVE fixtures (6 fixtures).
 - [ ] Deferred: verify all new findings can be emitted.
-- [ ] Deferred: test query interface with all new query types (30+ queries).
+- [ ] Deferred: test query interface with all new query types (30+ queries; shortcuts and XFA/SWF extract covered).
 - [ ] Deferred: test extraction workflows (embedded files pending; XFA/SWF covered via query tests).
 - [ ] Deferred: test predicate filtering on all new fields (findings metadata fields covered).
-- [ ] Deferred: test batch mode with new findings.
+- [ ] Deferred: test batch mode with new findings (count shortcut covered).
 - [ ] Deferred: test REPL mode with new queries.
 
 #### Performance Profiling
@@ -1579,9 +1579,9 @@ Update all documentation to reflect new findings, ensure JSON schema alignment, 
 - [x] Forensic workflow documentation complete with 4+ example workflows.
 - [x] JSON structure validation completed (schema validation test).
 - [x] Full test suite passes (`cargo test --all`).
-- [ ] All CVE fixtures trigger expected findings.
-- [ ] Query shortcuts and predicate filtering validated.
-- [ ] Extraction workflows tested end-to-end.
+- [x] All CVE fixtures trigger expected findings.
+- [ ] Query shortcuts and predicate filtering validated (shortcut counts, findings metadata, batch count covered).
+- [ ] Extraction workflows tested end-to-end (XFA/SWF covered; embedded pending).
 - [ ] Performance profiling shows compliance with SLOs.
 
 ---
@@ -1649,7 +1649,7 @@ filters.repeated
 
 - Additional query variants (allowlist-driven summaries).
 - Predicate fields for embedded files, launch targets, XFA, and SWF (findings metadata fields shipped).
-- Extraction helpers for XFA scripts and SWF content.
+- Extraction helpers for embedded files (XFA/SWF shipped).
 - Batch/REPL coverage and query reference documentation.
 - [ ] `test_query_filters()` - Query unusual filters.
 - [ ] `test_batch_mode_new_queries()` - All new queries in batch.
@@ -1659,11 +1659,11 @@ filters.repeated
 
 - [x] All 36 query types implemented and working (including count variants).
 - [ ] Predicate filtering works for all new fields (findings metadata fields done).
-- [ ] Extraction works for embedded files, XFA scripts, SWF.
-- [ ] Batch mode supports all new queries.
+- [ ] Extraction works for embedded files, XFA scripts, SWF (XFA/SWF done).
+- [ ] Batch mode supports all new queries (shortcut count done).
 - [ ] REPL mode supports all new queries.
 - [ ] Documentation complete with examples.
-- ✅ Tests pass with 100% coverage.
+- [ ] Tests pass with 100% coverage.
 
 ---
 
@@ -1736,7 +1736,7 @@ Integrate all new features from Stages 1-6 into the feature extraction pipeline,
 #### Export Validation
 
 - [ ] Test CSV export: `sis query features --format csv > features.csv`.
-- [ ] Verify CSV header includes all 80 feature names.
+- [ ] Verify CSV header includes all 76 feature names.
 - [ ] Test JSON export: `sis query features --format json > features.json`.
 - [ ] Verify JSON includes all feature structs.
 - [ ] Test JSONL export for streaming: `sis query features --format jsonl --batch *.pdf`.
@@ -1755,13 +1755,13 @@ Integrate all new features from Stages 1-6 into the feature extraction pipeline,
 
 - [ ] `test_features_csv_export()` - Full CSV export with all features.
 - [ ] `test_features_json_export()` - Full JSON export.
-- [ ] `test_features_count()` - Verify exactly 80 features (or documented count).
+- [ ] `test_features_count()` - Verify exactly 76 features (or documented count).
 - [ ] `test_features_backward_compatibility()` - Verify order preserves compatibility.
 
 ### ML Pipeline Validation
 
 - [ ] Document feature schema in `docs/ml-features.md`:
-  - [ ] Feature index mapping (0-79).
+  - [ ] Feature index mapping (0-75).
   - [ ] Feature types (binary, count, ratio, categorical).
   - [ ] Feature ranges and normalization recommendations.
   - [ ] Missing value handling (e.g., no XFA = all zeros).
@@ -1772,12 +1772,12 @@ Integrate all new features from Stages 1-6 into the feature extraction pipeline,
   import pandas as pd
   
   features = pd.read_csv("features.csv")
-  print(features.shape)  # (n_samples, 80)
+  print(features.shape)  # (n_samples, 76)
   
   # Example: Train sklearn model
   from sklearn.ensemble import RandomForestClassifier
   
-  X = features.iloc[:, :80].values  # All features
+  X = features.iloc[:, :76].values  # All features
   y = labels  # Malicious=1, Benign=0
   
   model = RandomForestClassifier()
