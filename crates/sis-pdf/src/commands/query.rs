@@ -4185,7 +4185,7 @@ fn dfs_page_cycles(
     path_set.insert(current);
 
     for edge in graph.outgoing_edges(current.0, current.1) {
-        if !matches!(edge.edge_type, EdgeType::PagesKids | EdgeType::PageParent) {
+        if !matches!(edge.edge_type, EdgeType::PagesKids) {
             continue;
         }
 
@@ -4315,12 +4315,18 @@ fn collect_refs(
             }
         }
         PdfAtom::Dict(dict) => {
-            for (_, value) in &dict.entries {
+            for (key, value) in &dict.entries {
+                if key.decoded.eq_ignore_ascii_case(b"/Parent") {
+                    continue;
+                }
                 collect_refs(&value.atom, graph, visited, path, path_set, cycles);
             }
         }
         PdfAtom::Stream(stream) => {
-            for (_, value) in &stream.dict.entries {
+            for (key, value) in &stream.dict.entries {
+                if key.decoded.eq_ignore_ascii_case(b"/Parent") {
+                    continue;
+                }
                 collect_refs(&value.atom, graph, visited, path, path_set, cycles);
             }
         }
@@ -4854,6 +4860,34 @@ mod tests {
         test(&ctx);
     }
 
+    fn build_simple_page_tree_pdf() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"%PDF-1.4\n");
+
+        let objects = [
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+            "2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n",
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >>\nendobj\n",
+        ];
+
+        let mut offsets = Vec::new();
+        for object in objects {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(object.as_bytes());
+        }
+
+        let xref_offset = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(b"trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n");
+        bytes.extend_from_slice(format!("{xref_offset}\n").as_bytes());
+        bytes.extend_from_slice(b"%%EOF\n");
+
+        bytes
+    }
+
     #[test]
     fn advanced_query_json_outputs_are_structured() {
         with_fixture_context("content_first_phase1.pdf", |ctx| {
@@ -4870,6 +4904,19 @@ mod tests {
             let page_cycles = list_page_cycles(ctx).expect("page cycles");
             assert_eq!(page_cycles["type"], json!("cycles.page"));
         });
+    }
+
+    #[test]
+    fn page_tree_cycles_ignore_parent_links() {
+        let bytes = build_simple_page_tree_pdf();
+        let options = ScanOptions::default();
+        let ctx = build_scan_context(&bytes, &options).expect("build context");
+
+        let cycles = list_cycles(&ctx).expect("cycles");
+        assert_eq!(cycles["count"], json!(0));
+
+        let page_cycles = list_page_cycles(&ctx).expect("page cycles");
+        assert_eq!(page_cycles["count"], json!(0));
     }
 
     #[test]
