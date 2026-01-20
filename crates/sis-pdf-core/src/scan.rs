@@ -46,6 +46,7 @@ pub struct ScanOptions {
     pub ir: bool,
     pub ml_config: Option<crate::ml::MlConfig>,
     pub font_analysis: FontAnalysisOptions,
+    pub image_analysis: ImageAnalysisOptions,
     pub profile: bool,
     pub profile_format: ProfileFormat,
     pub group_chains: bool,
@@ -59,6 +60,35 @@ pub struct FontAnalysisOptions {
     pub max_fonts: usize,
     pub signature_matching_enabled: bool,
     pub signature_directory: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageAnalysisOptions {
+    pub enabled: bool,
+    pub dynamic_enabled: bool,
+    pub max_pixels: u64,
+    pub max_decode_bytes: usize,
+    pub timeout_ms: u64,
+    pub max_header_bytes: usize,
+    pub max_dimension: u32,
+    pub max_xfa_decode_bytes: usize,
+    pub max_filter_chain_depth: usize,
+}
+
+impl Default for ImageAnalysisOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dynamic_enabled: true,
+            max_pixels: 100_000_000,
+            max_decode_bytes: 256 * 1024 * 1024,
+            timeout_ms: 250,
+            max_header_bytes: 4096,
+            max_dimension: 10_000,
+            max_xfa_decode_bytes: 8 * 1024 * 1024,
+            max_filter_chain_depth: 8,
+        }
+    }
 }
 
 impl Default for FontAnalysisOptions {

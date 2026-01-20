@@ -14,6 +14,7 @@ pub enum AttackSurface {
     Forms,
     EmbeddedFiles,
     RichMedia3D,
+    Images,
     CryptoSignatures,
     Metadata,
     ContentPhishing,

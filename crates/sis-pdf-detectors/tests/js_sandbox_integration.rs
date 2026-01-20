@@ -31,6 +31,7 @@ fn sandbox_exec_records_calls() {
         ir: false,
         ml_config: None,
         font_analysis: FontAnalysisOptions::default(),
+        image_analysis: sis_pdf_core::scan::ImageAnalysisOptions::default(),
         profile: false,
         profile_format: ProfileFormat::Text,
         group_chains: true,

@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/font-analysis",
+  "crates/image-analysis",
   "crates/js-analysis",
   "crates/sis-pdf-core",
   "crates/sis-pdf-pdf",
