@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use crate::page_tree::build_page_tree;
 use crate::scan::{ScanContext, ScanOptions};
+use image_analysis::ImageDynamicOptions;
 use sis_pdf_pdf::classification::ObjectRole;
+use sis_pdf_pdf::decode::{decode_stream_with_meta, DecodeLimits};
 use sis_pdf_pdf::graph::ObjEntry;
 use sis_pdf_pdf::object::{PdfAtom, PdfDict, PdfObj, PdfStr, PdfStream};
 use sis_pdf_pdf::typed_graph::EdgeType;
@@ -45,6 +47,26 @@ pub struct ContentFeatures {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ImageFeatures {
+    pub image_count: usize,
+    pub jbig2_count: usize,
+    pub jpx_count: usize,
+    pub jpeg_count: usize,
+    pub png_count: usize,
+    pub ccitt_count: usize,
+    pub risky_image_count: usize,
+    pub malformed_image_count: usize,
+    pub max_image_width: u32,
+    pub max_image_height: u32,
+    pub max_image_pixels: u64,
+    pub total_image_pixels: u64,
+    pub avg_image_entropy: f64,
+    pub extreme_dimensions_count: usize,
+    pub multi_filter_count: usize,
+    pub xfa_image_count: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct GraphFeatures {
     pub total_edges: usize,
     pub open_action_edges: usize,
@@ -70,6 +92,7 @@ pub struct FeatureVector {
     pub behavioral: BehavioralFeatures,
     pub content: ContentFeatures,
     pub graph: GraphFeatures,
+    pub images: ImageFeatures,
 }
 
 impl FeatureVector {
@@ -110,6 +133,22 @@ impl FeatureVector {
             self.graph.avg_graph_depth as f32,
             self.graph.catalog_to_js_paths as f32,
             self.graph.multi_stage_indicators as f32,
+            self.images.image_count as f32,
+            self.images.jbig2_count as f32,
+            self.images.jpx_count as f32,
+            self.images.jpeg_count as f32,
+            self.images.png_count as f32,
+            self.images.ccitt_count as f32,
+            self.images.risky_image_count as f32,
+            self.images.malformed_image_count as f32,
+            self.images.max_image_width as f32,
+            self.images.max_image_height as f32,
+            self.images.max_image_pixels as f32,
+            self.images.total_image_pixels as f32,
+            self.images.avg_image_entropy as f32,
+            self.images.extreme_dimensions_count as f32,
+            self.images.multi_filter_count as f32,
+            self.images.xfa_image_count as f32,
         ]
     }
 }
@@ -151,6 +190,22 @@ pub fn feature_names() -> Vec<&'static str> {
         "graph.avg_graph_depth",
         "graph.catalog_to_js_paths",
         "graph.multi_stage_indicators",
+        "images.image_count",
+        "images.jbig2_count",
+        "images.jpx_count",
+        "images.jpeg_count",
+        "images.png_count",
+        "images.ccitt_count",
+        "images.risky_image_count",
+        "images.malformed_image_count",
+        "images.max_image_width",
+        "images.max_image_height",
+        "images.max_image_pixels",
+        "images.total_image_pixels",
+        "images.avg_image_entropy",
+        "images.extreme_dimensions_count",
+        "images.multi_filter_count",
+        "images.xfa_image_count",
     ]
 }
 
@@ -238,6 +293,8 @@ impl FeatureExtractor {
 
         let page_count = build_page_tree(graph).pages.len();
 
+        let image_features = extract_image_features(ctx);
+
         // Extract graph-based features using TypedGraph infrastructure
         let graph_features = extract_graph_features(ctx);
 
@@ -271,6 +328,7 @@ impl FeatureExtractor {
                 page_count,
             },
             graph: graph_features,
+            images: image_features,
         }
     }
 
@@ -402,6 +460,303 @@ fn summarize_js_payloads(payloads: &[Vec<u8>]) -> (f64, usize, usize, usize, usi
         time_api_count,
         env_probe_count,
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageFormat {
+    JBIG2,
+    JPX,
+    JPEG,
+    PNG,
+    CCITT,
+    TIFF,
+    Unknown,
+}
+
+fn extract_image_features(ctx: &ScanContext) -> ImageFeatures {
+    let mut features = ImageFeatures::default();
+    let mut entropy_total = 0.0;
+    let mut entropy_count = 0usize;
+
+    for entry in &ctx.graph.objects {
+        let Some(dict) = entry_dict(entry) else {
+            continue;
+        };
+        if !is_image_xobject(dict) {
+            continue;
+        }
+        features.image_count += 1;
+        let format = detect_image_format(ctx, entry, dict);
+        match format {
+            ImageFormat::JBIG2 => {
+                features.jbig2_count += 1;
+                features.risky_image_count += 1;
+            }
+            ImageFormat::JPX => {
+                features.jpx_count += 1;
+                features.risky_image_count += 1;
+            }
+            ImageFormat::JPEG => features.jpeg_count += 1,
+            ImageFormat::PNG => features.png_count += 1,
+            ImageFormat::CCITT => {
+                features.ccitt_count += 1;
+                features.risky_image_count += 1;
+            }
+            ImageFormat::TIFF => {}
+            ImageFormat::Unknown => {}
+        }
+
+        if has_multi_filter(dict) {
+            features.multi_filter_count += 1;
+        }
+
+        if let Some((width, height)) = image_dimensions(dict) {
+            features.max_image_width = features.max_image_width.max(width);
+            features.max_image_height = features.max_image_height.max(height);
+            let pixels = width as u64 * height as u64;
+            features.max_image_pixels = features.max_image_pixels.max(pixels);
+            features.total_image_pixels += pixels;
+            if width == 1 || height == 1 {
+                features.extreme_dimensions_count += 1;
+            }
+        }
+
+        if let Some(data) = image_stream_bytes(ctx, entry, 512 * 1024) {
+            entropy_total += shannon_entropy(&data);
+            entropy_count += 1;
+        }
+    }
+
+    if entropy_count > 0 {
+        features.avg_image_entropy = entropy_total / entropy_count as f64;
+    }
+
+    features.xfa_image_count = count_xfa_images(ctx);
+    features.malformed_image_count = count_malformed_images(ctx);
+
+    features
+}
+
+fn is_image_xobject(dict: &PdfDict<'_>) -> bool {
+    dict.has_name(b"/Subtype", b"/Image")
+}
+
+fn image_dimensions(dict: &PdfDict<'_>) -> Option<(u32, u32)> {
+    let width = dict_u32(dict, b"/Width")?;
+    let height = dict_u32(dict, b"/Height")?;
+    Some((width, height))
+}
+
+fn dict_u32(dict: &PdfDict<'_>, key: &[u8]) -> Option<u32> {
+    let (_, obj) = dict.get_first(key)?;
+    match &obj.atom {
+        PdfAtom::Int(v) => (*v).try_into().ok(),
+        PdfAtom::Real(v) => {
+            if *v >= 0.0 {
+                (*v as u64).try_into().ok()
+            } else {
+                None
+            }
+        }
+        PdfAtom::Str(s) => {
+            let bytes = string_bytes(s);
+            let text = String::from_utf8_lossy(&bytes);
+            text.trim().parse::<u32>().ok()
+        }
+        _ => None,
+    }
+}
+
+fn has_multi_filter(dict: &PdfDict<'_>) -> bool {
+    let Some((_, filter)) = dict.get_first(b"/Filter") else {
+        return false;
+    };
+    match &filter.atom {
+        PdfAtom::Array(values) => values.len() > 1,
+        _ => false,
+    }
+}
+
+fn detect_image_format(
+    ctx: &ScanContext,
+    entry: &ObjEntry<'_>,
+    dict: &PdfDict<'_>,
+) -> ImageFormat {
+    if let Some(filters) = image_filters(dict) {
+        for filter in filters {
+            if filter.eq_ignore_ascii_case(b"/JBIG2Decode") {
+                return ImageFormat::JBIG2;
+            }
+            if filter.eq_ignore_ascii_case(b"/JPXDecode") {
+                return ImageFormat::JPX;
+            }
+            if filter.eq_ignore_ascii_case(b"/CCITTFaxDecode") {
+                return ImageFormat::CCITT;
+            }
+            if filter.eq_ignore_ascii_case(b"/DCTDecode") || filter.eq_ignore_ascii_case(b"/DCT") {
+                return ImageFormat::JPEG;
+            }
+        }
+    }
+    if let Some(data) = image_stream_bytes(ctx, entry, 64) {
+        if data.starts_with(b"\xFF\xD8") {
+            return ImageFormat::JPEG;
+        }
+        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return ImageFormat::PNG;
+        }
+        if data.starts_with(b"II*\x00") || data.starts_with(b"MM\x00*") {
+            return ImageFormat::TIFF;
+        }
+    }
+    ImageFormat::Unknown
+}
+
+fn image_filters(dict: &PdfDict<'_>) -> Option<Vec<Vec<u8>>> {
+    let (_, filter) = dict.get_first(b"/Filter")?;
+    match &filter.atom {
+        PdfAtom::Name(name) => Some(vec![name.decoded.clone()]),
+        PdfAtom::Array(items) => {
+            let mut out = Vec::new();
+            for item in items {
+                if let PdfAtom::Name(name) = &item.atom {
+                    out.push(name.decoded.clone());
+                }
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+fn image_stream_bytes(ctx: &ScanContext, entry: &ObjEntry<'_>, max_len: usize) -> Option<Vec<u8>> {
+    let PdfAtom::Stream(stream) = &entry.atom else {
+        return None;
+    };
+    let span = stream.data_span;
+    let start = span.start as usize;
+    let end = span.end as usize;
+    if start >= end || end > ctx.bytes.len() {
+        return None;
+    }
+    let data = &ctx.bytes[start..end];
+    if max_len > 0 {
+        Some(data[..data.len().min(max_len)].to_vec())
+    } else {
+        Some(data.to_vec())
+    }
+}
+
+fn count_xfa_images(ctx: &ScanContext) -> usize {
+    let mut count = 0usize;
+    let limits = DecodeLimits {
+        max_decoded_bytes: ctx.options.image_analysis.max_xfa_decode_bytes,
+        max_filter_chain_depth: ctx.options.image_analysis.max_filter_chain_depth,
+    };
+    for entry in &ctx.graph.objects {
+        let dict = match &entry.atom {
+            PdfAtom::Dict(dict) => dict,
+            PdfAtom::Stream(stream) => &stream.dict,
+            _ => continue,
+        };
+        let Some((_, xfa_obj)) = dict.get_first(b"/XFA") else {
+            continue;
+        };
+        for payload in xfa_payloads_from_obj(&ctx.graph, xfa_obj, limits) {
+            count += sis_pdf_pdf::xfa::extract_xfa_image_payloads(&payload).len();
+        }
+    }
+    count
+}
+
+fn count_malformed_images(ctx: &ScanContext) -> usize {
+    if !ctx.options.image_analysis.enabled
+        || !ctx.options.deep
+        || !ctx.options.image_analysis.dynamic_enabled
+    {
+        return 0;
+    }
+    let opts = ImageDynamicOptions {
+        max_pixels: ctx.options.image_analysis.max_pixels,
+        max_decode_bytes: ctx.options.image_analysis.max_decode_bytes,
+        timeout_ms: ctx.options.image_analysis.timeout_ms,
+    };
+    let dynamic = image_analysis::dynamic::analyze_dynamic_images(&ctx.graph, &opts);
+    dynamic
+        .findings
+        .iter()
+        .filter(|f| {
+            matches!(
+                f.kind.as_str(),
+                "image.decode_failed"
+                    | "image.jbig2_malformed"
+                    | "image.jpx_malformed"
+                    | "image.jpeg_malformed"
+                    | "image.ccitt_malformed"
+                    | "image.xfa_decode_failed"
+            )
+        })
+        .count()
+}
+
+fn xfa_payloads_from_obj(
+    graph: &sis_pdf_pdf::ObjectGraph<'_>,
+    obj: &PdfObj<'_>,
+    limits: DecodeLimits,
+) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    match &obj.atom {
+        PdfAtom::Array(items) => {
+            let mut iter = items.iter().peekable();
+            while let Some(item) = iter.next() {
+                match &item.atom {
+                    PdfAtom::Name(_) | PdfAtom::Str(_) => {
+                        if let Some(next) = iter.next() {
+                            out.extend(resolve_xfa_payload(graph, next, limits));
+                        }
+                    }
+                    _ => {
+                        out.extend(resolve_xfa_payload(graph, item, limits));
+                    }
+                }
+            }
+        }
+        _ => out.extend(resolve_xfa_payload(graph, obj, limits)),
+    }
+    out
+}
+
+fn resolve_xfa_payload(
+    graph: &sis_pdf_pdf::ObjectGraph<'_>,
+    obj: &PdfObj<'_>,
+    limits: DecodeLimits,
+) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    match &obj.atom {
+        PdfAtom::Str(s) => out.push(string_bytes(s)),
+        PdfAtom::Stream(stream) => {
+            let result = decode_stream_with_meta(graph.bytes, stream, limits);
+            if let Some(data) = result.data {
+                out.push(data);
+            }
+        }
+        PdfAtom::Ref { .. } => {
+            if let Some(entry) = graph.resolve_ref(obj) {
+                match &entry.atom {
+                    PdfAtom::Stream(stream) => {
+                        let result = decode_stream_with_meta(graph.bytes, stream, limits);
+                        if let Some(data) = result.data {
+                            out.push(data);
+                        }
+                    }
+                    PdfAtom::Str(s) => out.push(string_bytes(s)),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 fn contains_any(data: &[u8], needles: &[&[u8]]) -> bool {

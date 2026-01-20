@@ -60,6 +60,10 @@ pub enum PredicateField {
     Type,
     Subtype,
     Entropy,
+    Width,
+    Height,
+    Pixels,
+    Risky,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +89,10 @@ struct PredicateContext {
     type_name: String,
     subtype: Option<String>,
     entropy: f64,
+    width: u32,
+    height: u32,
+    pixels: u64,
+    risky: bool,
 }
 
 /// Query types supported by the interface
@@ -113,6 +121,18 @@ pub enum Query {
     UrlsCount,
     Embedded,
     EmbeddedCount,
+    Images,
+    ImagesCount,
+    ImagesJbig2,
+    ImagesJbig2Count,
+    ImagesJpx,
+    ImagesJpxCount,
+    ImagesCcitt,
+    ImagesCcittCount,
+    ImagesRisky,
+    ImagesRiskyCount,
+    ImagesMalformed,
+    ImagesMalformedCount,
 
     // Finding queries
     Findings,
@@ -229,6 +249,18 @@ pub fn parse_query(input: &str) -> Result<Query> {
         "urls.count" => Ok(Query::UrlsCount),
         "embedded" => Ok(Query::Embedded),
         "embedded.count" => Ok(Query::EmbeddedCount),
+        "images" => Ok(Query::Images),
+        "images.count" => Ok(Query::ImagesCount),
+        "images.jbig2" => Ok(Query::ImagesJbig2),
+        "images.jbig2.count" => Ok(Query::ImagesJbig2Count),
+        "images.jpx" => Ok(Query::ImagesJpx),
+        "images.jpx.count" => Ok(Query::ImagesJpxCount),
+        "images.ccitt" => Ok(Query::ImagesCcitt),
+        "images.ccitt.count" => Ok(Query::ImagesCcittCount),
+        "images.risky" => Ok(Query::ImagesRisky),
+        "images.risky.count" => Ok(Query::ImagesRiskyCount),
+        "images.malformed" => Ok(Query::ImagesMalformed),
+        "images.malformed.count" => Ok(Query::ImagesMalformedCount),
 
         // Findings
         "findings" => Ok(Query::Findings),
@@ -621,10 +653,18 @@ fn parse_predicate_field(name: &str) -> Result<PredicateField> {
         PredicateField::Filter
     } else if lower.ends_with(".type") || lower == "type" {
         PredicateField::Type
-    } else if lower.ends_with(".subtype") || lower == "subtype" {
+    } else if lower.ends_with(".subtype") || lower == "subtype" || lower.ends_with(".format") || lower == "format" {
         PredicateField::Subtype
     } else if lower.ends_with(".entropy") || lower == "entropy" {
         PredicateField::Entropy
+    } else if lower.ends_with(".width") || lower == "width" {
+        PredicateField::Width
+    } else if lower.ends_with(".height") || lower == "height" {
+        PredicateField::Height
+    } else if lower.ends_with(".pixels") || lower == "pixels" {
+        PredicateField::Pixels
+    } else if lower.ends_with(".risky") || lower == "risky" {
+        PredicateField::Risky
     } else {
         return Err(anyhow!("Unknown predicate field: {}", name));
     };
@@ -643,8 +683,28 @@ impl PredicateExpr {
                 PredicateField::Filter => compare_string(ctx.filter.as_deref(), *op, value),
                 PredicateField::Type => compare_string(Some(ctx.type_name.as_str()), *op, value),
                 PredicateField::Subtype => compare_string(ctx.subtype.as_deref(), *op, value),
+                PredicateField::Width => compare_number(ctx.width as f64, *op, value),
+                PredicateField::Height => compare_number(ctx.height as f64, *op, value),
+                PredicateField::Pixels => compare_number(ctx.pixels as f64, *op, value),
+                PredicateField::Risky => compare_bool(ctx.risky, *op, value),
             },
         }
+    }
+}
+
+fn compare_bool(lhs: bool, op: PredicateOp, value: &PredicateValue) -> bool {
+    let rhs = match value {
+        PredicateValue::String(value) => match value.to_ascii_lowercase().as_str() {
+            "true" => true,
+            "false" => false,
+            _ => return false,
+        },
+        PredicateValue::Number(value) => *value != 0.0,
+    };
+    match op {
+        PredicateOp::Eq => lhs == rhs,
+        PredicateOp::NotEq => lhs != rhs,
+        _ => false,
     }
 }
 
@@ -741,6 +801,18 @@ pub fn execute_query_with_context(
                     | Query::EmbeddedCount
                     | Query::Urls
                     | Query::UrlsCount
+                    | Query::Images
+                    | Query::ImagesCount
+                    | Query::ImagesJbig2
+                    | Query::ImagesJbig2Count
+                    | Query::ImagesJpx
+                    | Query::ImagesJpxCount
+                    | Query::ImagesCcitt
+                    | Query::ImagesCcittCount
+                    | Query::ImagesRisky
+                    | Query::ImagesRiskyCount
+                    | Query::ImagesMalformed
+                    | Query::ImagesMalformedCount
                     | Query::Events
                     | Query::EventsCount
                     | Query::EventsDocument
@@ -884,6 +956,154 @@ pub fn execute_query_with_context(
                 let embedded = extract_embedded_files(ctx, decode_mode, predicate)?;
                 Ok(QueryResult::Scalar(ScalarValue::Number(
                     embedded.len() as i64
+                )))
+            }
+            Query::Images => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                if let Some(extract_path) = extract_to {
+                    let written = write_image_files(
+                        ctx,
+                        extract_path,
+                        max_extract_bytes,
+                        decode_mode,
+                        predicate,
+                    )?;
+                    Ok(QueryResult::List(written))
+                } else {
+                    let images =
+                        extract_images(ctx, decode_mode, max_extract_bytes, predicate)?;
+                    Ok(QueryResult::List(images))
+                }
+            }
+            Query::ImagesCount => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images = extract_images(ctx, decode_mode, max_extract_bytes, predicate)?;
+                Ok(QueryResult::Scalar(ScalarValue::Number(
+                    images.len() as i64
+                )))
+            }
+            Query::ImagesJbig2 => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images = extract_images_by_format(
+                    ctx,
+                    ImageFormat::Jbig2,
+                    decode_mode,
+                    max_extract_bytes,
+                    predicate,
+                )?;
+                Ok(QueryResult::List(images))
+            }
+            Query::ImagesJbig2Count => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images = extract_images_by_format(
+                    ctx,
+                    ImageFormat::Jbig2,
+                    decode_mode,
+                    max_extract_bytes,
+                    predicate,
+                )?;
+                Ok(QueryResult::Scalar(ScalarValue::Number(
+                    images.len() as i64
+                )))
+            }
+            Query::ImagesJpx => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images = extract_images_by_format(
+                    ctx,
+                    ImageFormat::Jpx,
+                    decode_mode,
+                    max_extract_bytes,
+                    predicate,
+                )?;
+                Ok(QueryResult::List(images))
+            }
+            Query::ImagesJpxCount => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images = extract_images_by_format(
+                    ctx,
+                    ImageFormat::Jpx,
+                    decode_mode,
+                    max_extract_bytes,
+                    predicate,
+                )?;
+                Ok(QueryResult::Scalar(ScalarValue::Number(
+                    images.len() as i64
+                )))
+            }
+            Query::ImagesCcitt => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images = extract_images_by_format(
+                    ctx,
+                    ImageFormat::Ccitt,
+                    decode_mode,
+                    max_extract_bytes,
+                    predicate,
+                )?;
+                Ok(QueryResult::List(images))
+            }
+            Query::ImagesCcittCount => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images = extract_images_by_format(
+                    ctx,
+                    ImageFormat::Ccitt,
+                    decode_mode,
+                    max_extract_bytes,
+                    predicate,
+                )?;
+                Ok(QueryResult::Scalar(ScalarValue::Number(
+                    images.len() as i64
+                )))
+            }
+            Query::ImagesRisky => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images =
+                    extract_images_risky(ctx, decode_mode, max_extract_bytes, predicate)?;
+                Ok(QueryResult::List(images))
+            }
+            Query::ImagesRiskyCount => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images =
+                    extract_images_risky(ctx, decode_mode, max_extract_bytes, predicate)?;
+                Ok(QueryResult::Scalar(ScalarValue::Number(
+                    images.len() as i64
+                )))
+            }
+            Query::ImagesMalformed => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images =
+                    extract_images_malformed(ctx, decode_mode, max_extract_bytes, predicate)?;
+                Ok(QueryResult::List(images))
+            }
+            Query::ImagesMalformedCount => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let images =
+                    extract_images_malformed(ctx, decode_mode, max_extract_bytes, predicate)?;
+                Ok(QueryResult::Scalar(ScalarValue::Number(
+                    images.len() as i64
                 )))
             }
             Query::Created => {
@@ -1122,6 +1342,7 @@ fn build_scan_context<'a>(
         batch_parallel: false,
         ml_config: None,
         font_analysis: sis_pdf_core::scan::FontAnalysisOptions::default(),
+        image_analysis: sis_pdf_core::scan::ImageAnalysisOptions::default(),
         profile: false,
         profile_format: sis_pdf_core::scan::ProfileFormat::Text,
         group_chains: options.group_chains,
@@ -1435,6 +1656,10 @@ fn extract_embedded_files(
                     type_name: "Stream".to_string(),
                     subtype: subtype_name(&st.dict),
                     entropy: entropy_score(&data),
+                    width: 0,
+                    height: 0,
+                    pixels: 0,
+                    risky: false,
                 };
                 if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
                     let name = embedded_filename(&st.dict)
@@ -1454,6 +1679,424 @@ fn extract_embedded_files(
     Ok(embedded)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageFormat {
+    Jbig2,
+    Jpx,
+    Jpeg,
+    Png,
+    Ccitt,
+    Tiff,
+    Unknown,
+}
+
+impl ImageFormat {
+    fn label(self) -> &'static str {
+        match self {
+            ImageFormat::Jbig2 => "JBIG2",
+            ImageFormat::Jpx => "JPX",
+            ImageFormat::Jpeg => "JPEG",
+            ImageFormat::Png => "PNG",
+            ImageFormat::Ccitt => "CCITT",
+            ImageFormat::Tiff => "TIFF",
+            ImageFormat::Unknown => "Unknown",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            ImageFormat::Jbig2 => "jbig2",
+            ImageFormat::Jpx => "jp2",
+            ImageFormat::Jpeg => "jpg",
+            ImageFormat::Png => "png",
+            ImageFormat::Ccitt => "ccitt",
+            ImageFormat::Tiff => "tif",
+            ImageFormat::Unknown => "bin",
+        }
+    }
+
+    fn risky(self) -> bool {
+        matches!(self, ImageFormat::Jbig2 | ImageFormat::Jpx | ImageFormat::Ccitt)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ImageInfo {
+    obj: u32,
+    gen: u16,
+    format: ImageFormat,
+    width: u32,
+    height: u32,
+    filter: Option<String>,
+    data: Vec<u8>,
+    raw_data: Vec<u8>,
+}
+
+fn extract_images(
+    ctx: &ScanContext,
+    decode_mode: DecodeMode,
+    max_extract_bytes: usize,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
+    let images = collect_images(ctx, decode_mode, max_extract_bytes, predicate)?;
+    let mut output = Vec::new();
+    for image in images {
+        let dimensions = if image.width > 0 && image.height > 0 {
+            format!("{}x{}", image.width, image.height)
+        } else {
+            "-".into()
+        };
+        let filter = image.filter.clone().unwrap_or_else(|| "-".into());
+        output.push(format!(
+            "Object {}_{}: {} ({}, {}, {} bytes)",
+            image.obj,
+            image.gen,
+            image.format.label(),
+            dimensions,
+            filter,
+            image.data.len()
+        ));
+    }
+    Ok(output)
+}
+
+fn collect_images(
+    ctx: &ScanContext,
+    decode_mode: DecodeMode,
+    max_extract_bytes: usize,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<ImageInfo>> {
+    let mut images = Vec::new();
+    for entry in &ctx.graph.objects {
+        let sis_pdf_pdf::object::PdfAtom::Stream(stream) = &entry.atom else {
+            continue;
+        };
+        if !is_image_stream(&stream.dict) {
+            continue;
+        }
+        let raw_data = raw_stream_bytes(ctx.bytes, stream, max_extract_bytes)?;
+        let data = match decode_mode {
+            DecodeMode::Raw => raw_data.clone(),
+            DecodeMode::Decode | DecodeMode::Hexdump => {
+                stream_bytes_for_mode(ctx.bytes, stream, max_extract_bytes, decode_mode)
+                    .unwrap_or_else(|_| raw_data.clone())
+            }
+        };
+        let entropy = entropy_score(&data);
+        let (width, height) = image_dimensions(&stream.dict);
+        let pixels = if width > 0 && height > 0 {
+            width as u64 * height as u64
+        } else {
+            0
+        };
+        let format = detect_image_format(&stream.dict, &raw_data);
+        let filter = image_filter_label(&stream.dict);
+        let ctx_meta = PredicateContext {
+            length: data.len(),
+            filter: filter.clone(),
+            type_name: "Image".to_string(),
+            subtype: Some(format.label().to_string()),
+            entropy,
+            width,
+            height,
+            pixels,
+            risky: format.risky(),
+        };
+        if predicate.map(|pred| pred.evaluate(&ctx_meta)).unwrap_or(true) {
+            images.push(ImageInfo {
+                obj: entry.obj,
+                gen: entry.gen,
+                format,
+                width,
+                height,
+                filter,
+                data,
+                raw_data,
+            });
+        }
+    }
+    Ok(images)
+}
+
+fn extract_images_by_format(
+    ctx: &ScanContext,
+    target: ImageFormat,
+    decode_mode: DecodeMode,
+    max_extract_bytes: usize,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
+    let images = collect_images(ctx, decode_mode, max_extract_bytes, predicate)?;
+    let output = images
+        .into_iter()
+        .filter(|image| image.format == target)
+        .map(|image| {
+            let dimensions = if image.width > 0 && image.height > 0 {
+                format!("{}x{}", image.width, image.height)
+            } else {
+                "-".into()
+            };
+            let filter = image.filter.clone().unwrap_or_else(|| "-".into());
+            format!(
+                "Object {}_{}: {} ({}, {}, {} bytes)",
+                image.obj,
+                image.gen,
+                image.format.label(),
+                dimensions,
+                filter,
+                image.data.len()
+            )
+        })
+        .collect();
+    Ok(output)
+}
+
+fn extract_images_risky(
+    ctx: &ScanContext,
+    decode_mode: DecodeMode,
+    max_extract_bytes: usize,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
+    let images = collect_images(ctx, decode_mode, max_extract_bytes, predicate)?;
+    let output = images
+        .into_iter()
+        .filter(|image| image.format.risky())
+        .map(|image| {
+            let dimensions = if image.width > 0 && image.height > 0 {
+                format!("{}x{}", image.width, image.height)
+            } else {
+                "-".into()
+            };
+            let filter = image.filter.clone().unwrap_or_else(|| "-".into());
+            format!(
+                "Object {}_{}: {} ({}, {}, {} bytes)",
+                image.obj,
+                image.gen,
+                image.format.label(),
+                dimensions,
+                filter,
+                image.data.len()
+            )
+        })
+        .collect();
+    Ok(output)
+}
+
+fn extract_images_malformed(
+    ctx: &ScanContext,
+    decode_mode: DecodeMode,
+    max_extract_bytes: usize,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
+    if !ctx.options.deep {
+        return Err(anyhow!("images.malformed requires --deep"));
+    }
+    let opts = image_analysis::ImageDynamicOptions {
+        max_pixels: ctx.options.image_analysis.max_pixels,
+        max_decode_bytes: ctx.options.image_analysis.max_decode_bytes,
+        timeout_ms: ctx.options.image_analysis.timeout_ms,
+    };
+    let dynamic = image_analysis::dynamic::analyze_dynamic_images(&ctx.graph, &opts);
+    let mut failing = std::collections::HashSet::new();
+    for finding in dynamic.findings {
+        if matches!(
+            finding.kind.as_str(),
+            "image.decode_failed"
+                | "image.jbig2_malformed"
+                | "image.jpx_malformed"
+                | "image.jpeg_malformed"
+                | "image.ccitt_malformed"
+                | "image.xfa_decode_failed"
+        ) {
+            failing.insert((finding.obj, finding.gen));
+        }
+    }
+    let images = collect_images(ctx, decode_mode, max_extract_bytes, predicate)?;
+    let output = images
+        .into_iter()
+        .filter(|image| failing.contains(&(image.obj, image.gen)))
+        .map(|image| {
+            let dimensions = if image.width > 0 && image.height > 0 {
+                format!("{}x{}", image.width, image.height)
+            } else {
+                "-".into()
+            };
+            let filter = image.filter.clone().unwrap_or_else(|| "-".into());
+            format!(
+                "Object {}_{}: {} ({}, {}, {} bytes)",
+                image.obj,
+                image.gen,
+                image.format.label(),
+                dimensions,
+                filter,
+                image.data.len()
+            )
+        })
+        .collect();
+    Ok(output)
+}
+
+fn write_image_files(
+    ctx: &ScanContext,
+    extract_to: &Path,
+    max_bytes: usize,
+    decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
+    use std::fs;
+
+    fs::create_dir_all(extract_to)?;
+
+    let images = collect_images(ctx, decode_mode, max_bytes, predicate)?;
+    let mut written_files = Vec::new();
+    let mut count = 0usize;
+
+    for image in images {
+        let base_name = format!("image_{}_{}", image.obj, image.gen);
+        let (filename, output_bytes, mode_label) = match decode_mode {
+            DecodeMode::Decode => (
+                format!("{}.{}", base_name, image.format.extension()),
+                image.data.clone(),
+                "decode",
+            ),
+            DecodeMode::Raw => (format!("{base_name}.raw"), image.raw_data.clone(), "raw"),
+            DecodeMode::Hexdump => (
+                format!("{base_name}.hex"),
+                format_hexdump(&image.data).into_bytes(),
+                "hexdump",
+            ),
+        };
+        let filepath = extract_to.join(&filename);
+        fs::write(&filepath, &output_bytes)?;
+
+        let hash = sha256_hex(&image.data);
+        let info = format!(
+            "{}: {}x{} {}, {} bytes, sha256={}, object={}_{} ({})",
+            filename,
+            image.width,
+            image.height,
+            image.format.label(),
+            image.data.len(),
+            hash,
+            image.obj,
+            image.gen,
+            mode_label
+        );
+        written_files.push(info);
+        count += 1;
+    }
+
+    eprintln!("Extracted {} image(s) to {}", count, extract_to.display());
+    Ok(written_files)
+}
+
+fn is_image_stream(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> bool {
+    dict.has_name(b"/Subtype", b"/Image")
+}
+
+fn image_dimensions(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> (u32, u32) {
+    let width = dict_u32(dict, b"/Width").unwrap_or(0);
+    let height = dict_u32(dict, b"/Height").unwrap_or(0);
+    (width, height)
+}
+
+fn dict_u32(dict: &sis_pdf_pdf::object::PdfDict<'_>, key: &[u8]) -> Option<u32> {
+    let (_, obj) = dict.get_first(key)?;
+    match &obj.atom {
+        sis_pdf_pdf::object::PdfAtom::Int(n) => (*n).try_into().ok(),
+        sis_pdf_pdf::object::PdfAtom::Real(v) => {
+            if *v >= 0.0 {
+                (*v as u64).try_into().ok()
+            } else {
+                None
+            }
+        }
+        sis_pdf_pdf::object::PdfAtom::Str(s) => {
+            let bytes = string_bytes(s);
+            let text = String::from_utf8_lossy(&bytes);
+            text.trim().parse::<u32>().ok()
+        }
+        _ => None,
+    }
+}
+
+fn detect_image_format(dict: &sis_pdf_pdf::object::PdfDict<'_>, data: &[u8]) -> ImageFormat {
+    if let Some(filters) = image_filter_names(dict) {
+        for filter in filters {
+            if filter.eq_ignore_ascii_case(b"/JBIG2Decode") {
+                return ImageFormat::Jbig2;
+            }
+            if filter.eq_ignore_ascii_case(b"/JPXDecode") {
+                return ImageFormat::Jpx;
+            }
+            if filter.eq_ignore_ascii_case(b"/CCITTFaxDecode") {
+                return ImageFormat::Ccitt;
+            }
+            if filter.eq_ignore_ascii_case(b"/DCTDecode") || filter.eq_ignore_ascii_case(b"/DCT") {
+                return ImageFormat::Jpeg;
+            }
+        }
+    }
+    if data.starts_with(b"\xFF\xD8") {
+        return ImageFormat::Jpeg;
+    }
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return ImageFormat::Png;
+    }
+    if data.starts_with(b"II*\x00") || data.starts_with(b"MM\x00*") {
+        return ImageFormat::Tiff;
+    }
+    ImageFormat::Unknown
+}
+
+fn image_filter_names(
+    dict: &sis_pdf_pdf::object::PdfDict<'_>,
+) -> Option<Vec<Vec<u8>>> {
+    let (_, filter) = dict.get_first(b"/Filter")?;
+    match &filter.atom {
+        sis_pdf_pdf::object::PdfAtom::Name(name) => Some(vec![name.decoded.clone()]),
+        sis_pdf_pdf::object::PdfAtom::Array(items) => {
+            let mut out = Vec::new();
+            for item in items {
+                if let sis_pdf_pdf::object::PdfAtom::Name(name) = &item.atom {
+                    out.push(name.decoded.clone());
+                }
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+fn image_filter_label(dict: &sis_pdf_pdf::object::PdfDict<'_>) -> Option<String> {
+    let (_, filter) = dict.get_first(b"/Filter")?;
+    match &filter.atom {
+        sis_pdf_pdf::object::PdfAtom::Name(name) => Some(
+            String::from_utf8_lossy(&name.decoded)
+                .trim()
+                .trim_start_matches('/')
+                .to_string(),
+        ),
+        sis_pdf_pdf::object::PdfAtom::Array(items) => {
+            let mut out = Vec::new();
+            for item in items {
+                if let sis_pdf_pdf::object::PdfAtom::Name(name) = &item.atom {
+                    let label = String::from_utf8_lossy(&name.decoded)
+                        .trim()
+                        .trim_start_matches('/')
+                        .to_string();
+                    out.push(label);
+                }
+            }
+            if out.is_empty() {
+                None
+            } else {
+                Some(out.join(","))
+            }
+        }
+        _ => None,
+    }
+}
+
 fn ensure_predicate_supported(query: &Query) -> Result<()> {
     match query {
         Query::JavaScript
@@ -1462,6 +2105,18 @@ fn ensure_predicate_supported(query: &Query) -> Result<()> {
         | Query::EmbeddedCount
         | Query::Urls
         | Query::UrlsCount
+        | Query::Images
+        | Query::ImagesCount
+        | Query::ImagesJbig2
+        | Query::ImagesJbig2Count
+        | Query::ImagesJpx
+        | Query::ImagesJpxCount
+        | Query::ImagesCcitt
+        | Query::ImagesCcittCount
+        | Query::ImagesRisky
+        | Query::ImagesRiskyCount
+        | Query::ImagesMalformed
+        | Query::ImagesMalformedCount
         | Query::Events
         | Query::EventsCount
         | Query::EventsDocument
@@ -1475,7 +2130,7 @@ fn ensure_predicate_supported(query: &Query) -> Result<()> {
         | Query::ObjectsList
         | Query::ObjectsWithType(_) => Ok(()),
         _ => Err(anyhow!(
-            "Predicate filtering is only supported for js, embedded, urls, events, findings, and objects queries"
+            "Predicate filtering is only supported for js, embedded, urls, images, events, findings, and objects queries"
         )),
     }
 }
@@ -1863,6 +2518,10 @@ fn predicate_context_for_entry(
                 type_name: "String".to_string(),
                 subtype: None,
                 entropy: entropy_score(&data),
+                width: 0,
+                height: 0,
+                pixels: 0,
+                risky: false,
             }
         }
         PdfAtom::Stream(stream) => {
@@ -1890,6 +2549,10 @@ fn predicate_context_for_entry(
                 type_name: "Stream".to_string(),
                 subtype: subtype_name(&stream.dict),
                 entropy,
+                width: 0,
+                height: 0,
+                pixels: 0,
+                risky: false,
             }
         }
         PdfAtom::Dict(dict) => PredicateContext {
@@ -1898,6 +2561,10 @@ fn predicate_context_for_entry(
             type_name: "Dict".to_string(),
             subtype: subtype_name(dict),
             entropy: 0.0,
+            width: 0,
+            height: 0,
+            pixels: 0,
+            risky: false,
         },
         PdfAtom::Array(_) => PredicateContext {
             length: 0,
@@ -1905,6 +2572,10 @@ fn predicate_context_for_entry(
             type_name: "Array".to_string(),
             subtype: None,
             entropy: 0.0,
+            width: 0,
+            height: 0,
+            pixels: 0,
+            risky: false,
         },
         atom => PredicateContext {
             length: 0,
@@ -1912,6 +2583,10 @@ fn predicate_context_for_entry(
             type_name: atom_type_name(atom),
             subtype: None,
             entropy: 0.0,
+            width: 0,
+            height: 0,
+            pixels: 0,
+            risky: false,
         },
     }
 }
@@ -1924,6 +2599,10 @@ fn predicate_context_for_url(url: &str) -> PredicateContext {
         type_name: "Url".to_string(),
         subtype: None,
         entropy: entropy_score(bytes),
+        width: 0,
+        height: 0,
+        pixels: 0,
+        risky: false,
     }
 }
 
@@ -1941,6 +2620,10 @@ fn predicate_context_for_event(event: &serde_json::Value) -> Option<PredicateCon
         type_name: "Event".to_string(),
         subtype: Some(event_type.to_string()),
         entropy: entropy_score(bytes),
+        width: 0,
+        height: 0,
+        pixels: 0,
+        risky: false,
     })
 }
 
@@ -1952,6 +2635,10 @@ fn predicate_context_for_finding(finding: &sis_pdf_core::model::Finding) -> Pred
         type_name: "Finding".to_string(),
         subtype: Some(finding.kind.clone()),
         entropy: entropy_score(bytes),
+        width: 0,
+        height: 0,
+        pixels: 0,
+        risky: false,
     }
 }
 
@@ -2075,6 +2762,10 @@ fn extract_obj_with_metadata(
                 type_name: "String".to_string(),
                 subtype: None,
                 entropy: entropy_score(&data),
+                width: 0,
+                height: 0,
+                pixels: 0,
+                risky: false,
             };
             Some((data, ctx))
         }
@@ -2086,6 +2777,10 @@ fn extract_obj_with_metadata(
                 type_name: "Stream".to_string(),
                 subtype: subtype_name(&stream.dict),
                 entropy: entropy_score(&data),
+                width: 0,
+                height: 0,
+                pixels: 0,
+                risky: false,
             };
             Some((data, ctx))
         }
@@ -2103,6 +2798,10 @@ fn extract_obj_with_metadata(
                         type_name: "String".to_string(),
                         subtype: None,
                         entropy: entropy_score(&data),
+                        width: 0,
+                        height: 0,
+                        pixels: 0,
+                        risky: false,
                     };
                     Some((data, ctx))
                 }
@@ -2115,6 +2814,10 @@ fn extract_obj_with_metadata(
                         type_name: "Stream".to_string(),
                         subtype: subtype_name(&stream.dict),
                         entropy: entropy_score(&data),
+                        width: 0,
+                        height: 0,
+                        pixels: 0,
+                        risky: false,
                     };
                     Some((data, ctx))
                 }
@@ -2325,6 +3028,10 @@ fn write_embedded_files(
                         type_name: "Stream".to_string(),
                         subtype: subtype_name(&st.dict),
                         entropy: entropy_score(&data),
+                        width: 0,
+                        height: 0,
+                        pixels: 0,
+                        risky: false,
                     };
                     if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
                     // Get filename
@@ -3440,6 +4147,23 @@ mod tests {
         test(&ctx);
     }
 
+    fn with_fixture_context_opts<F>(fixture: &str, options: ScanOptions, test: F)
+    where
+        F: FnOnce(&ScanContext),
+    {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root is two levels above crate manifest");
+        let fixture_path = workspace_root
+            .join("crates/sis-pdf-core/tests/fixtures")
+            .join(fixture);
+        let bytes = std::fs::read(&fixture_path).expect("fixture read");
+        let ctx = build_scan_context(&bytes, &options).expect("build context");
+        test(&ctx);
+    }
+
     #[test]
     fn advanced_query_json_outputs_are_structured() {
         with_fixture_context("content_first_phase1.pdf", |ctx| {
@@ -3474,7 +4198,7 @@ mod tests {
             involves_external: false,
         };
 
-        let json_value = chain_to_json(5, &chain);
+        let json_value = chain_to_json(5, &chain, None);
         assert_eq!(json_value["id"], json!(5));
         assert_eq!(json_value["trigger"], json!("open_action"));
         assert!(json_value["payload"].is_object());
@@ -3559,6 +4283,26 @@ mod tests {
     }
 
     #[test]
+    fn images_query_lists_risky_formats() {
+        with_fixture_context("images/cve-2009-0658-jbig2.pdf", |ctx| {
+            let images = extract_images(ctx, DecodeMode::Decode, 1024 * 1024, None)
+                .expect("images");
+            assert!(images.iter().any(|line| line.contains("JBIG2")));
+        });
+    }
+
+    #[test]
+    fn images_malformed_requires_deep() {
+        let mut options = ScanOptions::default();
+        options.deep = false;
+        with_fixture_context_opts("images/cve-2018-4990-jpx.pdf", options, |ctx| {
+            let err = extract_images_malformed(ctx, DecodeMode::Decode, 1024 * 1024, None)
+                .expect_err("malformed requires deep");
+            assert!(err.to_string().contains("--deep"));
+        });
+    }
+
+    #[test]
     fn parse_predicate_supports_boolean_logic() {
         let expr = parse_predicate("length > 10 AND entropy >= 5.0").expect("predicate");
         let ctx = PredicateContext {
@@ -3567,6 +4311,10 @@ mod tests {
             type_name: "Stream".to_string(),
             subtype: None,
             entropy: 6.5,
+            width: 0,
+            height: 0,
+            pixels: 0,
+            risky: false,
         };
         assert!(expr.evaluate(&ctx));
     }
@@ -3580,6 +4328,10 @@ mod tests {
             type_name: "Stream".to_string(),
             subtype: None,
             entropy: 0.0,
+            width: 0,
+            height: 0,
+            pixels: 0,
+            risky: false,
         };
         assert!(!expr.evaluate(&ctx));
     }

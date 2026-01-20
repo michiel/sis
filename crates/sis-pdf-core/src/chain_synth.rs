@@ -205,6 +205,7 @@ fn payload_from_finding(f: &Finding) -> Option<String> {
         | "undeclared_compression_present"
         | "decompression_ratio_suspicious"
         | "embedded_payload_carved" => Some("stream".into()),
+        kind if kind.starts_with("image.") => Some("image".into()),
         _ => None,
     }
 }
@@ -430,6 +431,7 @@ fn payload_label(
             "stream" => "Stream payload".into(),
             "string" => "String payload".into(),
             "xfa_script" => "XFA script payload".into(),
+            "image" => "Image payload".into(),
             other => format!("{other} payload"),
         }
     } else {
@@ -439,6 +441,7 @@ fn payload_label(
             "stream" => "Stream payload".into(),
             "string" => "String payload".into(),
             "xfa_script" => "XFA script payload".into(),
+            "image" => "Image payload".into(),
             other => format!("{other} payload"),
         }
     };

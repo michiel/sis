@@ -12,6 +12,7 @@ use sis_pdf_pdf::blob_classify::{classify_blob, BlobKind};
 use sis_pdf_pdf::decode::stream_filters;
 use sis_pdf_pdf::graph::{ObjEntry, ObjProvenance};
 use sis_pdf_pdf::object::{PdfAtom, PdfDict};
+use sis_pdf_pdf::xfa::extract_xfa_script_payloads;
 
 pub mod advanced_crypto;
 pub mod annotations_advanced;
@@ -25,6 +26,7 @@ pub mod font_exploits;
 pub mod font_external_ref;
 pub mod icc_profiles;
 pub mod ir_graph_static;
+pub mod image_analysis;
 pub mod js_polymorphic;
 #[cfg(feature = "js-sandbox")]
 pub mod js_sandbox;
@@ -96,6 +98,7 @@ pub fn default_detectors_with_settings(settings: DetectorSettings) -> Vec<Box<dy
         Box::new(FontMatrixDetector),
         Box::new(font_exploits::FontExploitDetector),
         Box::new(font_external_ref::FontExternalReferenceDetector),
+        Box::new(image_analysis::ImageAnalysisDetector),
         Box::new(EmbeddedFileDetector),
         Box::new(RichMediaDetector),
         Box::new(ThreeDDetector),
@@ -1020,101 +1023,6 @@ fn xfa_payloads_from_obj(
     out
 }
 
-fn extract_xfa_script_payloads(bytes: &[u8]) -> Vec<Vec<u8>> {
-    let max_scan_bytes = 512 * 1024;
-    let slice = if bytes.len() > max_scan_bytes {
-        &bytes[..max_scan_bytes]
-    } else {
-        bytes
-    };
-    let lower: Vec<u8> = slice.iter().map(|b| b.to_ascii_lowercase()).collect();
-    let mut out = Vec::new();
-    for (start_tag, end_tag) in [
-        (b"<script".as_slice(), b"</script>".as_slice()),
-        (b"<xfa:script".as_slice(), b"</xfa:script>".as_slice()),
-    ] {
-        let mut idx = 0usize;
-        while let Some(pos) = find_subslice(&lower[idx..], start_tag) {
-            let tag_start = idx + pos;
-            let tag_end = match lower[tag_start..].iter().position(|b| *b == b'>') {
-                Some(end) => tag_start + end + 1,
-                None => break,
-            };
-            if !xfa_script_tag_is_javascript(&lower[tag_start..tag_end]) {
-                idx = tag_end;
-                continue;
-            }
-            let Some(end_pos) = find_subslice(&lower[tag_end..], end_tag) else {
-                break;
-            };
-            let content_end = tag_end + end_pos;
-            let content = &slice[tag_end..content_end];
-            let stripped = strip_cdata(content);
-            let trimmed = trim_ascii_whitespace(stripped);
-            if !trimmed.is_empty() {
-                out.push(trimmed.to_vec());
-            }
-            idx = content_end + end_tag.len();
-        }
-    }
-    out
-}
-
-fn xfa_script_tag_is_javascript(tag: &[u8]) -> bool {
-    let lower = String::from_utf8_lossy(tag).to_ascii_lowercase();
-    let attrs = ["contenttype", "type", "language"];
-    let mut found_attr = false;
-    for attr in attrs {
-        if let Some(value) = extract_attr_value(&lower, attr) {
-            found_attr = true;
-            if value.contains("javascript") || value.contains("ecmascript") {
-                return true;
-            }
-        }
-    }
-    if found_attr {
-        return false;
-    }
-    true
-}
-
-fn extract_attr_value(tag: &str, attr: &str) -> Option<String> {
-    let needle = format!("{}=", attr);
-    let pos = tag.find(&needle)?;
-    let rest = &tag[pos + needle.len()..];
-    let rest = rest.trim_start();
-    if rest.is_empty() {
-        return None;
-    }
-    let (value, _) = if rest.starts_with('"') {
-        let end = rest[1..].find('"')?;
-        (&rest[1..1 + end], &rest[1 + end + 1..])
-    } else if rest.starts_with('\'') {
-        let end = rest[1..].find('\'')?;
-        (&rest[1..1 + end], &rest[1 + end + 1..])
-    } else {
-        let end = rest.find(|c: char| c.is_whitespace() || c == '>').unwrap_or(rest.len());
-        (&rest[..end], &rest[end..])
-    };
-    Some(value.trim().to_string())
-}
-
-fn strip_cdata(bytes: &[u8]) -> &[u8] {
-    let lower: Vec<u8> = bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
-    let start = b"<![cdata[";
-    let end = b"]]>";
-    let Some(start_pos) = find_subslice(&lower, start) else {
-        return bytes;
-    };
-    let after_start = start_pos + start.len();
-    let Some(end_pos) = find_subslice(&lower[after_start..], end) else {
-        return bytes;
-    };
-    let content_start = after_start;
-    let content_end = after_start + end_pos;
-    &bytes[content_start..content_end]
-}
-
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
@@ -1122,18 +1030,6 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
-}
-
-fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
-    let mut start = 0usize;
-    let mut end = bytes.len();
-    while start < end && bytes[start].is_ascii_whitespace() {
-        start += 1;
-    }
-    while end > start && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-    &bytes[start..end]
 }
 
 fn js_payload_candidates_from_embedded_stream(

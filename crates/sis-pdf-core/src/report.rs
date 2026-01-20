@@ -1894,6 +1894,7 @@ fn attack_surface_label(surface: AttackSurface) -> &'static str {
         AttackSurface::Forms => "Forms",
         AttackSurface::EmbeddedFiles => "Embedded files",
         AttackSurface::RichMedia3D => "Rich media and 3D",
+        AttackSurface::Images => "Images",
         AttackSurface::CryptoSignatures => "Cryptographic signatures",
         AttackSurface::Metadata => "Metadata",
         AttackSurface::ContentPhishing => "Content and phishing",
@@ -1984,6 +1985,10 @@ fn build_recommendations(report: &Report) -> Vec<String> {
         .findings
         .iter()
         .any(|f| f.surface == AttackSurface::JavaScript);
+    let has_images = report
+        .findings
+        .iter()
+        .any(|f| f.surface == AttackSurface::Images);
     let has_embedded = report.findings.iter().any(|f| {
         f.surface == AttackSurface::EmbeddedFiles || f.surface == AttackSurface::RichMedia3D
     });
@@ -2019,6 +2024,9 @@ fn build_recommendations(report: &Report) -> Vec<String> {
     }
     if has_embedded {
         steps.push("Extract embedded files and scan them separately.".to_string());
+    }
+    if has_images {
+        steps.push("Review image payloads and decoder findings for malformed content.".to_string());
     }
     if report
         .structural_summary
@@ -2491,6 +2499,14 @@ pub fn render_markdown(report: &Report, input_path: Option<&str>) -> String {
         .filter(|f| keyword_match(f, &["font", "cff", "truetype", "opentype"]))
         .collect();
     render_finding_list(&mut out, &font_findings, 6, &id_map);
+
+    out.push_str("### Images\n\n");
+    let image_findings: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|f| f.surface == AttackSurface::Images)
+        .collect();
+    render_finding_list(&mut out, &image_findings, 6, &id_map);
 
     out.push_str("### Embedded media\n\n");
     let embedded_findings: Vec<&Finding> = report

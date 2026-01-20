@@ -53,6 +53,19 @@ pub fn score_chain(chain: &ExploitChain) -> (f64, Vec<String>) {
             score = score.max(0.65);
             reasons.push("Payload: stream-based data".into());
         }
+        if payload.contains("image") {
+            score = score.max(0.55);
+            reasons.push("Payload: image data".into());
+        }
+    }
+    if chain
+        .notes
+        .get("payload.risky")
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        score = score.max(0.7);
+        reasons.push("Payload: risky image format".into());
     }
 
     if chain

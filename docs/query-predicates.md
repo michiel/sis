@@ -7,6 +7,7 @@ This guide documents the `--where` predicate filters for `sis query`.
 Predicate filtering is supported for:
 - `js`, `js.count`
 - `embedded`, `embedded.count`
+- `images`, `images.count`, `images.jbig2`, `images.jpx`, `images.ccitt`, `images.risky`, `images.malformed`
 - `objects.list`, `objects.with`, `objects.count`
 - `urls`, `urls.count`
 - `events`, `events.document`, `events.page`, `events.field`, `events.count`
@@ -20,6 +21,11 @@ Predicates can use these fields:
 - `filter`: query-specific category (see mappings below)
 - `type`: high-level category name for the record
 - `subtype`: query-specific subtype (see mappings below)
+- `width`: image width in pixels (image queries only)
+- `height`: image height in pixels (image queries only)
+- `pixels`: total pixel count (image queries only)
+- `risky`: boolean flag for risky image formats (image queries only)
+- `format`: alias for `subtype` (image queries only)
 
 ## Field mappings by query
 
@@ -36,6 +42,18 @@ Predicates can use these fields:
 - `type`: `Stream`
 - `filter`: stream `/Filter` name (if present)
 - `subtype`: stream `/Subtype` name (if present)
+
+### Images (`images*`)
+- `length`: image stream bytes (decoded or raw depending on flags)
+- `entropy`: image stream bytes entropy
+- `type`: `Image`
+- `filter`: image stream `/Filter` list (if present)
+- `subtype`: detected image format (`JBIG2`, `JPX`, `JPEG`, `PNG`, `CCITT`, `TIFF`, `Unknown`)
+- `width`: `/Width` value when available
+- `height`: `/Height` value when available
+- `pixels`: `width * height` when available
+- `risky`: `true` for `JBIG2`, `JPX`, `CCITT` formats
+- `format`: alias for `subtype`
 
 ### Objects (`objects.list`, `objects.with`, `objects.count`)
 - `length`: stream length (decoded where possible; falls back to `/Length`)
@@ -77,4 +95,10 @@ sis query findings file.pdf --where "filter == 'high'"
 
 # Streams using FlateDecode
 sis query objects.with Stream file.pdf --where "filter == '/FlateDecode'"
+
+# Large, risky images
+sis query images file.pdf --where "risky == true AND pixels > 1000000"
+
+# PNG images with high entropy
+sis query images file.pdf --where "format == 'PNG' AND entropy > 7.5"
 ```
