@@ -143,4 +143,10 @@ sis query filters.unusual file.pdf --where "violation_type == 'allowlist_miss'"
 
 # Filter order violations involving Crypt
 sis query filters.invalid file.pdf --where "violation_type == 'crypt_not_outermost'"
+
+# Filter chains flagged in strict mode
+sis query filters.unusual file.pdf --where "violation_type == 'strict_mode'"
+
+# Image filters chained with compression
+sis query filters.unusual file.pdf --where "violation_type == 'image_with_compression'"
 ```
