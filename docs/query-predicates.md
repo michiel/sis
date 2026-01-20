@@ -137,4 +137,10 @@ sis query images file.pdf --where "risky == true AND pixels > 1000000"
 
 # PNG images with high entropy
 sis query images file.pdf --where "format == 'PNG' AND entropy > 7.5"
+
+# Filter chain findings with allowlist misses
+sis query filters.unusual file.pdf --where "violation_type == 'allowlist_miss'"
+
+# Filter order violations involving Crypt
+sis query filters.invalid file.pdf --where "violation_type == 'crypt_not_outermost'"
 ```
