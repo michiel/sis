@@ -115,8 +115,8 @@ enum Command {
         #[arg(
             long,
             default_value = "text",
-            value_parser = ["text", "json", "jsonl", "csv", "dot"],
-            help = "Output format (text, json, jsonl, csv, dot). Example: --format jsonl"
+            value_parser = ["text", "json", "jsonl", "yaml", "yml", "csv", "dot"],
+            help = "Output format (text, json, jsonl, yaml, csv, dot). Example: --format jsonl"
         )]
         format: String,
         #[arg(long, short = 'c', help = "Compact output (numbers only)")]
@@ -760,7 +760,7 @@ fn main() -> Result<()> {
                     commands::query::OutputFormat::Csv | commands::query::OutputFormat::Dot
                 ) {
                     return Err(anyhow!(
-                        "REPL mode supports text, json, or jsonl output formats only"
+                        "REPL mode supports text, json, jsonl, or yaml output formats only"
                     ));
                 }
                 run_query_repl(
@@ -2700,6 +2700,11 @@ fn run_query_oneshot(
                     println!("{}", output);
                     return Ok(());
                 }
+                query::OutputFormat::Yaml => {
+                    let output = query::format_yaml(query_str, file_label, &error)?;
+                    println!("{}", output);
+                    return Ok(());
+                }
                 _ => return Err(anyhow!("Failed to parse query: {}", e)),
             }
         }
@@ -2755,6 +2760,10 @@ fn run_query_oneshot(
         }
         query::OutputFormat::Jsonl => {
             let output = query::format_jsonl(query_str, pdf_path, &result)?;
+            println!("{}", output);
+        }
+        query::OutputFormat::Yaml => {
+            let output = query::format_yaml(query_str, pdf_path, &result)?;
             println!("{}", output);
         }
         query::OutputFormat::Text | query::OutputFormat::Csv | query::OutputFormat::Dot => {
@@ -2822,6 +2831,7 @@ fn run_query_repl(
         query::OutputFormat::Json | query::OutputFormat::Jsonl
     );
     let mut jsonl_mode = output_format == query::OutputFormat::Jsonl;
+    let mut yaml_mode = output_format == query::OutputFormat::Yaml;
     let mut compact_mode = false;
     let mut predicate_expr = predicate.cloned();
 
@@ -2872,6 +2882,7 @@ fn run_query_repl(
                         json_mode = !json_mode;
                         if json_mode {
                             jsonl_mode = false;
+                            yaml_mode = false;
                         }
                         eprintln!(
                             "JSON mode: {}",
@@ -2883,10 +2894,23 @@ fn run_query_repl(
                         jsonl_mode = !jsonl_mode;
                         if jsonl_mode {
                             json_mode = true;
+                            yaml_mode = false;
                         }
                         eprintln!(
                             "JSONL mode: {}",
                             if jsonl_mode { "enabled" } else { "disabled" }
+                        );
+                        continue;
+                    }
+                    ":yaml" => {
+                        yaml_mode = !yaml_mode;
+                        if yaml_mode {
+                            json_mode = false;
+                            jsonl_mode = false;
+                        }
+                        eprintln!(
+                            "YAML mode: {}",
+                            if yaml_mode { "enabled" } else { "disabled" }
                         );
                         continue;
                     }
@@ -2904,7 +2928,9 @@ fn run_query_repl(
                 // Parse and execute query
                 match query::parse_query(line) {
                     Ok(q) => {
-                        let output_format = if jsonl_mode {
+                        let output_format = if yaml_mode {
+                            query::OutputFormat::Yaml
+                        } else if jsonl_mode {
                             query::OutputFormat::Jsonl
                         } else if json_mode {
                             query::OutputFormat::Json
@@ -2928,7 +2954,12 @@ fn run_query_repl(
                         ) {
                             Ok(result) => {
                                 // Format and print result
-                                if jsonl_mode {
+                                if yaml_mode {
+                                    match query::format_yaml(line, pdf_path, &result) {
+                                        Ok(output) => println!("{}", output),
+                                        Err(e) => eprintln!("Error formatting result: {}", e),
+                                    }
+                                } else if jsonl_mode {
                                     match query::format_jsonl(line, pdf_path, &result) {
                                         Ok(output) => println!("{}", output),
                                         Err(e) => eprintln!("Error formatting result: {}", e),
@@ -2948,7 +2979,12 @@ fn run_query_repl(
                     }
                     Err(e) => {
                         let error = query::query_syntax_error(format!("Invalid query: {}", e));
-                        if jsonl_mode {
+                        if yaml_mode {
+                            match query::format_yaml(line, pdf_path, &error) {
+                                Ok(output) => println!("{}", output),
+                                Err(err) => eprintln!("Error formatting result: {}", err),
+                            }
+                        } else if jsonl_mode {
                             match query::format_jsonl(line, pdf_path, &error) {
                                 Ok(output) => println!("{}", output),
                                 Err(err) => eprintln!("Error formatting result: {}", err),
@@ -3052,6 +3088,7 @@ fn print_repl_help() {
     println!("REPL commands:");
     println!("  :json              - Toggle JSON output mode");
     println!("  :jsonl             - Toggle JSONL output mode");
+    println!("  :yaml              - Toggle YAML output mode");
     println!("  :compact           - Toggle compact output mode");
     println!("  :where EXPR        - Set predicate filter (blank clears)");
     println!("  help / ?           - Show this help");

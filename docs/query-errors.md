@@ -1,6 +1,6 @@
 # Query error schema
 
-This guide documents structured error output for `sis query` when `--format json` or `--format jsonl` is used (or the `--json` shorthand).
+This guide documents structured error output for `sis query` when `--format json`, `--format jsonl`, or `--format yaml` is used (or the `--json` shorthand).
 
 ## JSON schema
 
@@ -32,4 +32,5 @@ Errors are returned as a `result` object with these fields:
 - Text output prints the `message` string.
 - JSON output includes the error object under the `result` field.
 - JSONL output emits one error per line (suitable for pipelines).
+- YAML output includes the error object under the `result` field.
 - Batch mode continues processing and includes error entries for failed files.

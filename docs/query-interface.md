@@ -75,6 +75,7 @@ sis query sample.pdf swf.extract --extract-to /tmp/swf
 ```bash
 sis query sample.pdf images --format json
 sis query sample.pdf images --format jsonl
+sis query sample.pdf images --format yaml
 ```
 
 ## Finding Shortcuts

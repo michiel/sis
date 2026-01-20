@@ -17,6 +17,7 @@ pub enum OutputFormat {
     Text,
     Json,
     Jsonl,
+    Yaml,
     Csv,
     Dot,
 }
@@ -27,6 +28,7 @@ impl OutputFormat {
             "text" => Ok(OutputFormat::Text),
             "json" => Ok(OutputFormat::Json),
             "jsonl" => Ok(OutputFormat::Jsonl),
+            "yaml" | "yml" => Ok(OutputFormat::Yaml),
             "csv" => Ok(OutputFormat::Csv),
             "dot" => Ok(OutputFormat::Dot),
             _ => Err(anyhow!("invalid format: {input}")),
@@ -874,7 +876,7 @@ fn compare_string(lhs: Option<&str>, op: PredicateOp, value: &PredicateValue) ->
 
 pub fn apply_output_format(query: Query, format: OutputFormat) -> Result<Query> {
     let resolved = match format {
-        OutputFormat::Json | OutputFormat::Jsonl => match query {
+        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Yaml => match query {
             Query::ExportOrgDot => Query::ExportOrgJson,
             Query::ExportIrText => Query::ExportIrJson,
             Query::ExportFeatures => Query::ExportFeaturesJson,
@@ -1751,6 +1753,17 @@ pub fn format_json(query: &str, file: &str, result: &QueryResult) -> Result<Stri
     });
 
     Ok(serde_json::to_string_pretty(&output)?)
+}
+
+/// Format query result as YAML
+pub fn format_yaml(query: &str, file: &str, result: &QueryResult) -> Result<String> {
+    let output = serde_json::json!({
+        "query": query,
+        "file": file,
+        "result": result,
+    });
+
+    Ok(serde_yaml::to_string(&output)?)
 }
 
 /// Format query result as JSON Lines (single line per result)
@@ -4785,6 +4798,10 @@ pub fn run_query_batch(
                 println!("{}", serde_json::to_string(&batch_result)?);
             }
         }
+        OutputFormat::Yaml => {
+            let results_only: Vec<_> = sorted_results.into_iter().map(|(_, r)| r).collect();
+            println!("{}", serde_yaml::to_string(&results_only)?);
+        }
         OutputFormat::Text | OutputFormat::Csv | OutputFormat::Dot => {
             for (_, batch_result) in sorted_results {
                 match batch_result.result {
@@ -4964,6 +4981,8 @@ mod tests {
         assert_eq!(OutputFormat::parse("text").unwrap(), OutputFormat::Text);
         assert_eq!(OutputFormat::parse("json").unwrap(), OutputFormat::Json);
         assert_eq!(OutputFormat::parse("jsonl").unwrap(), OutputFormat::Jsonl);
+        assert_eq!(OutputFormat::parse("yaml").unwrap(), OutputFormat::Yaml);
+        assert_eq!(OutputFormat::parse("yml").unwrap(), OutputFormat::Yaml);
         assert_eq!(OutputFormat::parse("csv").unwrap(), OutputFormat::Csv);
         assert_eq!(OutputFormat::parse("dot").unwrap(), OutputFormat::Dot);
     }
@@ -4994,6 +5013,16 @@ mod tests {
         assert_eq!(value["query"], json!("js.count"));
         assert_eq!(value["file"], json!("sample.pdf"));
         assert_eq!(value["result"], json!(12));
+    }
+
+    #[test]
+    fn format_yaml_emits_document() {
+        let result = QueryResult::Scalar(ScalarValue::Number(12));
+        let output = format_yaml("js.count", "sample.pdf", &result).unwrap();
+        let value: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
+        assert_eq!(value["query"].as_str().unwrap(), "js.count");
+        assert_eq!(value["file"].as_str().unwrap(), "sample.pdf");
+        assert_eq!(value["result"].as_i64().unwrap(), 12);
     }
 
     #[test]
