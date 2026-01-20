@@ -69,32 +69,14 @@ impl Detector for XfaFormDetector {
                         positions: Vec::new(),
                     });
                 }
-                script_count += extract_xfa_script_payloads(&payload.bytes).len();
-            }
 
-            if script_count > XFA_SCRIPT_COUNT_HIGH {
-                let mut meta = std::collections::HashMap::new();
-                meta.insert("xfa.script.count".into(), script_count.to_string());
-                findings.push(Finding {
-                    id: String::new(),
-                    surface: self.surface(),
-                    kind: "xfa_script_count_high".into(),
-                    severity: Severity::Medium,
-                    confidence: Confidence::Probable,
-                    title: "XFA script count high".into(),
-                    description: "XFA contains an unusually high number of script blocks.".into(),
-                    objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
-                    evidence: evidence.clone(),
-                    remediation: Some("Inspect XFA scripts for malicious behaviour.".into()),
-                    meta,
-                    yara: None,
-                    position: None,
-                    positions: Vec::new(),
-                });
-            }
-
-            for payload in &payloads {
                 let lower = String::from_utf8_lossy(&payload.bytes).to_ascii_lowercase();
+                if has_doctype(&lower) {
+                    continue;
+                }
+
+                script_count += extract_xfa_script_payloads(&payload.bytes).len();
+                script_count += count_execute_tags(&lower, XFA_EXECUTE_TAG_LIMIT);
 
                 for url in find_submit_urls(&lower, XFA_SUBMIT_URL_LIMIT) {
                     let mut meta = std::collections::HashMap::new();
@@ -144,6 +126,27 @@ impl Detector for XfaFormDetector {
                     });
                 }
             }
+
+            if script_count > XFA_SCRIPT_COUNT_HIGH {
+                let mut meta = std::collections::HashMap::new();
+                meta.insert("xfa.script.count".into(), script_count.to_string());
+                findings.push(Finding {
+                    id: String::new(),
+                    surface: self.surface(),
+                    kind: "xfa_script_count_high".into(),
+                    severity: Severity::Medium,
+                    confidence: Confidence::Probable,
+                    title: "XFA script count high".into(),
+                    description: "XFA contains an unusually high number of script blocks.".into(),
+                    objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
+                    evidence: evidence.clone(),
+                    remediation: Some("Inspect XFA scripts for malicious behaviour.".into()),
+                    meta,
+                    yara: None,
+                    position: None,
+                    positions: Vec::new(),
+                });
+            }
         }
         Ok(findings)
     }
@@ -153,6 +156,11 @@ const XFA_MAX_BYTES: usize = 1024 * 1024;
 const XFA_SCRIPT_COUNT_HIGH: usize = 5;
 const XFA_SUBMIT_URL_LIMIT: usize = 5;
 const XFA_FIELD_NAME_LIMIT: usize = 20;
+const XFA_EXECUTE_TAG_LIMIT: usize = 50;
+
+fn has_doctype(input: &str) -> bool {
+    input.contains("<!doctype")
+}
 
 fn find_submit_urls(input: &str, limit: usize) -> Vec<String> {
     let mut out = Vec::new();
@@ -193,6 +201,14 @@ fn find_tag_blocks(input: &str, tag: &str, limit: usize) -> Vec<String> {
         }
     }
     out
+}
+
+fn count_execute_tags(input: &str, limit: usize) -> usize {
+    let mut count = find_tag_blocks(input, "execute", limit).len();
+    if count < limit {
+        count += find_tag_blocks(input, "xfa:execute", limit - count).len();
+    }
+    count
 }
 
 fn extract_attr_value(tag: &str, attr: &str) -> Option<String> {

@@ -90,6 +90,53 @@ def generate_swf_cve_2011_0611(path):
     write_pdf(path, [obj1, obj2, obj3, obj4])
 
 
+def generate_xfa_doctype_reject(path):
+    xfa_xml = (
+        b"<!DOCTYPE xfa [<!ENTITY test 'x'>]>"
+        b"<xdp:xdp xmlns:xdp='http://ns.adobe.com/xdp/'>"
+        b"<xfa:form xmlns:xfa='http://www.xfa.org/schema/xfa-template/2.5/'>"
+        b"<field name='password'/>"
+        b"<submit target='https://example.com/submit'/>"
+        b"</xfa:form>"
+        b"</xdp:xdp>"
+    )
+    obj1 = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>\nendobj\n"
+    obj2 = b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n"
+    obj3 = b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >>\nendobj\n"
+    obj4 = b"4 0 obj\n<< /XFA 5 0 R >>\nendobj\n"
+    obj5 = (
+        b"5 0 obj\n<< /Length "
+        + str(len(xfa_xml)).encode("ascii")
+        + b" >>\nstream\n"
+        + xfa_xml
+        + b"\nendstream\nendobj\n"
+    )
+    write_pdf(path, [obj1, obj2, obj3, obj4, obj5])
+
+
+def generate_xfa_execute_high(path):
+    execute_tags = b"".join([b"<execute/>" for _ in range(6)])
+    xfa_xml = (
+        b"<xdp:xdp xmlns:xdp='http://ns.adobe.com/xdp/'>"
+        b"<xfa:form xmlns:xfa='http://www.xfa.org/schema/xfa-template/2.5/'>"
+        + execute_tags
+        + b"</xfa:form>"
+        b"</xdp:xdp>"
+    )
+    obj1 = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>\nendobj\n"
+    obj2 = b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n"
+    obj3 = b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >>\nendobj\n"
+    obj4 = b"4 0 obj\n<< /XFA 5 0 R >>\nendobj\n"
+    obj5 = (
+        b"5 0 obj\n<< /Length "
+        + str(len(xfa_xml)).encode("ascii")
+        + b" >>\nstream\n"
+        + xfa_xml
+        + b"\nendstream\nendobj\n"
+    )
+    write_pdf(path, [obj1, obj2, obj3, obj4, obj5])
+
+
 def generate_weak_encryption_cve_2019_7089(path):
     obj1 = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
     obj2 = b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n"
@@ -132,6 +179,8 @@ def main():
     generate_launch_cve_2010_1240(base / "actions" / "launch_cve_2010_1240.pdf")
     generate_embedded_exe_cve_2018_4990(base / "embedded" / "embedded_exe_cve_2018_4990.pdf")
     generate_xfa_cve_2013_2729(base / "xfa" / "xfa_cve_2013_2729.pdf")
+    generate_xfa_doctype_reject(base / "xfa" / "xfa_doctype_submit.pdf")
+    generate_xfa_execute_high(base / "xfa" / "xfa_execute_high.pdf")
     generate_swf_cve_2011_0611(base / "media" / "swf_cve_2011_0611.pdf")
     generate_weak_encryption_cve_2019_7089(base / "encryption" / "weak_encryption_cve_2019_7089.pdf")
     generate_filter_obfuscation_cve_2010_2883(base / "filters" / "filter_obfuscation_cve_2010_2883.pdf")

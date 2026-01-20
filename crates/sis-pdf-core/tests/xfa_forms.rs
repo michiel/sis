@@ -52,3 +52,29 @@ fn detects_xfa_too_large() {
         report.findings.iter().map(|f| f.kind.as_str()).collect();
     assert!(kinds.contains("xfa_too_large"));
 }
+
+#[test]
+fn rejects_xfa_doctype_payloads() {
+    let bytes = include_bytes!("fixtures/xfa/xfa_doctype_submit.pdf");
+    let detectors = sis_pdf_detectors::default_detectors();
+    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, opts(), &detectors)
+        .expect("scan should succeed");
+
+    let kinds: std::collections::HashSet<&str> =
+        report.findings.iter().map(|f| f.kind.as_str()).collect();
+    assert!(!kinds.contains("xfa_submit"));
+    assert!(!kinds.contains("xfa_sensitive_field"));
+    assert!(!kinds.contains("xfa_script_count_high"));
+}
+
+#[test]
+fn detects_xfa_execute_tags_as_scripts() {
+    let bytes = include_bytes!("fixtures/xfa/xfa_execute_high.pdf");
+    let detectors = sis_pdf_detectors::default_detectors();
+    let report = sis_pdf_core::runner::run_scan_with_detectors(bytes, opts(), &detectors)
+        .expect("scan should succeed");
+
+    let kinds: std::collections::HashSet<&str> =
+        report.findings.iter().map(|f| f.kind.as_str()).collect();
+    assert!(kinds.contains("xfa_script_count_high"));
+}

@@ -822,11 +822,11 @@ Parse XFA XML streams, detect embedded scripts and submission actions, enumerate
   - [x] Extract `/XFA` streams from document catalog or AcroForm dictionary.
   - [x] Concatenate XFA array elements if `/XFA` is an array (per PDF spec).
   - [ ] Parse XML using `roxmltree` (pinned to 0.20.0).
-  - [ ] Reject XML with DOCTYPE declarations (entity expansion attack prevention).
+  - [x] Reject XML with DOCTYPE declarations (entity expansion attack prevention).
   - [x] Enforce 1MB size limit on XFA content pre-parse.
   - [x] Use `TimeoutChecker` with 100ms budget for parsing.
   - [x] Detect `<script>` tags for embedded code.
-  - [ ] Detect `<execute>` tags for embedded code.
+  - [x] Detect `<execute>` tags for embedded code.
   - [x] Detect `<submit>` tags with `target` URLs.
   - [x] Detect sensitive field names (password, ssn, social, credit, cvv, pin, dob, etc.).
   - [x] Count total script blocks in form.
@@ -856,8 +856,8 @@ Parse XFA XML streams, detect embedded scripts and submission actions, enumerate
 
 #### Implementation Notes
 
-- Detector uses lightweight tag scanning rather than full XML parsing; DOCTYPE rejection and `roxmltree` parsing remain pending.
-- Script detection uses `extract_xfa_script_payloads` to count script blocks.
+- Detector uses lightweight tag scanning rather than full XML parsing; `roxmltree` parsing remains pending.
+- Script detection uses `extract_xfa_script_payloads` and `<execute>` tag counts.
 
 ### Tests
 
@@ -869,7 +869,8 @@ Parse XFA XML streams, detect embedded scripts and submission actions, enumerate
 - [x] `test_detect_sensitive_field()` - XFA with password/ssn fields.
 - [x] `test_xfa_size_limit()` - XFA exceeding 1MB, verify `xfa_too_large` emitted.
 - [x] `test_xfa_script_count_high()` - XFA with 10 scripts, verify finding.
-- [ ] `test_reject_doctype()` - XML with DOCTYPE, verify rejection.
+- [x] `test_reject_doctype()` - XML with DOCTYPE, verify rejection.
+- [x] `test_detect_execute_tags()` - XFA with `<execute>` tags, verify script count.
 - [ ] `test_xfa_timeout()` - Malformed XML triggering timeout.
 
 #### Integration Tests
@@ -1040,7 +1041,7 @@ Inspect embedded SWF (Flash) and other rich media streams using minimal parsers 
 
 - [ ] Implement minimal SWF header parser (avoid full decompression):
   - [x] Detect SWF magic: `FWS` (uncompressed) or `CWS`/`ZWS` (compressed).
-  - [ ] Parse header (version, file length, frame size, frame rate, frame count).
+  - [x] Parse header (version, file length, frame size, frame rate, frame count) for FWS streams.
   - [ ] Decompress ONLY first 10 tags (not entire file) to detect ActionScript.
   - [ ] Enforce 10:1 decompression ratio limit using `DecompressionLimits`.
   - [ ] Enforce 10MB decompressed size limit (header + first 10 tags).
@@ -1074,7 +1075,7 @@ Inspect embedded SWF (Flash) and other rich media streams using minimal parsers 
 
 #### Implementation Notes
 
-- SWF detection relies on magic headers; ActionScript tag parsing remains pending.
+- SWF detection relies on magic headers; header parsing now extracts frame rate/count for uncompressed FWS streams, ActionScript tag parsing remains pending.
 - 3D/audio enrichments are not yet implemented beyond existing `3d_present` and `sound_movie_present` detectors.
 
 ### Tests
@@ -1083,7 +1084,7 @@ Inspect embedded SWF (Flash) and other rich media streams using minimal parsers 
 
 - [ ] `test_detect_swf_uncompressed()` - FWS magic detection.
 - [ ] `test_detect_swf_compressed()` - CWS/ZWS magic detection.
-- [ ] `test_parse_swf_header()` - Header parsing correctness.
+- [x] `test_parse_swf_header()` - Header parsing correctness.
 - [ ] `test_detect_actionscript_tag()` - DoAction/DoABC tag detection.
 - [ ] `test_swf_decompression_limit()` - 10:1 ratio limit enforcement.
 - [ ] `test_swf_size_limit()` - 10MB limit enforcement.

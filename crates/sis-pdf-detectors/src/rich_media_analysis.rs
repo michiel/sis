@@ -5,6 +5,7 @@ use sis_pdf_core::evidence::EvidenceBuilder;
 use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
 use sis_pdf_core::timeout::TimeoutChecker;
 use sis_pdf_pdf::object::PdfAtom;
+use sis_pdf_pdf::swf::{parse_swf_header, SwfCompression};
 
 use crate::entry_dict;
 
@@ -53,9 +54,16 @@ impl Detector for RichMediaContentDetector {
                 let mut meta = std::collections::HashMap::new();
                 meta.insert("swf.magic".into(), String::from_utf8_lossy(&decoded.data[..3]).into());
                 meta.insert("swf.size".into(), decoded.data.len().to_string());
-                if let Some((version, declared_len)) = swf_header_meta(&decoded.data) {
-                    meta.insert("swf.version".into(), version.to_string());
-                    meta.insert("swf.declared_length".into(), declared_len.to_string());
+                if let Some(header) = parse_swf_header(&decoded.data) {
+                    meta.insert("swf.version".into(), header.version.to_string());
+                    meta.insert("swf.declared_length".into(), header.file_length.to_string());
+                    meta.insert("swf.compression".into(), swf_compression_label(header.compression));
+                    if let Some(rate) = header.frame_rate {
+                        meta.insert("swf.frame_rate".into(), format!("{:.2}", rate));
+                    }
+                    if let Some(count) = header.frame_count {
+                        meta.insert("swf.frame_count".into(), count.to_string());
+                    }
                 }
                 let evidence = EvidenceBuilder::new()
                     .file_offset(
@@ -95,11 +103,11 @@ fn swf_magic(data: &[u8]) -> bool {
     matches!(data.get(0..3), Some(b"FWS") | Some(b"CWS") | Some(b"ZWS"))
 }
 
-fn swf_header_meta(data: &[u8]) -> Option<(u8, u32)> {
-    if data.len() < 8 || !swf_magic(data) {
-        return None;
+fn swf_compression_label(compression: SwfCompression) -> String {
+    match compression {
+        SwfCompression::None => "none",
+        SwfCompression::Zlib => "zlib",
+        SwfCompression::Lzma => "lzma",
     }
-    let version = data[3];
-    let declared = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-    Some((version, declared))
+    .to_string()
 }
