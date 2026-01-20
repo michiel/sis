@@ -15,6 +15,7 @@ use sis_pdf_pdf::object::{PdfAtom, PdfDict, PdfObj};
 use sis_pdf_pdf::xfa::extract_xfa_script_payloads;
 
 pub mod advanced_crypto;
+pub mod actions_triggers;
 pub mod annotations_advanced;
 pub mod content_first;
 pub mod content_phishing;
@@ -75,6 +76,7 @@ pub fn default_detectors_with_settings(settings: DetectorSettings) -> Vec<Box<dy
         Box::new(OpenActionDetector),
         Box::new(AAPresentDetector),
         Box::new(AAEventDetector),
+        Box::new(actions_triggers::ActionTriggerDetector),
         Box::new(JavaScriptDetector {
             enable_ast: settings.js_ast,
         }),

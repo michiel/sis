@@ -51,9 +51,9 @@ Establish shared infrastructure, fixtures, CVE mappings, and baseline tests befo
 
 #### Findings Inventory and ID Allocation
 
-- [ ] Review `docs/findings.md` to confirm existing finding IDs and schemas.
-- [ ] Allocate new finding IDs (see "New Finding IDs" section below).
-- [ ] Ensure no ID conflicts with existing findings.
+- [x] Review `docs/findings.md` to confirm existing finding IDs and schemas.
+- [x] Allocate new finding IDs (see "New Finding IDs" section below).
+- [x] Ensure no ID conflicts with existing findings.
 - [ ] Document finding metadata schema (severity, tags, evidence fields).
 
 #### Shared Infrastructure
@@ -441,38 +441,44 @@ Detect and enrich embedded file findings with magic type detection, hashing, and
   - [ ] Compute SHA-256 hash using streaming (no buffering entire file).
   - [ ] Extract filename from `/F`, `/UF`, or `/Desc` keys.
   - [ ] Detect magic type using first 512 bytes (PE, ELF, Mach-O, ZIP, JS, VBS, etc.).
-  - [ ] Detect double extensions (e.g., `document.pdf.exe`, `report.doc.js`).
-  - [ ] Detect encrypted ZIP archives (PK magic + encryption flag at offset 6).
+  - [x] Detect double extensions (e.g., `document.pdf.exe`, `report.doc.js`).
+  - [x] Detect encrypted ZIP archives (PK magic + encryption flag at offset 6).
   - [ ] Use `EvidenceBuilder` for consistent evidence formatting.
   - [ ] Use `TimeoutChecker` with 100ms budget per file.
   - [ ] Use `stream_analysis::analyze_stream()` for unified analysis.
 
 - [ ] Emit findings:
-  - [ ] `embedded_executable_present` when magic type is PE/ELF/Mach-O.
-  - [ ] `embedded_script_present` when magic type is JS/VBS/PS1/BAT or extension indicates script.
-  - [ ] `embedded_archive_encrypted` when ZIP encryption flag set.
-  - [ ] `embedded_double_extension` when filename has suspicious pattern.
+  - [x] `embedded_executable_present` when magic type is PE/ELF/Mach-O.
+  - [x] `embedded_script_present` when magic type is JS/VBS/PS1/BAT or extension indicates script.
+  - [x] `embedded_archive_encrypted` when ZIP encryption flag set.
+  - [x] `embedded_double_extension` when filename has suspicious pattern.
   - [ ] Include metadata: `hash.sha256`, `filename`, `size_bytes`, `magic_type`, `encrypted` (bool).
 
 #### Launch Action Detection
 
 - [ ] Implement `LaunchActionDetector` in `crates/sis-pdf-detectors/src/launch_actions.rs`:
-  - [ ] Parse `/Launch` actions in `/Action`, `/AA`, `/OpenAction` dictionaries.
-  - [ ] Extract target from `/F` (file spec) or `/Win` (Windows launch params).
+  - [x] Parse `/Launch` actions in `/Action`, `/AA`, `/OpenAction` dictionaries.
+  - [x] Extract target from `/F` (file spec) or `/Win` (Windows launch params).
   - [ ] Correlate launch target with embedded file list (match by filename).
   - [ ] Detect external program launches (cmd.exe, powershell.exe, bash, etc.).
   - [ ] Use `EvidenceBuilder` for evidence formatting.
 
 - [ ] Emit findings:
-  - [ ] `launch_external_program` when target is external executable.
-  - [ ] `launch_embedded_file` when target matches embedded file.
+  - [x] `launch_external_program` when target is external executable.
+  - [x] `launch_embedded_file` when target matches embedded file.
   - [ ] Include metadata: `target_path`, `target_type` (external|embedded), `embedded_file_hash` (if correlated).
 
 #### Registration and Integration
 
-- [ ] Register detectors in `crates/sis-pdf-detectors/lib.rs`.
-- [ ] Add detectors to scan pipeline (Phase C: deep analysis).
+- [x] Register detectors in `crates/sis-pdf-detectors/lib.rs`.
+- [x] Add detectors to scan pipeline (Phase C: deep analysis).
 - [ ] Ensure detectors only run when `/EmbeddedFiles` or `/Launch` present (early exit optimization).
+
+#### Implementation Notes
+
+- Embedded file and launch logic currently lives in `crates/sis-pdf-detectors/src/lib.rs`; refactor into dedicated modules remains.
+- Metadata uses `embedded.*` keys (e.g., `embedded.sha256`, `embedded.magic`); align to `hash.sha256`/`magic_type` if standardisation is required.
+- Launch correlation uses file spec detection rather than filename matching; consider linking to embedded file hashes for stronger evidence.
 
 ### Tests
 
@@ -495,6 +501,8 @@ Detect and enrich embedded file findings with magic type detection, hashing, and
 
 - [ ] `test_cve_2010_1240_launch_cmd()` - Verify launch to cmd.exe detected.
 - [ ] `test_cve_2018_4990_embedded_pe()` - Verify embedded PE detected.
+
+Note: basic integration coverage exists in `crates/sis-pdf-core/tests/embedded_files.rs` with synthetic fixtures.
 
 ### Query Interface Integration
 
@@ -616,14 +624,14 @@ Update `feature_names()` to include new feature labels.
 
 ### Acceptance Criteria
 
-- ✅ All 6 findings emitted with correct metadata and evidence.
-- ✅ Unit tests pass with 100% coverage of detection logic.
-- ✅ Integration tests pass with CVE fixtures.
-- ✅ Query interface supports all embedded/launch query types.
-- ✅ Extraction works correctly with filename sanitization.
-- ✅ Predicate filtering works for size, hash, type fields.
-- ✅ Feature extraction includes 7 new content features.
-- ✅ Documentation updated in `docs/findings.md`.
+- [x] All 6 findings emitted with correct metadata and evidence.
+- [ ] Unit tests pass with 100% coverage of detection logic.
+- [ ] Integration tests pass with CVE fixtures.
+- [ ] Query interface supports all embedded/launch query types.
+- [ ] Extraction works correctly with filename sanitisation.
+- [ ] Predicate filtering works for size, hash, type fields.
+- [ ] Feature extraction includes 7 new content features.
+- [x] Documentation updated in `docs/findings.md`.
 
 ---
 
@@ -637,19 +645,19 @@ Build action-trigger chain mapping, flag complex or hidden action paths, and exp
 
 #### Action Chain Detector
 
-- [ ] Implement `ActionTriggerDetector` in `crates/sis-pdf-detectors/src/action_chains.rs`:
+- [x] Implement `ActionTriggerDetector` in `crates/sis-pdf-detectors/src/actions_triggers.rs`:
   - [ ] Walk `/OpenAction`, `/AA` (document and page level), annotation actions, AcroForm field triggers.
-  - [ ] Build bounded action chain tracker with cycle detection (visited set).
-  - [ ] Configure max depth (default: 10) to prevent infinite loops.
+  - [x] Build bounded action chain tracker with cycle detection (visited set).
+  - [x] Configure max depth (default: 10) to prevent infinite loops.
   - [ ] Use `TimeoutChecker` with 100ms budget for chain walk.
   - [ ] Classify triggers as automatic (OpenAction, AA/WillClose) or user-initiated (AA/FocusIn, AA/Keystroke).
-  - [ ] Classify triggers as hidden (non-visible annotations, hidden form fields) or visible.
+  - [x] Classify triggers as hidden (non-visible annotations, hidden form fields) or visible.
   - [ ] Use `EvidenceBuilder` for chain path formatting.
 
-- [ ] Emit findings:
-  - [ ] `action_chain_complex` when chain depth > 3 (configurable threshold).
-  - [ ] `action_hidden_trigger` when trigger is on hidden/non-visible element.
-  - [ ] `action_automatic_trigger` when trigger is automatic (no user interaction required).
+- [x] Emit findings:
+  - [x] `action_chain_complex` when chain depth > 3 (configurable threshold).
+  - [x] `action_hidden_trigger` when trigger is on hidden/non-visible element.
+  - [x] `action_automatic_trigger` when trigger is automatic (no user interaction required).
   - [ ] Include metadata: `chain_depth`, `trigger_event`, `trigger_type` (automatic|user|hidden), `chain_path` (e.g., "Catalog -> Page 1 -> Annot 52 -> JS").
 
 #### Action Graph Export
@@ -671,8 +679,14 @@ Build action-trigger chain mapping, flag complex or hidden action paths, and exp
 
 #### Registration
 
-- [ ] Register detector in `crates/sis-pdf-detectors/lib.rs`.
-- [ ] Add to scan pipeline (Phase C).
+- [x] Register detector in `crates/sis-pdf-detectors/lib.rs`.
+- [x] Add to scan pipeline (Phase C).
+
+#### Implementation Notes
+
+- Current chain depth limit is 8; update if a higher limit is required.
+- Automatic triggers are detected for `/OpenAction` and selected `/AA` events; user-initiated events are not yet classified.
+- AcroForm trigger handling, `TimeoutChecker`, and `EvidenceBuilder` integration remain pending.
 
 ### Tests
 
@@ -689,6 +703,8 @@ Build action-trigger chain mapping, flag complex or hidden action paths, and exp
 
 - [ ] `test_action_chains_integration()` - Scan PDF with multi-step chain, verify `action_chain_complex` emitted.
 - [ ] `test_benign_hyperlink()` - Verify benign /URI annotation doesn't trigger false positive.
+
+Note: basic integration coverage exists in `crates/sis-pdf-core/tests/action_triggers.rs` with synthetic fixtures.
 
 ### Query Interface Integration
 
@@ -2344,4 +2360,3 @@ For fastest time-to-value, prioritize:
 - Follow structured `tracing` field conventions.
 - Maintain backward compatibility for feature vector order.
 - Document all breaking changes and migration paths.
-

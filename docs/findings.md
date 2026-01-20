@@ -132,6 +132,39 @@ For implementation details, see `plans/review-evasive.md` and `plans/evasion-imp
   - Meaning: an action node reaches a payload-like object in the graph.
   - Chain usage: used to connect actions to payloads in the synthesized chain.
 
+## action_chain_complex
+
+- ID: `action_chain_complex`
+- Label: Complex action chain
+- Description: Action chain depth exceeds expected threshold.
+- Tags: action, chain
+- Details:
+  - Relevance: chained actions can hide payload staging.
+  - Meaning: action chains increase execution complexity.
+  - Chain usage: treated as a higher-risk action staging indicator.
+
+## action_hidden_trigger
+
+- ID: `action_hidden_trigger`
+- Label: Hidden action trigger
+- Description: Action triggered from hidden or non-visible annotation.
+- Tags: action, evasion
+- Details:
+  - Relevance: hidden triggers can bypass user awareness.
+  - Meaning: actions may execute without user interaction.
+  - Chain usage: raises confidence for action-driven payloads.
+
+## action_automatic_trigger
+
+- ID: `action_automatic_trigger`
+- Label: Automatic action trigger
+- Description: Action triggers without explicit user interaction.
+- Tags: action
+- Details:
+  - Relevance: automatic triggers execute actions on open or visibility changes.
+  - Meaning: viewer may execute actions without user intent.
+  - Chain usage: treated as trigger stage in action chains.
+
 ## annotation_action_chain
 
 - ID: `annotation_action_chain`
