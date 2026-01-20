@@ -68,16 +68,16 @@ Establish shared infrastructure, fixtures, CVE mappings, and baseline tests befo
 - [x] Create `crates/sis-pdf-core/src/timeout.rs` with `TimeoutChecker` (cooperative timeout pattern from image analysis plan):
   - [x] `TimeoutChecker::new(budget: Duration)` constructor.
   - [x] `check()` method returning `Result<(), TimeoutError>`.
-  - [ ] Integration examples for detectors.
+  - [x] Integration examples for detectors.
 
 #### Test Fixtures
 
-- [ ] Create `crates/sis-pdf-core/tests/fixtures/embedded/` directory.
-- [ ] Create `crates/sis-pdf-core/tests/fixtures/actions/` directory.
-- [ ] Create `crates/sis-pdf-core/tests/fixtures/xfa/` directory.
-- [ ] Create `crates/sis-pdf-core/tests/fixtures/media/` directory.
-- [ ] Create `crates/sis-pdf-core/tests/fixtures/encryption/` directory.
-- [ ] Create `crates/sis-pdf-core/tests/fixtures/filters/` directory.
+- [x] Create `crates/sis-pdf-core/tests/fixtures/embedded/` directory.
+- [x] Create `crates/sis-pdf-core/tests/fixtures/actions/` directory.
+- [x] Create `crates/sis-pdf-core/tests/fixtures/xfa/` directory.
+- [x] Create `crates/sis-pdf-core/tests/fixtures/media/` directory.
+- [x] Create `crates/sis-pdf-core/tests/fixtures/encryption/` directory.
+- [x] Create `crates/sis-pdf-core/tests/fixtures/filters/` directory.
 
 #### CVE Regression Fixtures
 
@@ -89,7 +89,7 @@ Establish shared infrastructure, fixtures, CVE mappings, and baseline tests befo
   - [ ] `generate_weak_encryption_cve_2019_7089()` - PDF with RC4-40
   - [ ] `generate_filter_obfuscation_cve_2010_2883()` - PDF with unusual filter chain
 - [ ] Generate synthetic fixtures (NOT real exploits, valid PDF structure only).
-- [ ] Add `tests/fixtures/README.md` documenting that fixtures are synthetic.
+- [x] Add `tests/fixtures/README.md` documenting that fixtures are synthetic.
 - [ ] Run fixture generation script and commit outputs to repository.
 
 #### Dependency Security Review
@@ -443,8 +443,8 @@ Detect and enrich embedded file findings with magic type detection, hashing, and
   - [ ] Detect magic type using first 512 bytes (PE, ELF, Mach-O, ZIP, JS, VBS, etc.).
   - [x] Detect double extensions (e.g., `document.pdf.exe`, `report.doc.js`).
   - [x] Detect encrypted ZIP archives (PK magic + encryption flag at offset 6).
-  - [ ] Use `EvidenceBuilder` for consistent evidence formatting.
-  - [ ] Use `TimeoutChecker` with 100ms budget per file.
+  - [x] Use `EvidenceBuilder` for consistent evidence formatting.
+  - [x] Use `TimeoutChecker` with 100ms budget per file.
   - [ ] Use `stream_analysis::analyze_stream()` for unified analysis.
 
 - [ ] Emit findings:
@@ -461,7 +461,7 @@ Detect and enrich embedded file findings with magic type detection, hashing, and
   - [x] Extract target from `/F` (file spec) or `/Win` (Windows launch params).
   - [ ] Correlate launch target with embedded file list (match by filename).
   - [ ] Detect external program launches (cmd.exe, powershell.exe, bash, etc.).
-  - [ ] Use `EvidenceBuilder` for evidence formatting.
+  - [x] Use `EvidenceBuilder` for evidence formatting.
 
 - [ ] Emit findings:
   - [x] `launch_external_program` when target is external executable.
@@ -479,6 +479,7 @@ Detect and enrich embedded file findings with magic type detection, hashing, and
 - Embedded file and launch logic currently lives in `crates/sis-pdf-detectors/src/lib.rs`; refactor into dedicated modules remains.
 - Metadata uses `embedded.*` keys (e.g., `embedded.sha256`, `embedded.magic`); align to `hash.sha256`/`magic_type` if standardisation is required.
 - Launch correlation uses file spec detection rather than filename matching; consider linking to embedded file hashes for stronger evidence.
+- `EvidenceBuilder` and `TimeoutChecker` are now integrated into the embedded and launch detectors.
 
 ### Tests
 
@@ -649,7 +650,7 @@ Build action-trigger chain mapping, flag complex or hidden action paths, and exp
   - [ ] Walk `/OpenAction`, `/AA` (document and page level), annotation actions, AcroForm field triggers.
   - [x] Build bounded action chain tracker with cycle detection (visited set).
   - [x] Configure max depth (default: 10) to prevent infinite loops.
-  - [ ] Use `TimeoutChecker` with 100ms budget for chain walk.
+  - [x] Use `TimeoutChecker` with 100ms budget for chain walk.
   - [ ] Classify triggers as automatic (OpenAction, AA/WillClose) or user-initiated (AA/FocusIn, AA/Keystroke).
   - [x] Classify triggers as hidden (non-visible annotations, hidden form fields) or visible.
   - [ ] Use `EvidenceBuilder` for chain path formatting.
@@ -686,7 +687,8 @@ Build action-trigger chain mapping, flag complex or hidden action paths, and exp
 
 - Current chain depth limit is 8; update if a higher limit is required.
 - Automatic triggers are detected for `/OpenAction` and selected `/AA` events; user-initiated events are not yet classified.
-- AcroForm trigger handling, `TimeoutChecker`, and `EvidenceBuilder` integration remain pending.
+- AcroForm trigger handling remains pending.
+- `TimeoutChecker` and `EvidenceBuilder` are now integrated in the action trigger detector.
 
 ### Tests
 

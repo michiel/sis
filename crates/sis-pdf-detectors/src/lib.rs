@@ -5,7 +5,9 @@ use std::collections::HashSet;
 
 use sha2::{Digest, Sha256};
 use sis_pdf_core::detect::{Cost, Detector, Needs};
-use sis_pdf_core::evidence::{decoded_evidence_span, preview_ascii};
+use sis_pdf_core::evidence::{decoded_evidence_span, preview_ascii, EvidenceBuilder};
+use sis_pdf_core::timeout::TimeoutChecker;
+use std::time::Duration;
 use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
 use sis_pdf_core::scan::span_to_evidence;
 use sis_pdf_pdf::blob_classify::{classify_blob, BlobKind};
@@ -1350,7 +1352,11 @@ impl Detector for LaunchActionDetector {
     }
     fn run(&self, ctx: &sis_pdf_core::scan::ScanContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
+        let timeout = TimeoutChecker::new(Duration::from_millis(50));
         for entry in &ctx.graph.objects {
+            if timeout.check().is_err() {
+                break;
+            }
             let Some(dict) = entry_dict(entry) else {
                 continue;
             };
@@ -1358,7 +1364,9 @@ impl Detector for LaunchActionDetector {
                 continue;
             }
 
-            let mut evidence = vec![span_to_evidence(dict.span, "Action dict")];
+            let mut evidence = EvidenceBuilder::new()
+                .file_offset(dict.span.start, dict.span.len() as u32, "Action dict")
+                .build();
             let mut meta = std::collections::HashMap::new();
             if let Some(enriched) = payload_from_dict(ctx, dict, &[b"/F", b"/Win"], "Action payload")
             {
@@ -1725,13 +1733,21 @@ impl Detector for EmbeddedFileDetector {
     }
     fn run(&self, ctx: &sis_pdf_core::scan::ScanContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
+        let timeout = TimeoutChecker::new(Duration::from_millis(100));
         for entry in &ctx.graph.objects {
+            if timeout.check().is_err() {
+                break;
+            }
             if let PdfAtom::Stream(st) = &entry.atom {
                 if st.dict.has_name(b"/Type", b"/EmbeddedFile") {
-                    let mut evidence = vec![
-                        span_to_evidence(st.dict.span, "EmbeddedFile dict"),
-                        span_to_evidence(st.data_span, "EmbeddedFile stream"),
-                    ];
+                    let mut evidence = EvidenceBuilder::new()
+                        .file_offset(st.dict.span.start, st.dict.span.len() as u32, "EmbeddedFile dict")
+                        .file_offset(
+                            st.data_span.start,
+                            st.data_span.len() as u32,
+                            "EmbeddedFile stream",
+                        )
+                        .build();
                     let mut meta = std::collections::HashMap::new();
                     let mut magic = None;
                     let mut encrypted_container = false;

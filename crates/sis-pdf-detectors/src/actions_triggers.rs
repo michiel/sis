@@ -3,7 +3,9 @@ use std::collections::HashSet;
 
 use sis_pdf_core::detect::{Cost, Detector, Needs};
 use sis_pdf_core::model::{AttackSurface, Confidence, Finding, Severity};
-use sis_pdf_core::scan::span_to_evidence;
+use sis_pdf_core::evidence::EvidenceBuilder;
+use sis_pdf_core::timeout::TimeoutChecker;
+use std::time::Duration;
 use sis_pdf_pdf::object::{PdfAtom, PdfDict, PdfObj};
 
 use crate::entry_dict;
@@ -29,7 +31,11 @@ impl Detector for ActionTriggerDetector {
 
     fn run(&self, ctx: &sis_pdf_core::scan::ScanContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
+        let timeout = TimeoutChecker::new(Duration::from_millis(100));
         for entry in &ctx.graph.objects {
+            if timeout.check().is_err() {
+                break;
+            }
             let Some(dict) = entry_dict(entry) else {
                 continue;
             };
@@ -39,6 +45,10 @@ impl Detector for ActionTriggerDetector {
                 let mut meta = std::collections::HashMap::new();
                 meta.insert("action.trigger".into(), "OpenAction".into());
                 meta.insert("action.chain_depth".into(), depth.to_string());
+                let evidence = EvidenceBuilder::new()
+                    .file_offset(dict.span.start, dict.span.len() as u32, "Catalog dict")
+                    .file_offset(k.span.start, k.span.len() as u32, "OpenAction key")
+                    .build();
                 findings.push(Finding {
                     id: String::new(),
                     surface: self.surface(),
@@ -48,10 +58,7 @@ impl Detector for ActionTriggerDetector {
                     title: "Automatic action trigger".into(),
                     description: "OpenAction triggers automatically on document open.".into(),
                     objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
-                    evidence: vec![
-                        span_to_evidence(dict.span, "Catalog dict"),
-                        span_to_evidence(k.span, "OpenAction key"),
-                    ],
+                    evidence,
                     remediation: Some("Review the action target and payload.".into()),
                     meta: meta.clone(),
                     yara: None,
@@ -68,7 +75,9 @@ impl Detector for ActionTriggerDetector {
                         title: "Complex action chain".into(),
                         description: "Action chain depth exceeds expected threshold.".into(),
                         objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
-                        evidence: vec![span_to_evidence(k.span, "OpenAction key")],
+                        evidence: EvidenceBuilder::new()
+                            .file_offset(k.span.start, k.span.len() as u32, "OpenAction key")
+                            .build(),
                         remediation: Some("Inspect action chains for hidden payloads.".into()),
                         meta,
                         yara: None,
@@ -88,6 +97,19 @@ impl Detector for ActionTriggerDetector {
                             String::from_utf8_lossy(&event_name.decoded).to_string(),
                         );
                         meta.insert("action.chain_depth".into(), depth.to_string());
+                        let evidence = EvidenceBuilder::new()
+                            .file_offset(
+                                dict.span.start,
+                                dict.span.len() as u32,
+                                "Action container dict",
+                            )
+                            .file_offset(k.span.start, k.span.len() as u32, "AA key")
+                            .file_offset(
+                                event_name.span.start,
+                                event_name.span.len() as u32,
+                                "AA event",
+                            )
+                            .build();
 
                         if is_automatic_event(&event_name.decoded) {
                             findings.push(Finding {
@@ -99,11 +121,7 @@ impl Detector for ActionTriggerDetector {
                                 title: "Automatic action trigger".into(),
                                 description: "Additional action triggers without explicit user interaction.".into(),
                                 objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
-                                evidence: vec![
-                                    span_to_evidence(dict.span, "Action container dict"),
-                                    span_to_evidence(k.span, "AA key"),
-                                    span_to_evidence(event_name.span, "AA event"),
-                                ],
+                                evidence: evidence.clone(),
                                 remediation: Some("Review the action target and payload.".into()),
                                 meta: meta.clone(),
                                 yara: None,
@@ -122,7 +140,13 @@ impl Detector for ActionTriggerDetector {
                                 title: "Complex action chain".into(),
                                 description: "Action chain depth exceeds expected threshold.".into(),
                                 objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
-                                evidence: vec![span_to_evidence(event_name.span, "AA event")],
+                                evidence: EvidenceBuilder::new()
+                                    .file_offset(
+                                        event_name.span.start,
+                                        event_name.span.len() as u32,
+                                        "AA event",
+                                    )
+                                    .build(),
                                 remediation: Some("Inspect action chains for hidden payloads.".into()),
                                 meta,
                                 yara: None,
@@ -147,7 +171,13 @@ impl Detector for ActionTriggerDetector {
                         title: "Hidden action trigger".into(),
                         description: "Action triggered from a hidden or non-visible annotation.".into(),
                         objects: vec![format!("{} {} obj", entry.obj, entry.gen)],
-                        evidence: vec![span_to_evidence(dict.span, "Annotation dict")],
+                        evidence: EvidenceBuilder::new()
+                            .file_offset(
+                                dict.span.start,
+                                dict.span.len() as u32,
+                                "Annotation dict",
+                            )
+                            .build(),
                         remediation: Some("Inspect hidden annotations for action execution.".into()),
                         meta: meta.drain().collect(),
                         yara: None,
