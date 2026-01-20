@@ -2385,6 +2385,50 @@ For implementation details, see `plans/review-evasive.md` and `plans/evasion-imp
   - Meaning: embedded XFA/XML scripts increase attack surface.
   - Chain usage: triggers or payload staging within form content.
 
+## xfa_submit
+
+- ID: `xfa_submit`
+- Label: XFA submit action present
+- Description: XFA form contains a submit action with target URL.
+- Tags: xfa, external
+- Details:
+  - Relevance: XFA can submit data to external endpoints.
+  - Meaning: submission targets may exfiltrate form data.
+  - Chain usage: external action stage for form data.
+
+## xfa_sensitive_field
+
+- ID: `xfa_sensitive_field`
+- Label: XFA sensitive field present
+- Description: XFA form contains a sensitive field name.
+- Tags: xfa
+- Details:
+  - Relevance: sensitive fields increase data exposure risk.
+  - Meaning: field names suggest collection of credentials or personal data.
+  - Chain usage: indicates data collection intent.
+
+## xfa_too_large
+
+- ID: `xfa_too_large`
+- Label: XFA content too large
+- Description: XFA content exceeds size limits.
+- Tags: xfa, evasion
+- Details:
+  - Relevance: oversized forms can hide payloads or trigger resource exhaustion.
+  - Meaning: XFA content size is unusually large.
+  - Chain usage: evasion context for hidden payload staging.
+
+## xfa_script_count_high
+
+- ID: `xfa_script_count_high`
+- Label: XFA script count high
+- Description: XFA contains an unusually high number of script blocks.
+- Tags: xfa, script
+- Details:
+  - Relevance: multiple scripts can indicate staged behaviour.
+  - Meaning: excessive script count raises suspicion of hidden logic.
+  - Chain usage: payload staging signal.
+
 ## actionscript_present
 
 - ID: `actionscript_present`

@@ -76,7 +76,7 @@ Establish shared infrastructure, fixtures, CVE mappings, and baseline tests befo
   - [x] `StreamLimits` struct for max-bytes analysis bounds (timeout/ratio pending).
 - [x] Create `crates/sis-pdf-core/src/evidence.rs` with `EvidenceBuilder`:
   - [x] Methods: `file_offset()`, `object_ref()`, `decoded_payload()`, `hash()`.
-  - [ ] Consistent formatting matching existing evidence output (see TODO.md:42-47).
+  - [x] Consistent formatting matching existing evidence output (see TODO.md:42-47).
 - [x] Create `crates/sis-pdf-core/src/timeout.rs` with `TimeoutChecker` (cooperative timeout pattern from image analysis plan):
   - [x] `TimeoutChecker::new(budget: Duration)` constructor.
   - [x] `check()` method returning `Result<(), TimeoutError>`.
@@ -106,10 +106,10 @@ Establish shared infrastructure, fixtures, CVE mappings, and baseline tests befo
 
 #### Dependency Security Review
 
-- [ ] Document dependency choices in table format (see "Dependency Security Review" section below).
-- [ ] Pin dependency versions in `Cargo.toml` for XFA parser (`roxmltree = "0.20.0"`).
-- [ ] Document SWF parsing strategy (minimal custom parser, header + magic only).
-- [ ] Document entropy calculation approach (sliding window, no external crates).
+- [ ] Deferred: document dependency choices in table format (see "Dependency Security Review" section below).
+- [ ] Deferred: pin dependency versions in `Cargo.toml` for XFA parser (`roxmltree = "0.20.0"`).
+- [ ] Deferred: document SWF parsing strategy (minimal custom parser, header + magic only).
+- [ ] Deferred: document entropy calculation approach (sliding window, no external crates).
 
 #### Fuzzing Infrastructure
 
@@ -818,24 +818,25 @@ Parse XFA XML streams, detect embedded scripts and submission actions, enumerate
 
 #### XFA Form Detector
 
-- [ ] Implement `XfaFormDetector` in `crates/sis-pdf-detectors/src/xfa_forms.rs`:
-  - [ ] Extract `/XFA` streams from document catalog or AcroForm dictionary.
-  - [ ] Concatenate XFA array elements if `/XFA` is an array (per PDF spec).
+- [x] Implement `XfaFormDetector` in `crates/sis-pdf-detectors/src/xfa_forms.rs`:
+  - [x] Extract `/XFA` streams from document catalog or AcroForm dictionary.
+  - [x] Concatenate XFA array elements if `/XFA` is an array (per PDF spec).
   - [ ] Parse XML using `roxmltree` (pinned to 0.20.0).
   - [ ] Reject XML with DOCTYPE declarations (entity expansion attack prevention).
-  - [ ] Enforce 1MB size limit on XFA content pre-parse.
-  - [ ] Use `TimeoutChecker` with 100ms budget for parsing.
-  - [ ] Detect `<script>` and `<execute>` tags for embedded code.
-  - [ ] Detect `<submit>` tags with `target` URLs.
-  - [ ] Detect sensitive field names (password, ssn, social, credit, cvv, pin, dob, etc.).
-  - [ ] Count total script blocks in form.
-  - [ ] Use `EvidenceBuilder` for evidence formatting.
+  - [x] Enforce 1MB size limit on XFA content pre-parse.
+  - [x] Use `TimeoutChecker` with 100ms budget for parsing.
+  - [x] Detect `<script>` tags for embedded code.
+  - [ ] Detect `<execute>` tags for embedded code.
+  - [x] Detect `<submit>` tags with `target` URLs.
+  - [x] Detect sensitive field names (password, ssn, social, credit, cvv, pin, dob, etc.).
+  - [x] Count total script blocks in form.
+  - [x] Use `EvidenceBuilder` for evidence formatting.
 
-- [ ] Emit findings:
-  - [ ] `xfa_submit` when submit action found, include target URL in metadata.
-  - [ ] `xfa_sensitive_field` when sensitive field detected, include field name.
-  - [ ] `xfa_too_large` when size exceeds 1MB limit.
-  - [ ] `xfa_script_count_high` when script count > 5 (configurable threshold).
+- [x] Emit findings:
+  - [x] `xfa_submit` when submit action found, include target URL in metadata.
+  - [x] `xfa_sensitive_field` when sensitive field detected, include field name.
+  - [x] `xfa_too_large` when size exceeds 1MB limit.
+  - [x] `xfa_script_count_high` when script count > 5 (configurable threshold).
   - [ ] Enrich existing `xfa_script_present` finding with script content preview.
   - [ ] Include metadata: `xfa_size_bytes`, `script_count`, `submit_urls` (array), `sensitive_fields` (array).
 
@@ -849,9 +850,14 @@ Parse XFA XML streams, detect embedded scripts and submission actions, enumerate
 
 #### Registration
 
-- [ ] Register detector in `crates/sis-pdf-detectors/lib.rs`.
-  - [ ] Add to scan pipeline (Phase C).
-  - [ ] Guard with XFA presence check (early exit if no `/XFA` key).
+- [x] Register detector in `crates/sis-pdf-detectors/lib.rs`.
+  - [x] Add to scan pipeline (Phase C).
+  - [x] Guard with XFA presence check (early exit if no `/XFA` key).
+
+#### Implementation Notes
+
+- Detector uses lightweight tag scanning rather than full XML parsing; DOCTYPE rejection and `roxmltree` parsing remain pending.
+- Script detection uses `extract_xfa_script_payloads` to count script blocks.
 
 ### Tests
 
@@ -859,10 +865,10 @@ Parse XFA XML streams, detect embedded scripts and submission actions, enumerate
 
 - [ ] `test_parse_simple_xfa()` - Basic XFA form without scripts.
 - [ ] `test_detect_xfa_script()` - XFA with `<script>` tag.
-- [ ] `test_detect_xfa_submit()` - XFA with submit action + URL.
-- [ ] `test_detect_sensitive_field()` - XFA with password/ssn fields.
-- [ ] `test_xfa_size_limit()` - XFA exceeding 1MB, verify `xfa_too_large` emitted.
-- [ ] `test_xfa_script_count_high()` - XFA with 10 scripts, verify finding.
+- [x] `test_detect_xfa_submit()` - XFA with submit action + URL.
+- [x] `test_detect_sensitive_field()` - XFA with password/ssn fields.
+- [x] `test_xfa_size_limit()` - XFA exceeding 1MB, verify `xfa_too_large` emitted.
+- [x] `test_xfa_script_count_high()` - XFA with 10 scripts, verify finding.
 - [ ] `test_reject_doctype()` - XML with DOCTYPE, verify rejection.
 - [ ] `test_xfa_timeout()` - Malformed XML triggering timeout.
 

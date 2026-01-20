@@ -41,6 +41,7 @@ pub mod objstm_summary;
 pub mod page_tree_anomalies;
 pub mod polyglot;
 pub mod quantum_risk;
+pub mod xfa_forms;
 pub mod strict;
 pub mod supply_chain;
 pub mod uri_classification;
@@ -115,6 +116,7 @@ pub fn default_detectors_with_settings(settings: DetectorSettings) -> Vec<Box<dy
         Box::new(CryptoDetector),
         Box::new(XfaDetector),
         Box::new(AcroFormDetector),
+        Box::new(xfa_forms::XfaFormDetector),
         Box::new(OCGDetector),
         Box::new(filter_depth::FilterChainDepthDetector),
         Box::new(DecoderRiskDetector),
@@ -993,7 +995,7 @@ fn js_payload_candidates_from_xfa(
     out
 }
 
-fn xfa_payloads_from_obj(
+pub(crate) fn xfa_payloads_from_obj(
     ctx: &sis_pdf_core::scan::ScanContext,
     obj: &sis_pdf_pdf::object::PdfObj<'_>,
 ) -> Vec<PayloadInfo> {
