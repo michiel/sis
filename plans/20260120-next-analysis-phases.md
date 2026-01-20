@@ -1530,7 +1530,7 @@ Update all documentation to reflect new findings, ensure JSON schema alignment, 
 
 #### Update docs/findings.md
 
-- [ ] Add all 21 new finding IDs with full documentation (see "Findings Reference" appendix below for template).
+- [x] Add new finding IDs introduced in Stages 1-6 (see commits and `docs/findings.md`).
 - [ ] Document metadata fields for each finding (severity, tags, evidence structure).
 - [ ] Add examples of each finding with sample evidence output.
 - [ ] Document correlation patterns (e.g., launch + embedded executable).
@@ -1559,7 +1559,7 @@ Update all documentation to reflect new findings, ensure JSON schema alignment, 
 
 - [ ] Run full test suite: `cargo test --all`.
 - [ ] Run targeted scans on all CVE fixtures (6 fixtures).
-- [ ] Verify all 21 new findings can be emitted.
+- [ ] Verify all new findings can be emitted.
 - [ ] Test query interface with all new query types (30+ queries).
 - [ ] Test extraction workflows (embedded files, XFA scripts, SWF).
 - [ ] Test predicate filtering on all new fields.
