@@ -103,3 +103,15 @@ sis query sample.pdf filters.unusual
 sis query sample.pdf filters.invalid
 sis query sample.pdf filters.repeated
 ```
+
+## Filter Chain Queries
+
+Inspect filter-chain findings with optional predicates:
+
+```bash
+sis query sample.pdf filters.unusual
+sis query sample.pdf filters.invalid
+sis query sample.pdf filters.repeated
+sis query sample.pdf filters.unusual --where "filter_count > 1"
+sis query sample.pdf filters.invalid --where "violation_type == 'crypt_not_outermost'"
+```

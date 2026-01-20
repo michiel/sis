@@ -1433,6 +1433,7 @@ Implement PDF spec filter order rules:
 
 - Detector uses a default allowlist and fixed order rules; configurable allowlist is supported via CLI/config.
 - Filter order rules are simplified to ASCII encoding placement checks.
+- Filter findings documentation now lists metadata keys and violation type values; query guide includes filter examples.
 
 ### Tests
 
