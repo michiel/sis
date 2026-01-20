@@ -1561,7 +1561,7 @@ Update all documentation to reflect new findings, ensure JSON schema alignment, 
 - [ ] Deferred: run targeted scans on all CVE fixtures (6 fixtures).
 - [ ] Deferred: verify all new findings can be emitted.
 - [ ] Deferred: test query interface with all new query types (30+ queries).
-- [ ] Deferred: test extraction workflows (embedded files, XFA scripts, SWF).
+- [ ] Deferred: test extraction workflows (embedded files pending; XFA/SWF covered via query tests).
 - [ ] Deferred: test predicate filtering on all new fields (findings metadata fields covered).
 - [ ] Deferred: test batch mode with new findings.
 - [ ] Deferred: test REPL mode with new queries.
@@ -1692,15 +1692,15 @@ Integrate all new features from Stages 1-6 into the feature extraction pipeline,
 
 #### Add New Feature Structs
 
-- [ ] Add `XfaFeatures` struct to `crates/sis-pdf-core/src/features.rs` (see Stage 3).
-- [ ] Add `EncryptionFeatures` struct (see Stage 5).
-- [ ] Add `FilterFeatures` struct (see Stage 6).
-- [ ] Update `ContentFeatures` with embedded file and rich media fields (Stages 1, 4).
-- [ ] Update `GraphFeatures` with action chain fields (Stage 2).
+- [x] Add `XfaFeatures` struct to `crates/sis-pdf-core/src/features.rs` (see Stage 3).
+- [x] Add `EncryptionFeatures` struct (see Stage 5).
+- [x] Add `FilterFeatures` struct (see Stage 6).
+- [x] Update `ContentFeatures` with embedded file and rich media fields (Stages 1, 4).
+- [x] Update `GraphFeatures` with action chain fields (Stage 2).
 
 #### Update FeatureVector
 
-- [ ] Add new fields to `FeatureVector` struct:
+- [x] Add new fields to `FeatureVector` struct:
   ```rust
   pub struct FeatureVector {
       pub general: GeneralFeatures,
@@ -1717,20 +1717,20 @@ Integrate all new features from Stages 1-6 into the feature extraction pipeline,
 
 #### Update as_f32_vec()
 
-- [ ] Extend `as_f32_vec()` method to flatten all new features in correct order.
-- [ ] Maintain backward compatibility by appending new features at end.
-- [ ] Document feature order in comments.
+- [x] Extend `as_f32_vec()` method to flatten all new features in correct order.
+- [x] Maintain backward compatibility by appending new features at end.
+- [x] Document feature order in comments.
 
 #### Update feature_names()
 
-- [ ] Add all new feature labels to `feature_names()` function.
-- [ ] Ensure order matches `as_f32_vec()` output.
-- [ ] Use descriptive names (e.g., "xfa.script_count", "encryption.key_length").
+- [x] Add all new feature labels to `feature_names()` function.
+- [x] Ensure order matches `as_f32_vec()` output.
+- [x] Use descriptive names (e.g., "xfa.script_count", "encryption.key_length").
 
 #### Implement Feature Extraction
 
-- [ ] Update `extract_features()` function to populate all new fields.
-- [ ] Integrate with existing scan pipeline.
+- [x] Update `extract_features()` function to populate all new fields.
+- [x] Integrate with existing scan pipeline.
 - [ ] Ensure feature extraction runs in Phase C (deep analysis).
 
 #### Export Validation
@@ -1745,10 +1745,10 @@ Integrate all new features from Stages 1-6 into the feature extraction pipeline,
 
 #### Unit Tests
 
-- [ ] `test_xfa_features_extraction()` - Extract XFA features from fixture.
-- [ ] `test_encryption_features_extraction()` - Extract encryption features.
-- [ ] `test_filter_features_extraction()` - Extract filter features.
-- [ ] `test_content_features_extended()` - Verify embedded file + rich media fields.
+- [x] `test_xfa_features_extraction()` - Extract XFA features from fixture.
+- [x] `test_encryption_features_extraction()` - Extract encryption features.
+- [x] `test_filter_features_extraction()` - Extract filter features.
+- [x] `test_content_features_extended()` - Verify embedded file + rich media fields.
 - [ ] `test_graph_features_extended()` - Verify action chain fields.
 
 #### Integration Tests

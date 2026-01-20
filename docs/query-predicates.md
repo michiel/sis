@@ -7,6 +7,8 @@ This guide documents the `--where` predicate filters for `sis query`.
 Predicate filtering is supported for:
 - `js`, `js.count`
 - `embedded`, `embedded.count`
+- `xfa.scripts`, `xfa.scripts.count`
+- `swf.extract`, `swf.extract.count`
 - `images`, `images.count`, `images.jbig2`, `images.jpx`, `images.ccitt`, `images.risky`, `images.malformed`
 - `objects.list`, `objects.with`, `objects.count`
 - `urls`, `urls.count`
@@ -49,6 +51,20 @@ Predicates can use these fields:
 - `type`: `Stream`
 - `filter`: stream `/Filter` name (if present)
 - `subtype`: stream `/Subtype` name (if present)
+
+### XFA scripts (`xfa.scripts`, `xfa.scripts.count`)
+- `length`: extracted script bytes
+- `entropy`: extracted script bytes entropy
+- `type`: `XfaScript`
+- `filter`: `xfa`
+- `subtype`: `script`
+
+### SWF extraction (`swf.extract`, `swf.extract.count`)
+- `length`: extracted SWF bytes (decoded or raw depending on flags)
+- `entropy`: extracted SWF bytes entropy
+- `type`: `SwfStream`
+- `filter`: stream `/Filter` name (if present)
+- `subtype`: `swf`
 
 ### Images (`images*`)
 - `length`: image stream bytes (decoded or raw depending on flags)

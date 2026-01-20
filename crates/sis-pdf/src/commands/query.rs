@@ -133,6 +133,10 @@ pub enum Query {
     UrlsCount,
     Embedded,
     EmbeddedCount,
+    XfaScripts,
+    XfaScriptsCount,
+    SwfStreams,
+    SwfStreamsCount,
     Images,
     ImagesCount,
     ImagesJbig2,
@@ -262,6 +266,10 @@ pub fn parse_query(input: &str) -> Result<Query> {
         "urls.count" => Ok(Query::UrlsCount),
         "embedded" => Ok(Query::Embedded),
         "embedded.count" => Ok(Query::EmbeddedCount),
+        "xfa.scripts" => Ok(Query::XfaScripts),
+        "xfa.scripts.count" => Ok(Query::XfaScriptsCount),
+        "swf.extract" => Ok(Query::SwfStreams),
+        "swf.extract.count" => Ok(Query::SwfStreamsCount),
         "embedded.executables" => Ok(Query::FindingsByKind("embedded_executable_present".into())),
         "embedded.executables.count" => {
             Ok(Query::FindingsByKindCount("embedded_executable_present".into()))
@@ -914,6 +922,10 @@ pub fn execute_query_with_context(
                     | Query::JavaScriptCount
                     | Query::Embedded
                     | Query::EmbeddedCount
+                    | Query::XfaScripts
+                    | Query::XfaScriptsCount
+                    | Query::SwfStreams
+                    | Query::SwfStreamsCount
                     | Query::Urls
                     | Query::UrlsCount
                     | Query::Images
@@ -1083,6 +1095,64 @@ pub fn execute_query_with_context(
                 let embedded = extract_embedded_files(ctx, decode_mode, predicate)?;
                 Ok(QueryResult::Scalar(ScalarValue::Number(
                     embedded.len() as i64
+                )))
+            }
+            Query::XfaScripts => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                if let Some(extract_path) = extract_to {
+                    let written = write_xfa_scripts(ctx, extract_path, predicate)?;
+                    Ok(QueryResult::List(written))
+                } else {
+                    let scripts = extract_xfa_scripts(ctx, predicate)?;
+                    Ok(QueryResult::List(scripts))
+                }
+            }
+            Query::XfaScriptsCount => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let scripts = extract_xfa_scripts(ctx, predicate)?;
+                Ok(QueryResult::Scalar(ScalarValue::Number(
+                    scripts.len() as i64
+                )))
+            }
+            Query::SwfStreams => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                if let Some(extract_path) = extract_to {
+                    let written = write_swf_streams(
+                        ctx,
+                        extract_path,
+                        max_extract_bytes,
+                        decode_mode,
+                        predicate,
+                    )?;
+                    Ok(QueryResult::List(written))
+                } else {
+                    let streams = extract_swf_streams(
+                        ctx,
+                        max_extract_bytes,
+                        decode_mode,
+                        predicate,
+                    )?;
+                    Ok(QueryResult::List(streams))
+                }
+            }
+            Query::SwfStreamsCount => {
+                if predicate.is_some() {
+                    ensure_predicate_supported(query)?;
+                }
+                let streams = extract_swf_streams(
+                    ctx,
+                    max_extract_bytes,
+                    decode_mode,
+                    predicate,
+                )?;
+                Ok(QueryResult::Scalar(ScalarValue::Number(
+                    streams.len() as i64
                 )))
             }
             Query::Images => {
@@ -1812,6 +1882,243 @@ fn extract_embedded_files(
     Ok(embedded)
 }
 
+struct XfaScriptPayload {
+    bytes: Vec<u8>,
+    source: String,
+}
+
+fn collect_xfa_script_payloads(ctx: &ScanContext) -> Vec<XfaScriptPayload> {
+    use sis_pdf_pdf::decode::DecodeLimits;
+    use sis_pdf_pdf::object::PdfAtom;
+
+    let limits = DecodeLimits {
+        max_decoded_bytes: ctx.options.image_analysis.max_xfa_decode_bytes,
+        max_filter_chain_depth: ctx.options.image_analysis.max_filter_chain_depth,
+    };
+    let mut out = Vec::new();
+    for entry in &ctx.graph.objects {
+        let dict = match &entry.atom {
+            PdfAtom::Dict(dict) => dict,
+            PdfAtom::Stream(stream) => &stream.dict,
+            _ => continue,
+        };
+        let Some((_, xfa_obj)) = dict.get_first(b"/XFA") else {
+            continue;
+        };
+        let payloads = xfa_payloads_from_obj(&ctx.graph, xfa_obj, limits);
+        for payload in payloads {
+            for script in sis_pdf_pdf::xfa::extract_xfa_script_payloads(&payload) {
+                out.push(XfaScriptPayload {
+                    bytes: script,
+                    source: format!("{}_{}", entry.obj, entry.gen),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn extract_xfa_scripts(
+    ctx: &ScanContext,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
+    let mut scripts = Vec::new();
+    let payloads = collect_xfa_script_payloads(ctx);
+    for (idx, payload) in payloads.iter().enumerate() {
+        let meta = PredicateContext {
+            length: payload.bytes.len(),
+            filter: Some("xfa".to_string()),
+            type_name: "XfaScript".to_string(),
+            subtype: Some("script".to_string()),
+            entropy: entropy_score(&payload.bytes),
+            width: 0,
+            height: 0,
+            pixels: 0,
+            risky: false,
+            severity: None,
+            confidence: None,
+            surface: None,
+            kind: None,
+            object_count: 0,
+            evidence_count: 0,
+        };
+        if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
+            let preview = String::from_utf8_lossy(&payload.bytes);
+            scripts.push(format!(
+                "XFA script {} (source {}, {} bytes): {}",
+                idx + 1,
+                payload.source,
+                payload.bytes.len(),
+                preview_text(&preview, 200)
+            ));
+        }
+    }
+    Ok(scripts)
+}
+
+fn write_xfa_scripts(
+    ctx: &ScanContext,
+    extract_to: &Path,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
+    use std::fs;
+
+    fs::create_dir_all(extract_to)?;
+    let payloads = collect_xfa_script_payloads(ctx);
+    let mut written = Vec::new();
+    for (idx, payload) in payloads.iter().enumerate() {
+        let meta = PredicateContext {
+            length: payload.bytes.len(),
+            filter: Some("xfa".to_string()),
+            type_name: "XfaScript".to_string(),
+            subtype: Some("script".to_string()),
+            entropy: entropy_score(&payload.bytes),
+            width: 0,
+            height: 0,
+            pixels: 0,
+            risky: false,
+            severity: None,
+            confidence: None,
+            surface: None,
+            kind: None,
+            object_count: 0,
+            evidence_count: 0,
+        };
+        if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
+            let filename = format!("xfa_script_{:03}.js", idx + 1);
+            let filepath = extract_to.join(&filename);
+            fs::write(&filepath, &payload.bytes)?;
+            let hash = sha256_hex(&payload.bytes);
+            written.push(format!(
+                "{}: {} bytes, sha256={}, source={}",
+                filename,
+                payload.bytes.len(),
+                hash,
+                payload.source
+            ));
+        }
+    }
+    Ok(written)
+}
+
+struct SwfStreamInfo {
+    obj: u32,
+    gen: u16,
+    data: Vec<u8>,
+    filter: Option<String>,
+    magic: &'static str,
+}
+
+fn swf_magic_label(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"FWS") {
+        Some("FWS")
+    } else if bytes.starts_with(b"CWS") {
+        Some("CWS")
+    } else if bytes.starts_with(b"ZWS") {
+        Some("ZWS")
+    } else {
+        None
+    }
+}
+
+fn collect_swf_streams(
+    ctx: &ScanContext,
+    max_extract_bytes: usize,
+    decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<SwfStreamInfo>> {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    let mut streams = Vec::new();
+    for entry in &ctx.graph.objects {
+        let PdfAtom::Stream(stream) = &entry.atom else {
+            continue;
+        };
+        let data = match stream_bytes_for_mode(ctx.bytes, stream, max_extract_bytes, decode_mode) {
+            Ok(data) => data,
+            Err(_) => continue,
+        };
+        let Some(magic) = swf_magic_label(&data) else {
+            continue;
+        };
+        let meta = PredicateContext {
+            length: data.len(),
+            filter: filter_name(&stream.dict),
+            type_name: "SwfStream".to_string(),
+            subtype: Some("swf".to_string()),
+            entropy: entropy_score(&data),
+            width: 0,
+            height: 0,
+            pixels: 0,
+            risky: false,
+            severity: None,
+            confidence: None,
+            surface: None,
+            kind: None,
+            object_count: 0,
+            evidence_count: 0,
+        };
+        if predicate.map(|pred| pred.evaluate(&meta)).unwrap_or(true) {
+            streams.push(SwfStreamInfo {
+                obj: entry.obj,
+                gen: entry.gen,
+                data,
+                filter: meta.filter,
+                magic,
+            });
+        }
+    }
+    Ok(streams)
+}
+
+fn extract_swf_streams(
+    ctx: &ScanContext,
+    max_extract_bytes: usize,
+    decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for info in collect_swf_streams(ctx, max_extract_bytes, decode_mode, predicate)? {
+        let filter = info.filter.unwrap_or_else(|| "none".into());
+        out.push(format!(
+            "SWF {} ({}_{}, {}, {} bytes)",
+            info.magic,
+            info.obj,
+            info.gen,
+            filter,
+            info.data.len()
+        ));
+    }
+    Ok(out)
+}
+
+fn write_swf_streams(
+    ctx: &ScanContext,
+    extract_to: &Path,
+    max_extract_bytes: usize,
+    decode_mode: DecodeMode,
+    predicate: Option<&PredicateExpr>,
+) -> Result<Vec<String>> {
+    use std::fs;
+
+    fs::create_dir_all(extract_to)?;
+    let mut written = Vec::new();
+    for info in collect_swf_streams(ctx, max_extract_bytes, decode_mode, predicate)? {
+        let filename = format!("swf_{}_{}.swf", info.obj, info.gen);
+        let filepath = extract_to.join(&filename);
+        fs::write(&filepath, &info.data)?;
+        let hash = sha256_hex(&info.data);
+        written.push(format!(
+            "{}: {} bytes, sha256={}, magic={}",
+            filename,
+            info.data.len(),
+            hash,
+            info.magic
+        ));
+    }
+    Ok(written)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImageFormat {
     Jbig2,
@@ -2242,6 +2549,10 @@ fn ensure_predicate_supported(query: &Query) -> Result<()> {
         | Query::JavaScriptCount
         | Query::Embedded
         | Query::EmbeddedCount
+        | Query::XfaScripts
+        | Query::XfaScriptsCount
+        | Query::SwfStreams
+        | Query::SwfStreamsCount
         | Query::Urls
         | Query::UrlsCount
         | Query::Images
@@ -2574,6 +2885,69 @@ fn string_raw_bytes(s: &sis_pdf_pdf::object::PdfStr<'_>) -> Vec<u8> {
         PdfStr::Literal { raw, .. } => raw.to_vec(),
         PdfStr::Hex { raw, .. } => raw.to_vec(),
     }
+}
+
+fn xfa_payloads_from_obj(
+    graph: &sis_pdf_pdf::ObjectGraph<'_>,
+    obj: &sis_pdf_pdf::object::PdfObj<'_>,
+    limits: sis_pdf_pdf::decode::DecodeLimits,
+) -> Vec<Vec<u8>> {
+    use sis_pdf_pdf::object::PdfAtom;
+
+    let mut out = Vec::new();
+    match &obj.atom {
+        PdfAtom::Array(items) => {
+            let mut iter = items.iter().peekable();
+            while let Some(item) = iter.next() {
+                match &item.atom {
+                    PdfAtom::Name(_) | PdfAtom::Str(_) => {
+                        if let Some(next) = iter.next() {
+                            out.extend(resolve_xfa_payload(graph, next, limits));
+                        }
+                    }
+                    _ => out.extend(resolve_xfa_payload(graph, item, limits)),
+                }
+            }
+        }
+        _ => out.extend(resolve_xfa_payload(graph, obj, limits)),
+    }
+    out
+}
+
+fn resolve_xfa_payload(
+    graph: &sis_pdf_pdf::ObjectGraph<'_>,
+    obj: &sis_pdf_pdf::object::PdfObj<'_>,
+    limits: sis_pdf_pdf::decode::DecodeLimits,
+) -> Vec<Vec<u8>> {
+    use sis_pdf_pdf::decode::decode_stream_with_meta;
+    use sis_pdf_pdf::object::PdfAtom;
+
+    let mut out = Vec::new();
+    match &obj.atom {
+        PdfAtom::Str(s) => out.push(string_bytes(s)),
+        PdfAtom::Stream(stream) => {
+            let result = decode_stream_with_meta(graph.bytes, stream, limits);
+            if let Some(data) = result.data {
+                out.push(data);
+            }
+        }
+        PdfAtom::Ref { .. } => {
+            if let Some(entry) = graph.resolve_ref(obj) {
+                match &entry.atom {
+                    PdfAtom::Stream(stream) => {
+                        let result = decode_stream_with_meta(graph.bytes, stream, limits);
+                        if let Some(data) = result.data {
+                            out.push(data);
+                        }
+                    }
+                    PdfAtom::Str(s) => out.push(string_bytes(s)),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 fn entropy_score(data: &[u8]) -> f64 {
@@ -4632,6 +5006,151 @@ mod tests {
             query,
             Query::FindingsByKindCount(ref kind) if kind == "embedded_executable_present"
         ));
+    }
+
+    #[test]
+    fn execute_query_supports_finding_shortcut_counts() {
+        with_fixture_context("embedded/embedded_exe_cve_2018_4990.pdf", |ctx| {
+            let list_query = parse_query("embedded.executables").expect("query");
+            let list_result = execute_query_with_context(
+                &list_query,
+                ctx,
+                None,
+                1024 * 1024,
+                DecodeMode::Decode,
+                None,
+            )
+            .expect("execute query");
+            match list_result {
+                QueryResult::Structure(value) => {
+                    let list = value.as_array().expect("list");
+                    assert!(!list.is_empty());
+                }
+                _ => panic!("unexpected list query result"),
+            }
+
+            let count_query = parse_query("embedded.executables.count").expect("query");
+            let count_result = execute_query_with_context(
+                &count_query,
+                ctx,
+                None,
+                1024 * 1024,
+                DecodeMode::Decode,
+                None,
+            )
+            .expect("execute query");
+            match count_result {
+                QueryResult::Scalar(ScalarValue::Number(count)) => {
+                    assert!(count > 0);
+                }
+                _ => panic!("unexpected count query result"),
+            }
+
+            let predicate = parse_predicate(
+                "objects > 0 AND kind == 'embedded_executable_present' AND severity == 'high'",
+            )
+            .expect("predicate");
+            let filtered_result = execute_query_with_context(
+                &list_query,
+                ctx,
+                None,
+                1024 * 1024,
+                DecodeMode::Decode,
+                Some(&predicate),
+            )
+            .expect("execute query");
+            match filtered_result {
+                QueryResult::Structure(value) => {
+                    let list = value.as_array().expect("list");
+                    assert!(!list.is_empty());
+                }
+                _ => panic!("unexpected filtered query result"),
+            }
+        });
+    }
+
+    #[test]
+    fn batch_query_supports_finding_shortcut_counts() {
+        let temp = tempdir().expect("tempdir");
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .join("crates/sis-pdf-core/tests/fixtures/embedded/embedded_exe_cve_2018_4990.pdf");
+        let dst = temp.path().join("sample.pdf");
+        std::fs::copy(&src, &dst).expect("copy fixture");
+
+        let query = parse_query("embedded.executables.count").expect("query");
+        let scan_options = ScanOptions::default();
+        run_query_batch(
+            &query,
+            temp.path(),
+            "*.pdf",
+            &scan_options,
+            None,
+            1024 * 1024,
+            DecodeMode::Decode,
+            None,
+            OutputFormat::Json,
+            10,
+            10 * 1024 * 1024,
+            3,
+        )
+        .expect("batch query");
+    }
+
+    #[test]
+    fn execute_query_supports_xfa_script_extraction() {
+        with_fixture_context("xfa/xfa_submit_sensitive.pdf", |ctx| {
+            let temp = tempdir().expect("tempdir");
+            let query = parse_query("xfa.scripts").expect("query");
+            let result = execute_query_with_context(
+                &query,
+                ctx,
+                Some(temp.path()),
+                1024 * 1024,
+                DecodeMode::Decode,
+                None,
+            )
+            .expect("execute query");
+            match result {
+                QueryResult::List(list) => {
+                    assert!(!list.is_empty());
+                    let count = std::fs::read_dir(temp.path())
+                        .expect("read dir")
+                        .count();
+                    assert!(count > 0);
+                }
+                _ => panic!("unexpected xfa scripts result"),
+            }
+        });
+    }
+
+    #[test]
+    fn execute_query_supports_swf_extraction() {
+        with_fixture_context("media/swf_cve_2011_0611.pdf", |ctx| {
+            let temp = tempdir().expect("tempdir");
+            let query = parse_query("swf.extract").expect("query");
+            let result = execute_query_with_context(
+                &query,
+                ctx,
+                Some(temp.path()),
+                1024 * 1024,
+                DecodeMode::Decode,
+                None,
+            )
+            .expect("execute query");
+            match result {
+                QueryResult::List(list) => {
+                    assert!(!list.is_empty());
+                    let count = std::fs::read_dir(temp.path())
+                        .expect("read dir")
+                        .count();
+                    assert!(count > 0);
+                }
+                _ => panic!("unexpected swf extraction result"),
+            }
+        });
     }
 
     #[test]

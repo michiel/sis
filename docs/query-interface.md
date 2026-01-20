@@ -30,6 +30,8 @@ sis query sample.pdf embedded.executables.count
 sis query sample.pdf xfa.submit
 sis query sample.pdf filters.unusual
 sis query sample.pdf streams.high-entropy
+sis query sample.pdf xfa.scripts.count
+sis query sample.pdf swf.extract.count
 ```
 
 ## Image Queries
@@ -64,6 +66,8 @@ Extract payloads to disk:
 ```bash
 sis query sample.pdf images --extract-to /tmp/images
 sis query sample.pdf images --extract-to /tmp/images --raw
+sis query sample.pdf xfa.scripts --extract-to /tmp/xfa-scripts
+sis query sample.pdf swf.extract --extract-to /tmp/swf
 ```
 
 ## Output Formats
