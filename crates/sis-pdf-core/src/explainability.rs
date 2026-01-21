@@ -410,7 +410,9 @@ fn find_contributing_findings<'a>(feature_name: &str, findings: &'a [Finding]) -
     } else if feature_name.starts_with("uri_signals.") {
         findings.iter().filter(|f| f.kind.contains("uri")).collect()
     } else if feature_name.starts_with("finding.") {
-        let base = feature_name.strip_prefix("finding.").unwrap();
+        let Some(base) = feature_name.strip_prefix("finding.") else {
+            return Vec::new();
+        };
         let kind = base
             .strip_suffix("_count")
             .or_else(|| base.strip_suffix("_present"))
@@ -614,15 +616,17 @@ impl CalibrationModel {
             }
             CalibrationMethod::IsotonicRegression { x, y } => {
                 // Linear interpolation in isotonic curve
-                if x.is_empty() {
+                if x.is_empty() || y.is_empty() || x.len() != y.len() {
                     return raw_score;
                 }
 
                 if raw_score <= x[0] {
                     return y[0];
                 }
-                if raw_score >= *x.last().unwrap() {
-                    return *y.last().unwrap();
+                if let (Some(&x_last), Some(&y_last)) = (x.last(), y.last()) {
+                    if raw_score >= x_last {
+                        return y_last;
+                    }
                 }
 
                 for i in 0..x.len() - 1 {
@@ -775,7 +779,7 @@ pub fn compute_comparative_explanation(
     }
 
     // Sort by absolute z-score
-    comparisons.sort_by(|a, b| b.z_score.abs().partial_cmp(&a.z_score.abs()).unwrap());
+    comparisons.sort_by(|a, b| b.z_score.abs().total_cmp(&a.z_score.abs()));
     comparisons.truncate(top_n);
     comparisons
 }
@@ -831,12 +835,7 @@ pub fn compute_permutation_importance(
     }
 
     // Sort by absolute contribution (most impactful features first)
-    attributions.sort_by(|a, b| {
-        b.contribution
-            .abs()
-            .partial_cmp(&a.contribution.abs())
-            .unwrap()
-    });
+    attributions.sort_by(|a, b| b.contribution.abs().total_cmp(&a.contribution.abs()));
     attributions
 }
 
@@ -892,7 +891,7 @@ pub fn create_ml_explanation(
         .filter(|a| a.contribution > 0.0)
         .cloned()
         .collect();
-    positive_features.sort_by(|a, b| b.contribution.partial_cmp(&a.contribution).unwrap());
+    positive_features.sort_by(|a, b| b.contribution.total_cmp(&a.contribution));
     positive_features.truncate(10);
 
     let mut negative_features: Vec<_> = attributions
@@ -900,7 +899,7 @@ pub fn create_ml_explanation(
         .filter(|a| a.contribution < 0.0)
         .cloned()
         .collect();
-    negative_features.sort_by(|a, b| a.contribution.partial_cmp(&b.contribution).unwrap());
+    negative_features.sort_by(|a, b| a.contribution.total_cmp(&b.contribution));
     negative_features.truncate(10);
 
     // Compute group importance
@@ -964,7 +963,7 @@ pub fn compute_baseline_from_samples(
         feature_stddevs.insert(feature_name.clone(), stddev);
 
         // Compute percentiles
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        values.sort_by(|a, b| a.total_cmp(b));
         let percentiles = vec![
             compute_nth_percentile(&values, 10.0),
             compute_nth_percentile(&values, 25.0),
@@ -1210,8 +1209,14 @@ pub fn analyse_temporal_risk(samples: &[TemporalSnapshot]) -> TemporalExplanatio
         };
     }
 
-    let first = samples.first().unwrap();
-    let last = samples.last().unwrap();
+    let (Some(first), Some(last)) = (samples.first(), samples.last()) else {
+        return TemporalExplanation {
+            snapshots: samples.to_vec(),
+            score_delta: 0.0,
+            trend: "no data".to_string(),
+            notable_changes: Vec::new(),
+        };
+    };
     let score_delta = last.score - first.score;
     let trend = if score_delta > 0.05 {
         "increasing".to_string()
@@ -1288,11 +1293,7 @@ pub fn detect_feature_interactions(
         }
     }
 
-    interactions.sort_by(|a, b| {
-        b.interaction_score
-            .partial_cmp(&a.interaction_score)
-            .unwrap()
-    });
+    interactions.sort_by(|a, b| b.interaction_score.total_cmp(&a.interaction_score));
     interactions.truncate(max_pairs);
     interactions
 }
@@ -1896,7 +1897,10 @@ fn generate_path_explanation(
     let mut parts = vec![];
 
     // Path description
-    let first_obj = path.first().unwrap().obj_ref;
+    let Some(first) = path.first() else {
+        return "Empty path".to_string();
+    };
+    let first_obj = first.obj_ref;
     parts.push(format!("Path from object {} {}", first_obj.0, first_obj.1));
 
     // Length description

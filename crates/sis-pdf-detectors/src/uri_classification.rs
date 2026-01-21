@@ -1358,13 +1358,17 @@ impl Detector for UriPresenceDetector {
                 format!(
                     "Found {} URIs pointing to {} unique domains.",
                     uri_count,
-                    meta.get("uri.count_unique_domains").unwrap()
+                    meta.get("uri.count_unique_domains")
+                        .map(String::as_str)
+                        .unwrap_or("0")
                 )
             } else {
                 format!(
                     "Found {} URIs pointing to {} unique domains, indicating elevated external exposure.",
                     uri_count,
-                    meta.get("uri.count_unique_domains").unwrap()
+                    meta.get("uri.count_unique_domains")
+                        .map(String::as_str)
+                        .unwrap_or("0")
                 )
             };
 

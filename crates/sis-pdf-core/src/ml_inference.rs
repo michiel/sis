@@ -101,11 +101,16 @@ impl CalibrationModel {
                 y_thresholds,
             } => {
                 // Piecewise constant interpolation
+                if x_thresholds.is_empty() || y_thresholds.is_empty() {
+                    return raw_score;
+                }
                 if raw_score <= x_thresholds[0] {
                     return y_thresholds[0];
                 }
-                if raw_score >= *x_thresholds.last().unwrap() {
-                    return *y_thresholds.last().unwrap();
+                if let (Some(&x_last), Some(&y_last)) = (x_thresholds.last(), y_thresholds.last()) {
+                    if raw_score >= x_last {
+                        return y_last;
+                    }
                 }
 
                 // Find the bin
@@ -174,12 +179,16 @@ pub fn run_ml_inference(
             (calibrated_score + ci_width).min(1.0),
         ));
 
-        let interpretation = format!(
-            "{:.0}% probability of being malicious ({:.0}%-{:.0}% with 95% confidence)",
-            calibrated_score * 100.0,
-            confidence_interval.unwrap().0 * 100.0,
-            confidence_interval.unwrap().1 * 100.0
-        );
+        let interpretation = if let Some(interval) = confidence_interval {
+            format!(
+                "{:.0}% probability of being malicious ({:.0}%-{:.0}% with 95% confidence)",
+                calibrated_score * 100.0,
+                interval.0 * 100.0,
+                interval.1 * 100.0
+            )
+        } else {
+            format!("{:.0}% probability of being malicious", calibrated_score * 100.0)
+        };
 
         CalibratedPrediction {
             raw_score,
@@ -188,7 +197,7 @@ pub fn run_ml_inference(
             calibration_method: format!("{:?}", calibrator.method)
                 .split('(')
                 .next()
-                .unwrap()
+                .unwrap_or("unknown")
                 .to_string(),
             interpretation,
             label: calibrated_score >= config.threshold,
@@ -213,7 +222,7 @@ pub fn run_ml_inference(
             &features,
             baseline
                 .as_ref()
-                .expect("baseline required for explanation"),
+                .ok_or_else(|| anyhow::anyhow!("ML baseline not available for explanation"))?,
             findings,
             &calibrated,
             &model,

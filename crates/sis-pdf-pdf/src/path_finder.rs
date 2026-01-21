@@ -435,7 +435,11 @@ impl<'a> PathFinder<'a> {
         }
 
         // Normalize to 0-1 range
-        if let Some(&max_score) = scores.values().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+        if let Some(&max_score) = scores
+            .values()
+            .filter(|score| score.is_finite())
+            .max_by(|a, b| a.total_cmp(b))
+        {
             if max_score > 1.0 {
                 for score in scores.values_mut() {
                     *score /= max_score;
