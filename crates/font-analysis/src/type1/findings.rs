@@ -31,32 +31,36 @@ pub fn analyze_type1(data: &[u8]) -> Vec<FontFinding> {
 
 /// Check if data contains an eexec section
 fn has_eexec_section(data: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(data);
-    text.contains("eexec")
+    find_subslice(data, b"eexec").is_some()
 }
 
 /// Extract and decrypt eexec section from Type 1 font
 fn extract_and_decrypt_eexec(data: &[u8]) -> Vec<u8> {
-    let text = String::from_utf8_lossy(data);
-
-    // Find eexec marker
-    if let Some(eexec_start) = text.find("eexec") {
-        // Skip whitespace after eexec
+    // Find eexec marker (byte position)
+    if let Some(eexec_start) = find_subslice(data, b"eexec") {
         let mut start = eexec_start + 5;
         while start < data.len() && data[start].is_ascii_whitespace() {
             start += 1;
         }
 
-        // Find end marker (usually "cleartomark" or "0" followed by zeros)
+        if start >= data.len() {
+            return data.to_vec();
+        }
+
         let end = find_eexec_end(&data[start..])
             .map(|offset| start + offset)
             .unwrap_or(data.len());
 
-        // Decrypt the section
+        if end <= start {
+            return data.to_vec();
+        }
+
         let encrypted = &data[start..end];
+        if encrypted.is_empty() {
+            return data.to_vec();
+        }
         let mut decrypted = decrypt_eexec_auto(encrypted);
 
-        // Skip the first 4 random bytes (standard in Type 1)
         if decrypted.len() > 4 {
             decrypted.drain(0..4);
         }
@@ -69,10 +73,8 @@ fn extract_and_decrypt_eexec(data: &[u8]) -> Vec<u8> {
 
 /// Find the end of an eexec section
 fn find_eexec_end(data: &[u8]) -> Option<usize> {
-    let text = String::from_utf8_lossy(data);
-
     // Look for cleartomark or 512 zeros (standard end markers)
-    if let Some(pos) = text.find("cleartomark") {
+    if let Some(pos) = find_subslice(data, b"cleartomark") {
         return Some(pos);
     }
 
@@ -90,6 +92,15 @@ fn find_eexec_end(data: &[u8]) -> Option<usize> {
     }
 
     None
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Generate findings from charstring analysis
@@ -213,5 +224,12 @@ mod tests {
 
         // Should detect BLEND pattern
         assert!(findings.iter().any(|f| f.kind == "font.type1_blend_exploit"));
+    }
+
+    #[test]
+    fn test_analyze_type1_with_invalid_utf8_eexec() {
+        let data = b"\xff\xfe\xfd eexec \n1234567890 cleartomark";
+        let findings = analyze_type1(data);
+        assert!(findings.is_empty() || findings.iter().all(|f| !f.kind.is_empty()));
     }
 }

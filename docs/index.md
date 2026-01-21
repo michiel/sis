@@ -54,6 +54,7 @@ _"Smiley is suspicious, Percy"_
 
 - [Corpus Analysis](corpus-analysis.md) - Analysis methodology and results
 - [Corpus Benchmarking](corpus-benchmarking.md) - Performance benchmarking results
+- [MWB Corpus Reporting](mwb-corpus-reporting.md) - Daily corpus metrics and trends
 - [Deep Findings Analysis](corpus-findings-deep-analysis.md) - Detailed findings analysis
 - [Implementation Status (2026-01-11)](implementation-status-20260111.md) - Current implementation status
 
